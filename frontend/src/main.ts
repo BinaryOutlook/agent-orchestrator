@@ -1592,7 +1592,7 @@ async function handleBrowserStreamControl(control: BrowserStreamControl): Promis
 			return;
 		}
 		case "stop":
-			await host.stopLiveStream(sessionId);
+			await host.stopLiveStream(sessionId, control.streamId ?? 0);
 			return;
 		case "input":
 			await host.handleRemoteInput(sessionId, control.payload as BrowserRemoteInput);
