@@ -80,6 +80,7 @@ import { sessionReviewsQueryKey } from "../lib/session-reviews";
 import { sessionUiKey } from "../lib/hosts";
 import { resolveSessionWorkspacePath, sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isAbsoluteFileReference, matchWorkspaceFilePath, normalizeWorkspaceFileReference } from "../lib/workspace-file-path";
+import type { ChatFileOpenOptions } from "./chat/ChatTimelineItems";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { aoBridge } from "../lib/bridge";
 import {
@@ -1533,7 +1534,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	);
 
 	const revealResolvedWorkspaceFile = useCallback(
-		async (rawPath: string, options?: FileOpenOptions) => {
+		async (rawPath: string, options?: FileOpenOptions, chatOptions?: ChatFileOpenOptions) => {
 			const reference = normalizeWorkspaceFileReference(rawPath);
 			if (!isAbsoluteFileReference(reference)) {
 				const data = await fetchWorkspaceFiles();
@@ -1547,6 +1548,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				openCenterFile(resolved.path, options);
 				return;
 			}
+			// A turn diff describes workspace changes. Never turn an absolute path
+			// that resolves elsewhere (or cannot be resolved by an older daemon)
+			// into a broken workspace tab.
+			if (chatOptions?.workspaceOnly) return;
 			if (resolved?.kind === "artifact" && await revealResolvedArtifact(resolved.path)) return;
 			// Outside the session, or the daemon could not say. Nothing shows the
 			// path belongs here, so open it as written and let the file pane say
@@ -1571,8 +1576,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	);
 
 	const handleOpenFile = useCallback(
-		(path: string, line?: number) => {
-			void revealResolvedWorkspaceFile(path, { line, mode: "file" });
+		(path: string, line?: number, options?: ChatFileOpenOptions) => {
+			void revealResolvedWorkspaceFile(path, { line, mode: "file" }, options);
 		},
 		[revealResolvedWorkspaceFile],
 	);

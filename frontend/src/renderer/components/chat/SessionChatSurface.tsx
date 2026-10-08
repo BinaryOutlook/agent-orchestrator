@@ -55,6 +55,7 @@ import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
 import { useUiStore } from "../../stores/ui-store";
 import { ChatWorkspace } from "./ChatWorkspace";
+import type { ChatFileOpenOptions } from "./ChatTimelineItems";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
@@ -167,7 +168,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** Opens the Files inspector from a turn's changed-files Review control. */
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
-	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFile?: (path: string, line?: number, options?: ChatFileOpenOptions) => void;
 	/** Opens a chat link in the active blank tab or a new tab in this session's AO Browser. */
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;

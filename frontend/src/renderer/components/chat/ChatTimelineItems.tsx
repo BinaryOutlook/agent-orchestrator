@@ -107,6 +107,11 @@ import {
 	type ParsedBrowserAnnotationMessage,
 } from "../../../shared/browser-annotations";
 
+export interface ChatFileOpenOptions {
+	/** Only open paths the daemon confirms belong to this session's workspace. */
+	workspaceOnly?: boolean;
+}
+
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "2-digit",
 	minute: "2-digit",
@@ -2799,7 +2804,7 @@ export function TurnChangedFiles({
 	/** Opens the session Files inspector for the full workspace diff. */
 	onReview?: () => void;
 	/** Opens the Files inspector focused on this path. */
-	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFile?: (path: string, line?: number, options?: ChatFileOpenOptions) => void;
 	/**
 	 * Timeline items from the same turn. Turn diffs often carry repo-relative
 	 * basenames (`random_words.txt`); file_change rows and command cwds often
@@ -2886,7 +2891,7 @@ export function TurnChangedFiles({
 									<TooltipTrigger asChild>
 										<button
 											type="button"
-											onClick={() => onOpenFile(tooltipPath)}
+										onClick={() => onOpenFile(tooltipPath, undefined, { workspaceOnly: true })}
 											aria-label={`Open ${openPath} in Files`}
 											className={rowClass}
 										>

@@ -317,7 +317,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 	}: {
 		session: WorkspaceSession;
 		onOpenShell?: () => void;
-		onOpenFile?: (path: string, line?: number) => void;
+		onOpenFile?: (path: string, line?: number, options?: { workspaceOnly?: boolean }) => void;
 		headerActions?: ReactNode;
 		sessionTabAction?: ReactNode;
 		tabStripAction?: ReactNode;
@@ -389,6 +389,12 @@ vi.mock("./chat/SessionChatSurface", async () => {
 					</button>
 					<button type="button" onClick={() => onOpenFile("/Users/me/worktrees/s/src/App.tsx", 7)}>
 						open chat absolute path
+					</button>
+					<button
+						type="button"
+						onClick={() => onOpenFile("/Users/me/worktrees/s/src/App.tsx", 7, { workspaceOnly: true })}
+					>
+						open turn diff absolute path
 					</button>
 				</>
 			) : null}
@@ -5020,6 +5026,16 @@ describe("SessionView", () => {
 		});
 	});
 
+	it("opens an absolute turn-diff path only at the workspace-relative path the daemon returns", async () => {
+		mockAbsolutePathLookup({ data: { sessionId: "sess-orch", kind: "workspace", path: "src/App.tsx" }, error: undefined });
+		workerSession("sess-orch").mode = "chat";
+		render(<SessionView sessionId="sess-orch" />);
+		fireEvent.click(screen.getByRole("button", { name: "open turn diff absolute path" }));
+		const file = await screen.findByTestId("session-file-workspace");
+		expect(file).toHaveTextContent("src/App.tsx");
+		expect(file).not.toHaveTextContent("/Users/me");
+	});
+
 	function mockAbsolutePathLookup(resolve: unknown) {
 		reviewGetMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/sessions/{sessionId}/workspace/resolve") return resolve;
@@ -5048,12 +5064,34 @@ describe("SessionView", () => {
 		expect(await screen.findByTestId("session-file-workspace")).toHaveTextContent("/Users/me/worktrees/s/src/App.tsx");
 	});
 
+	it("does not open an absolute turn-diff path outside the session workspace", async () => {
+		mockAbsolutePathLookup({ data: { sessionId: "sess-orch", kind: "outside", path: "" }, error: undefined });
+		workerSession("sess-orch").mode = "chat";
+		render(<SessionView sessionId="sess-orch" />);
+		fireEvent.click(screen.getByRole("button", { name: "open turn diff absolute path" }));
+		await waitFor(() => expect(reviewGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/resolve", {
+			params: { path: { sessionId: "sess-orch" }, query: { path: "/Users/me/worktrees/s/src/App.tsx" } },
+		}));
+		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+	});
+
 	it("does not guess from the file list when the daemon cannot resolve an absolute chat path", async () => {
 		mockAbsolutePathLookup({ data: undefined, error: { code: "NOT_IMPLEMENTED" } });
 		workerSession("sess-orch").mode = "chat";
 		render(<SessionView sessionId="sess-orch" />);
 		fireEvent.click(screen.getByRole("button", { name: "open chat absolute path" }));
 		expect(await screen.findByTestId("session-file-workspace")).toHaveTextContent("/Users/me/worktrees/s/src/App.tsx");
+	});
+
+	it("does not open an absolute turn-diff path when an older daemon cannot resolve it", async () => {
+		mockAbsolutePathLookup({ data: undefined, error: { code: "NOT_IMPLEMENTED" } });
+		workerSession("sess-orch").mode = "chat";
+		render(<SessionView sessionId="sess-orch" />);
+		fireEvent.click(screen.getByRole("button", { name: "open turn diff absolute path" }));
+		await waitFor(() => expect(reviewGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/resolve", {
+			params: { path: { sessionId: "sess-orch" }, query: { path: "/Users/me/worktrees/s/src/App.tsx" } },
+		}));
+		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
 	});
 
 	it("opens an absolute chat path to a listed artifact in the Artifacts view", async () => {
