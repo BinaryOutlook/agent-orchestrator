@@ -8,6 +8,7 @@ import { memo, type CSSProperties, type ReactNode, useCallback, useEffect, useMe
 import { FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CommandPalette } from "../components/CommandPalette";
+import { SessionSwitcher } from "../components/SessionSwitcher";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
@@ -65,7 +66,7 @@ import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
-import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
+import { projectNavigateTarget, sessionNavigateTarget, useNavigateToSession } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
@@ -213,6 +214,7 @@ function ShellLayout() {
 	useAgentInventoryTelemetry();
 	const { t } = useTranslation();
 	const navigate = useNavigate();
+	const navigateToSession = useNavigateToSession();
 	const router = useRouter();
 	const matchRoute = useMatchRoute();
 	const queryClient = useQueryClient();
@@ -458,6 +460,22 @@ function ShellLayout() {
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	const switcherProjectId = routeParams.hostId
+		? routeParams.projectId ??
+			remoteWorkspaces.find(
+				(workspace) =>
+					workspace.hostId === routeParams.hostId &&
+					(workspace.id === routeParams.projectId || workspace.sessions.some((session) => session.id === routeParams.sessionId)),
+			)?.id
+		: scopedProjectId && scopedProjectId !== STANDALONE_WORKSPACE_ID
+			? scopedProjectId
+			: undefined;
+	const switcherWorkspace = switcherProjectId
+		? (routeParams.hostId ? remoteWorkspaces : workspaces).find(
+			(workspace) => workspace.id === switcherProjectId && (routeParams.hostId ? workspace.hostId === routeParams.hostId : !workspace.hostId),
+		)
+		: undefined;
+	const switcherSessions = switcherWorkspace?.sessions ?? [];
 	// Session shortcuts walk the sidebar's own order (pinned, projects in the
 	// user's drag order, scratchpad), not the daemon's raw list, so "next" always
 	// means the row below the current one on screen.
@@ -1388,6 +1406,21 @@ function ShellLayout() {
 					workspaces={workspaces}
 				/>
 					<CommandPalette />
+					<SessionSwitcher
+						currentSessionId={routeParams.sessionId}
+						kanban={!routeParams.sessionId}
+						onCommit={(sessionId) => {
+							if (!switcherProjectId) return;
+							const session = switcherSessions.find((item) => item.id === sessionId);
+							// Same open path as a sidebar row, a kanban card, and a
+							// canonical session link: useNavigateToSession carries local,
+							// remote host, and cloud project identity.
+							if (session?.kind === "worker") recordManualWorkerOpen(session.id, routeParams.hostId);
+							navigateToSession(switcherProjectId, sessionId, routeParams.hostId);
+						}}
+						projectKey={switcherProjectId ? `${routeParams.hostId ?? "local"}:${switcherProjectId}` : undefined}
+						sessions={switcherSessions}
+					/>
 				</div>
 				</TerminalCacheProvider>
 			</SessionTopbarProvider>

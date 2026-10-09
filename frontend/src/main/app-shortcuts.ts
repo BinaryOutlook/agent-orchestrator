@@ -12,6 +12,11 @@ import {
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
 	PREVIOUS_SESSION_SHORTCUT_CHANNEL,
 	PREVIOUS_TAB_SHORTCUT_CHANNEL,
+	SESSION_SWITCHER_CANCEL_CHANNEL,
+	SESSION_SWITCHER_RELEASE_CHANNEL,
+	SESSION_SWITCHER_STEP_CHANNEL,
+	isSessionSwitcherModifierRelease,
+	sessionSwitcherDirection,
 	terminalFontSizeDelta,
 	TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL,
 	type AppShortcutEvent,
@@ -65,6 +70,28 @@ const legacyShortcutChannels: Partial<Record<AppShortcutId, string>> = {
 // Handled in main itself rather than forwarded to the shell.
 const mainHandledShortcuts: ReadonlySet<AppShortcutId> = new Set(["toggle-browser-devtools"]);
 
+// Shared across shell and browser web contents. Only the focused contents
+// receives the key, but both listeners must agree on whether a switcher is open.
+let sessionSwitcherArmed = false;
+let sessionSwitcherSuppressed = false;
+let sessionSwitcherSend: ((channel: string, ...args: unknown[]) => void) | null = null;
+
+export function resetSessionSwitcherShortcutState(): void {
+	sessionSwitcherArmed = false;
+	sessionSwitcherSuppressed = false;
+}
+
+/** OS focus left the window. Dismiss without navigating. A later modifier release must not navigate. */
+export function cancelSessionSwitcherForFocusLoss(): void {
+	const armed = sessionSwitcherArmed;
+	// Escape leaves the gesture suppressed until Ctrl comes up. Blur must clear
+	// that too. Otherwise the release happens outside the window and the next
+	// Ctrl+` is swallowed.
+	sessionSwitcherArmed = false;
+	sessionSwitcherSuppressed = false;
+	if (armed) sessionSwitcherSend?.(SESSION_SWITCHER_CANCEL_CHANNEL);
+}
+
 const appShortcutMatch = (
 	chord: ShortcutChord,
 	isMac: boolean,
@@ -98,7 +125,31 @@ export function attachAppShortcuts(
 	// do not distinguish.
 	isTerminalFontSizeFocused: () => boolean = isTerminalFocused,
 ): void {
+	sessionSwitcherSend = (channel, ...args) => target.send(channel, ...args);
 	contents.on("before-input-event", (event, input) => {
+		if (
+			(sessionSwitcherArmed || sessionSwitcherSuppressed) &&
+			isSessionSwitcherModifierRelease(
+				{
+					key: input.key,
+					code: input.code,
+					alt: input.alt,
+					ctrl: input.control,
+					type: input.type,
+				},
+				isMac,
+			)
+		) {
+			if (sessionSwitcherSuppressed) {
+				sessionSwitcherSuppressed = false;
+				sessionSwitcherArmed = false;
+				return;
+			}
+			sessionSwitcherArmed = false;
+			event.preventDefault();
+			target.send(SESSION_SWITCHER_RELEASE_CHANNEL);
+			return;
+		}
 		if (input.type !== "keyDown") return;
 		const chord = {
 			key: input.key,
@@ -118,6 +169,25 @@ export function attachAppShortcuts(
 		// Let the renderer's capture listener receive application-owned chords
 		// while the user is recording a replacement binding.
 		if (isRecording()) return;
+		const switcherDirection = sessionSwitcherDirection(chord, isMac);
+		if (switcherDirection) {
+			// Ctrl+Tab stays the in-session tab shortcut. The switcher is Ctrl+`
+			// on every platform.
+			// Repeats advance. The first keydown only opens (the renderer decides).
+			event.preventDefault();
+			if (sessionSwitcherSuppressed) return;
+			if (input.isAutoRepeat && !sessionSwitcherArmed) return;
+			sessionSwitcherArmed = true;
+			target.send(SESSION_SWITCHER_STEP_CHANNEL, switcherDirection);
+			return;
+		}
+		if (sessionSwitcherArmed && input.key === "Escape" && !input.isAutoRepeat) {
+			event.preventDefault();
+			sessionSwitcherArmed = false;
+			sessionSwitcherSuppressed = true;
+			target.send(SESSION_SWITCHER_CANCEL_CHANNEL);
+			return;
+		}
 		if (
 			onShortcut &&
 			!input.isAutoRepeat &&

@@ -100,6 +100,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					onSessionSwitcherStep: () => unsubscribe,
+					onSessionSwitcherRelease: unsubscribe,
+					onSessionSwitcherCancel: unsubscribe,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -717,6 +720,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					onSessionSwitcherStep: () => unsubscribe,
+					onSessionSwitcherRelease: unsubscribe,
+					onSessionSwitcherCancel: unsubscribe,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",

@@ -12,7 +12,10 @@ import {
 	matchesPreviousSessionShortcut,
 	matchesPreviousTabShortcut,
 	defaultShortcutBindings,
+	findConflictingShortcut,
+	isSessionSwitcherModifierRelease,
 	matchesShortcutBinding,
+	sessionSwitcherDirection,
 	shortcutBindingKeys,
 	shortcutBindingLabel,
 	shortcutBindingValidationError,
@@ -106,13 +109,14 @@ describe("additional application shortcuts", () => {
 		}
 	});
 
-	it("matches the terminal toggle on ⌃` and, on macOS, ⌘J", () => {
+	it("matches the terminal toggle on ⌘J and Ctrl+J", () => {
 		const backquote = chord({ key: "`", code: "Backquote", ctrl: true });
-		expect(matchesAppShortcut("toggle-terminal", backquote, true)).toBe(true);
-		expect(matchesAppShortcut("toggle-terminal", backquote, false)).toBe(true);
 		expect(matchesAppShortcut("toggle-terminal", chord({ key: "j", meta: true }), true)).toBe(true);
-		expect(matchesAppShortcut("toggle-terminal", chord({ key: "j", ctrl: true }), false)).toBe(false);
-		expect(matchesAppShortcut("toggle-terminal", { ...backquote, shift: true }, true)).toBe(false);
+		expect(matchesAppShortcut("toggle-terminal", chord({ key: "j", ctrl: true }), false)).toBe(true);
+		expect(matchesAppShortcut("toggle-terminal", backquote, true)).toBe(false);
+		expect(matchesAppShortcut("toggle-terminal", backquote, false)).toBe(false);
+		expect(matchesAppShortcut("switch-session", backquote, true)).toBe(true);
+		expect(matchesAppShortcut("switch-session", backquote, false)).toBe(true);
 	});
 
 	it("matches close terminal on each platform", () => {
@@ -137,7 +141,8 @@ describe("default shortcuts", () => {
 		["open-settings", chord({ key: ",", meta: true })],
 		["toggle-sidebar", chord({ key: "b", meta: true })],
 		["toggle-inspector", chord({ key: "b", code: "KeyB", meta: true, alt: true })],
-		["toggle-terminal", chord({ key: "`", code: "Backquote", ctrl: true })],
+		["toggle-terminal", chord({ key: "j", meta: true })],
+		["switch-session", chord({ key: "`", code: "Backquote", ctrl: true })],
 		["toggle-diff", chord({ key: "D", meta: true, shift: true })],
 		["toggle-inspector", chord({ key: "B", meta: true, shift: true })],
 		["jump-to-session", chord({ key: "1", meta: true })],
@@ -205,12 +210,28 @@ describe("default shortcuts", () => {
 	it("labels macOS chords in Apple's modifier order", () => {
 		const [binding] = defaultShortcutBindings("next-attention-session", true);
 		expect(shortcutBindingKeys(binding, true)).toEqual(["⌥", "⇧", "⌘", "↓"]);
-		const [, alias] = defaultShortcutBindings("toggle-terminal", true);
-		expect(shortcutBindingLabel(alias, true)).toBe("⌘J");
-		const [backquote] = defaultShortcutBindings("toggle-terminal", true);
+		const [terminal] = defaultShortcutBindings("toggle-terminal", true);
+		expect(shortcutBindingLabel(terminal, true)).toBe("⌘J");
+		const [backquote] = defaultShortcutBindings("switch-session", true);
 		expect(shortcutBindingKeys(backquote, true)).toEqual(["⌃", "`"]);
 		const [history] = defaultShortcutBindings("history-back", false);
 		expect(shortcutBindingLabel(history, false)).toBe("Alt+←");
+	});
+});
+
+describe("session switcher chord", () => {
+	it("uses Ctrl+backquote on every platform and leaves Ctrl+Tab to in-session tabs", () => {
+		for (const isMac of [true, false]) {
+			expect(sessionSwitcherDirection(chord({ key: "`", code: "Backquote", ctrl: true }), isMac)).toBe(1);
+			expect(sessionSwitcherDirection(chord({ key: "~", code: "Backquote", ctrl: true, shift: true }), isMac)).toBe(-1);
+			expect(sessionSwitcherDirection(chord({ key: "Tab", ctrl: true }), isMac)).toBeNull();
+			expect(sessionSwitcherDirection(chord({ key: "Tab", ctrl: true, alt: true }), isMac)).toBeNull();
+			expect(sessionSwitcherDirection(chord({ key: "`", ctrl: true, alt: true }), isMac)).toBeNull();
+			expect(isSessionSwitcherModifierRelease({ key: "Control", alt: false, ctrl: false, type: "keyUp" }, isMac)).toBe(true);
+			expect(isSessionSwitcherModifierRelease({ key: "Alt", alt: false, ctrl: false, type: "keyUp", code: "AltLeft" }, isMac)).toBe(false);
+			expect(defaultShortcutBindings("switch-session", isMac).map((binding) => binding.key)).toEqual(["`", "`"]);
+			expect(findConflictingShortcut(chord({ key: "`", code: "Backquote", ctrl: true }), isMac, {})?.id).toBe("switch-session");
+		}
 	});
 });
 
@@ -271,11 +292,11 @@ describe("shortcut binding matching and validation", () => {
 		// US shifted forms.
 		expect(matchesAppShortcut("previous-session", chord({ key: "{", code: "BracketLeft", ctrl: true, shift: true }), false)).toBe(true);
 		expect(matchesAppShortcut("next-session", chord({ key: "}", code: "BracketRight", ctrl: true, shift: true }), false)).toBe(true);
-		expect(matchesAppShortcut("new-shell-terminal", chord({ key: "~", code: "Backquote", ctrl: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut("switch-session", chord({ key: "~", code: "Backquote", ctrl: true, shift: true }), false)).toBe(true);
 		// German: physical "[" is Ü (shifted Ü), physical "]" is + / *, backquote is a dead "^".
 		expect(matchesAppShortcut("previous-session", chord({ key: "Ü", code: "BracketLeft", meta: true, shift: true }), true)).toBe(true);
 		expect(matchesAppShortcut("history-back", chord({ key: "ü", code: "BracketLeft", meta: true }), true)).toBe(true);
-		expect(matchesAppShortcut("toggle-terminal", chord({ key: "Dead", code: "Backquote", ctrl: true }), false)).toBe(true);
+		expect(matchesAppShortcut("switch-session", chord({ key: "Dead", code: "Backquote", ctrl: true }), false)).toBe(true);
 		// Option+B types "∫" on macOS, so the Meta+Alt+B alias needs the code.
 		expect(matchesAppShortcut("toggle-inspector", chord({ key: "∫", code: "KeyB", meta: true, alt: true }), true)).toBe(true);
 	});
@@ -351,7 +372,7 @@ describe("shortcut binding matching and validation", () => {
 
 	it("gives terminal-safe Shift alternatives for yielding commands on Windows/Linux", () => {
 		expect(matchesAppShortcut("close-shell-terminal", chord({ key: "W", ctrl: true, shift: true }), false)).toBe(true);
-		expect(matchesAppShortcut("new-shell-terminal", chord({ key: "~", code: "Backquote", ctrl: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut("switch-session", chord({ key: "~", code: "Backquote", ctrl: true, shift: true }), false)).toBe(true);
 		expect(matchesAppShortcut("toggle-sidebar", chord({ key: "E", ctrl: true, shift: true }), false)).toBe(true);
 		expect(matchesAppShortcut("toggle-inspector", chord({ key: "B", ctrl: true, shift: true }), false)).toBe(true);
 		expect(matchesAppShortcut("toggle-inspector", chord({ key: "E", ctrl: true, shift: true }), false)).toBe(false);

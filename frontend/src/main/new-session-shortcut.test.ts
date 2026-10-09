@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL } from "../shared/shortcuts";
-import { attachAppShortcuts } from "./app-shortcuts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SESSION_SWITCHER_CANCEL_CHANNEL, SESSION_SWITCHER_RELEASE_CHANNEL, SESSION_SWITCHER_STEP_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL } from "../shared/shortcuts";
+import { attachAppShortcuts, cancelSessionSwitcherForFocusLoss, resetSessionSwitcherShortcutState } from "./app-shortcuts";
 import { toggleAppDevTools } from "./app-devtools";
 
 type InputEvent = {
@@ -43,6 +43,10 @@ function fakeTarget() {
 }
 
 describe("attachAppShortcuts", () => {
+	beforeEach(() => {
+		resetSessionSwitcherShortcutState();
+	});
+
 	it("routes Ctrl+Shift+I to shell DevTools when no Browser view is available", async () => {
 		const source = fakeSource();
 		const target = { ...fakeTarget(), toggleDevTools: vi.fn() };
@@ -210,7 +214,6 @@ describe("attachAppShortcuts", () => {
 
 	it.each([
 		["macOS", true, "toggle-sidebar", { key: "b", meta: true }],
-		["macOS", true, "toggle-terminal", { key: "`", code: "Backquote", control: true }],
 		["macOS", true, "toggle-terminal", { key: "j", meta: true }],
 		["macOS", true, "toggle-diff", { key: "D", meta: true, shift: true }],
 		["macOS", true, "toggle-inspector", { key: "B", meta: true, shift: true }],
@@ -228,7 +231,7 @@ describe("attachAppShortcuts", () => {
 		["macOS", true, "previous-attention-session", { key: "ArrowUp", meta: true, alt: true, shift: true }],
 		["macOS", true, "next-attention-session", { key: "ArrowDown", meta: true, alt: true, shift: true }],
 		["Windows/Linux", false, "history-back", { key: "ArrowLeft", alt: true }],
-		["Windows/Linux", false, "toggle-terminal", { key: "`", code: "Backquote", control: true }],
+		["Windows/Linux", false, "toggle-terminal", { key: "j", control: true }],
 	] as const)("forwards %s %s through the generic channel", (_platform, isMac, id, input) => {
 		const source = fakeSource();
 		const target = fakeTarget();
@@ -298,7 +301,7 @@ describe("attachAppShortcuts", () => {
 
 	it.each([
 		["Ctrl+Shift+W", { key: "W", control: true, shift: true }, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, undefined],
-		["Ctrl+Shift+`", { key: "~", code: "Backquote", control: true, shift: true }, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, undefined],
+		["Ctrl+Shift+J", { key: "J", control: true, shift: true }, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, undefined],
 		["Ctrl+Shift+E", { key: "E", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "toggle-sidebar" }],
 		["Ctrl+Shift+B", { key: "B", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "toggle-inspector" }],
 		["Ctrl+Shift+P", { key: "P", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "command-palette" }],
@@ -369,20 +372,130 @@ describe("attachAppShortcuts", () => {
 		expect(target.send).toHaveBeenCalledWith(APP_SHORTCUT_CHANNEL, { id: "command-palette" });
 	});
 
+	it("keeps macOS Ctrl+Tab as next tab and uses Ctrl+backquote for the switcher", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, true, target);
+
+		const nextTab = source.emit({ key: "Tab", control: true });
+		const open = source.emit({ key: "`", code: "Backquote", control: true });
+		const again = source.emit({ key: "`", code: "Backquote", control: true, isAutoRepeat: true });
+		const release = source.emit({ key: "Control", code: "ControlLeft", control: false, type: "keyUp" });
+
+		expect(target.send).toHaveBeenNthCalledWith(1, NEXT_TAB_SHORTCUT_CHANNEL);
+		expect(target.send).toHaveBeenNthCalledWith(2, SESSION_SWITCHER_STEP_CHANNEL, 1);
+		expect(target.send).toHaveBeenNthCalledWith(3, SESSION_SWITCHER_STEP_CHANNEL, 1);
+		expect(target.send).toHaveBeenNthCalledWith(4, SESSION_SWITCHER_RELEASE_CHANNEL);
+		expect(nextTab.preventDefault).toHaveBeenCalledOnce();
+		expect(open.preventDefault).toHaveBeenCalledOnce();
+		expect(again.preventDefault).toHaveBeenCalledOnce();
+		expect(release.preventDefault).toHaveBeenCalledOnce();
+		expect(target.focus).not.toHaveBeenCalled();
+	});
+
+	it("commits once on Ctrl, in either release order, and ignores the cycle key and Shift keyup", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, true, target);
+
+		source.emit({ key: "`", code: "Backquote", control: true });
+		source.emit({ key: "`", code: "Backquote", control: true });
+		const cycleUpWhileCtrlHeld = source.emit({ key: "`", code: "Backquote", control: false, type: "keyUp" });
+		const shiftUp = source.emit({ key: "Shift", code: "ShiftLeft", control: false, type: "keyUp" });
+		expect(target.send).not.toHaveBeenCalledWith(SESSION_SWITCHER_RELEASE_CHANNEL);
+		expect(cycleUpWhileCtrlHeld.preventDefault).not.toHaveBeenCalled();
+		expect(shiftUp.preventDefault).not.toHaveBeenCalled();
+
+		const ctrlUpAfterCycle = source.emit({ key: "Control", code: "ControlLeft", control: true, type: "keyUp" });
+		const cycleUpAfterCommit = source.emit({ key: "`", code: "Backquote", control: false, type: "keyUp" });
+		expect(ctrlUpAfterCycle.preventDefault).toHaveBeenCalledOnce();
+		expect(cycleUpAfterCommit.preventDefault).not.toHaveBeenCalled();
+		expect(target.send).toHaveBeenCalledWith(SESSION_SWITCHER_RELEASE_CHANNEL);
+		expect(target.send.mock.calls.filter((call) => call[0] === SESSION_SWITCHER_RELEASE_CHANNEL)).toHaveLength(1);
+
+		target.send.mockClear();
+		source.emit({ key: "~", code: "Backquote", control: true, shift: true });
+		source.emit({ key: "~", code: "Backquote", control: true, shift: true, isAutoRepeat: true });
+		const ctrlFirst = source.emit({ key: "Control", code: "ControlRight", control: false, type: "keyUp" });
+		const cycleAfterCtrl = source.emit({ key: "`", code: "Backquote", control: false, type: "keyUp" });
+		expect(ctrlFirst.preventDefault).toHaveBeenCalledOnce();
+		expect(cycleAfterCtrl.preventDefault).not.toHaveBeenCalled();
+		expect(target.send).toHaveBeenNthCalledWith(1, SESSION_SWITCHER_STEP_CHANNEL, -1);
+		expect(target.send).toHaveBeenNthCalledWith(2, SESSION_SWITCHER_STEP_CHANNEL, -1);
+		expect(target.send).toHaveBeenNthCalledWith(3, SESSION_SWITCHER_RELEASE_CHANNEL);
+		expect(target.send).toHaveBeenCalledTimes(3);
+	});
+
+	it("keeps Windows Ctrl+Tab as next tab and uses Ctrl+backquote for the switcher", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, false, target, true);
+
+		const nextTab = source.emit({ key: "Tab", control: true });
+		const open = source.emit({ key: "`", code: "Backquote", control: true });
+		const back = source.emit({ key: "~", code: "Backquote", control: true, shift: true, isAutoRepeat: true });
+		expect(target.send).toHaveBeenNthCalledWith(1, NEXT_TAB_SHORTCUT_CHANNEL);
+		expect(target.send).toHaveBeenNthCalledWith(2, SESSION_SWITCHER_STEP_CHANNEL, 1);
+		expect(target.send).toHaveBeenNthCalledWith(3, SESSION_SWITCHER_STEP_CHANNEL, -1);
+		expect(nextTab.preventDefault).toHaveBeenCalledOnce();
+		target.focus.mockClear();
+		expect(open.preventDefault).toHaveBeenCalledOnce();
+		expect(back.preventDefault).toHaveBeenCalledOnce();
+		expect(target.focus).not.toHaveBeenCalled();
+
+		const escape = source.emit({ key: "Escape" });
+		const release = source.emit({ key: "Control", type: "keyUp" });
+		expect(escape.preventDefault).toHaveBeenCalledOnce();
+		expect(target.send).toHaveBeenCalledWith(SESSION_SWITCHER_CANCEL_CHANNEL);
+		expect(target.send).not.toHaveBeenCalledWith(SESSION_SWITCHER_RELEASE_CHANNEL);
+		expect(release.preventDefault).not.toHaveBeenCalled();
+
+		source.emit({ key: "`", code: "Backquote", control: true });
+		cancelSessionSwitcherForFocusLoss();
+		source.emit({ key: "Control", type: "keyUp" });
+		expect(target.send).toHaveBeenCalledTimes(6);
+		expect(target.send).toHaveBeenNthCalledWith(6, SESSION_SWITCHER_CANCEL_CHANNEL);
+		expect(target.send).not.toHaveBeenCalledWith(SESSION_SWITCHER_RELEASE_CHANNEL);
+
+		target.send.mockClear();
+		const reopened = source.emit({ key: "`", code: "Backquote", control: true });
+		source.emit({ key: "Escape" });
+		cancelSessionSwitcherForFocusLoss();
+		source.emit({ key: "Control", type: "keyUp" });
+		const again = source.emit({ key: "`", code: "Backquote", control: true });
+		expect(reopened.preventDefault).toHaveBeenCalled();
+		expect(again.preventDefault).toHaveBeenCalled();
+		expect(target.send).toHaveBeenNthCalledWith(1, SESSION_SWITCHER_STEP_CHANNEL, 1);
+		expect(target.send).toHaveBeenNthCalledWith(2, SESSION_SWITCHER_CANCEL_CHANNEL);
+		expect(target.send).toHaveBeenNthCalledWith(3, SESSION_SWITCHER_STEP_CHANNEL, 1);
+		expect(target.send).not.toHaveBeenCalledWith(SESSION_SWITCHER_RELEASE_CHANNEL);
+	});
+
+	it("does not open the session switcher from Alt+Tab or Option+Tab", () => {
+		for (const isMac of [true, false]) {
+			const source = fakeSource();
+			const target = fakeTarget();
+			attachAppShortcuts(source, isMac, target);
+			const event = source.emit({ key: "Tab", alt: true });
+			expect(event.preventDefault).not.toHaveBeenCalled();
+			expect(target.send).not.toHaveBeenCalled();
+		}
+	});
+
 	it("reads live user overrides without reattaching the listener", () => {
 		const source = fakeSource();
 		const target = fakeTarget();
 		let overrides = {};
 		attachAppShortcuts(source, false, target, false, () => overrides);
 
-		source.emit({ key: "`", code: "Backquote", control: true });
+		source.emit({ key: "j", control: true });
 		overrides = {
 			"toggle-terminal": [
-				{ key: "j", ctrl: true, meta: false, shift: false, alt: false },
+				{ key: "y", ctrl: true, meta: false, shift: false, alt: false },
 			],
 		};
-		source.emit({ key: "`", code: "Backquote", control: true });
 		source.emit({ key: "j", control: true });
+		source.emit({ key: "y", control: true });
 
 		expect(target.send).toHaveBeenCalledTimes(2);
 		expect(target.send).toHaveBeenLastCalledWith(APP_SHORTCUT_CHANNEL, { id: "toggle-terminal" });

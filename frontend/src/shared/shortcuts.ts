@@ -55,7 +55,8 @@ export type AppShortcutId =
 	| "open-in-editor"
 	| "copy-session-path"
 	| "model-picker"
-	| "toggle-browser-devtools";
+	| "toggle-browser-devtools"
+	| "switch-session";
 
 export type ShortcutCategory = "General" | "Navigation" | "Session" | "Panels";
 
@@ -97,6 +98,7 @@ export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 	{ id: "history-forward", label: "Go forward", category: "Navigation" },
 	{ id: "previous-tab", label: "Previous tab", category: "Navigation" },
 	{ id: "next-tab", label: "Next tab", category: "Navigation" },
+	{ id: "switch-session", label: "Switch session", category: "Navigation", customizable: false },
 	{ id: "new-shell-terminal", label: "New terminal", category: "Session" },
 	{ id: "close-shell-terminal", label: "Close tab", category: "Session" },
 	{ id: "reopen-closed-tab", label: "Reopen closed tab", category: "Session" },
@@ -134,7 +136,7 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 		case "new-shell-terminal":
 			return isMac
 				? [binding("t", { meta: true })]
-				: [binding("t", { ctrl: true }), binding("`", { ctrl: true, shift: true, code: "Backquote" })];
+				: [binding("t", { ctrl: true }), binding("j", { ctrl: true, shift: true })];
 		case "close-shell-terminal":
 			return isMac
 				? [binding("w", { meta: true })]
@@ -158,9 +160,8 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 				? [binding("b", { meta: true, shift: true }), binding("b", { meta: true, alt: true, code: "KeyB" })]
 				: [binding("b", { ctrl: true, shift: true })];
 		case "toggle-terminal":
-			return isMac
-				? [binding("`", { ctrl: true, code: "Backquote" }), binding("j", { meta: true })]
-				: [binding("`", { ctrl: true, code: "Backquote" })];
+			// Ctrl+` is the session switcher. J toggles the terminal panel.
+			return isMac ? [binding("j", { meta: true })] : [binding("j", { ctrl: true })];
 		case "toggle-diff":
 			return [binding("d", { ...primary, shift: true })];
 		case "jump-to-session":
@@ -189,6 +190,9 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return isMac
 				? [binding("Tab", { ctrl: true }), binding("ArrowRight", { meta: true, alt: true })]
 				: [binding("Tab", { ctrl: true })];
+		case "switch-session":
+			// Ctrl+` on every platform. Shift reverses. Ctrl+Tab stays the in-session tab shortcut.
+			return [binding("`", { ctrl: true, code: "Backquote" }), binding("`", { ctrl: true, shift: true, code: "Backquote" })];
 		case "archive-session":
 			return [binding("a", { ...primary, shift: true })];
 		case "open-in-editor":
@@ -228,6 +232,24 @@ const SHIFTED_KEY: Record<string, string> = { "[": "{", "]": "}", "`": "~" };
 function codeFallbackApplies(chordKey: string, candidateKey: string): boolean {
 	if (!/^[\x21-\x7e]$/.test(chordKey)) return true;
 	return SHIFTED_KEY[normalizedKey(candidateKey)] === chordKey;
+}
+
+
+/** Fixed chords win over an earlier customizable row that lists the same keys. */
+export function findConflictingShortcut(
+	chord: ShortcutChord,
+	isMac: boolean,
+	overrides: KeybindingOverrides,
+	exceptId?: AppShortcutId,
+): (typeof APP_SHORTCUTS)[number] | undefined {
+	const matches = APP_SHORTCUTS.filter(
+		(shortcut) =>
+			shortcut.id !== exceptId &&
+			effectiveShortcutBindings(shortcut.id, isMac, overrides).some((existing) =>
+				matchesShortcutBinding(chord, existing),
+			),
+	);
+	return matches.find((shortcut) => shortcut.customizable === false) ?? matches[0];
 }
 
 export function matchesShortcutBinding(chord: ShortcutChord, candidate: ShortcutBinding): boolean {
@@ -372,6 +394,9 @@ export const NEXT_TAB_SHORTCUT_CHANNEL = "app:next-tab";
 // digit for indexed commands (jump-to-session).
 export const APP_SHORTCUT_CHANNEL = "app:shortcut";
 export type AppShortcutEvent = { id: AppShortcutId; index?: number };
+export const SESSION_SWITCHER_STEP_CHANNEL = "app:session-switcher-step";
+export const SESSION_SWITCHER_RELEASE_CHANNEL = "app:session-switcher-release";
+export const SESSION_SWITCHER_CANCEL_CHANNEL = "app:session-switcher-cancel";
 
 // New session: ⌘N on macOS, Ctrl+Shift+N on Windows/Linux. Plain Ctrl+N is a
 // live terminal keystroke (readline/vim "next line"), so the non-mac binding
@@ -414,3 +439,48 @@ export function matchesPreviousTabShortcut(chord: ShortcutChord, isMac: boolean)
 export function matchesNextTabShortcut(chord: ShortcutChord, isMac: boolean): boolean {
 	return matchesAppShortcut("next-tab", chord, isMac);
 }
+
+function isSwitcherCycleKey(chord: ShortcutChord): boolean {
+	const key = normalizedKey(chord.key);
+	const code = normalizedKey(chord.code ?? "");
+	return code === "backquote" || key === "`" || key === "~";
+}
+
+/**
+ * Direction for one press of the project session switcher.
+ * 1 moves forward, -1 moves backward. Null when the chord belongs to something else.
+ * Every platform uses Ctrl+` (Backquote). Shift reverses. Ctrl+Tab stays the
+ * in-session tab shortcut.
+ * The binding is fixed: a customized next-tab chord must not move this switcher,
+ * and this switcher must not follow a customized binding onto Ctrl+C or similar.
+ */
+export function sessionSwitcherDirection(chord: ShortcutChord, isMac: boolean): -1 | 1 | null {
+	void isMac;
+	if (chord.meta || chord.alt || !chord.ctrl || !isSwitcherCycleKey(chord)) return null;
+	return chord.shift ? -1 : 1;
+}
+
+export type SessionSwitcherModifierInput = {
+	key: string;
+	code?: string;
+	alt: boolean;
+	ctrl: boolean;
+	/** Electron uses keyUp. DOM events use keyup; callers normalize to keyUp. */
+	type?: string;
+};
+
+/**
+ * True only when Ctrl itself came up. The cycle key and Shift are not a release:
+ * Electron often reports that keyup with ctrl already false while Ctrl is still held.
+ * A Control keyUp counts even when the ctrl flag is still true.
+ */
+export function isSessionSwitcherModifierRelease(input: SessionSwitcherModifierInput, isMac: boolean): boolean {
+	void isMac;
+	if (input.type === "char") return false;
+	const key = normalizedKey(input.key);
+	const code = normalizedKey(input.code ?? "");
+	const controlKey = key === "control" || key === "ctrl" || code === "controlleft" || code === "controlright";
+	if (!controlKey) return false;
+	return input.type === "keyUp" || !input.ctrl;
+}
+

@@ -34,6 +34,9 @@ export const aoBridge: AoBridge =
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: () => () => undefined,
+			onSessionSwitcherStep: () => () => undefined,
+			onSessionSwitcherRelease: () => () => undefined,
+			onSessionSwitcherCancel: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",

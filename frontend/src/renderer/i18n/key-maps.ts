@@ -25,6 +25,7 @@ export const shortcutLabelKeys: Record<AppShortcutId, MessageKey> = {
 	"history-forward": "shortcut.history-forward",
 	"previous-tab": "shortcut.previous-tab",
 	"next-tab": "shortcut.next-tab",
+	"switch-session": "shortcut.switch-session",
 	"archive-session": "shortcut.archive-session",
 	"open-in-editor": "shortcut.open-in-editor",
 	"copy-session-path": "shortcut.copy-session-path",
