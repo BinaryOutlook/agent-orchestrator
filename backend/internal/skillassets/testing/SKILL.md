@@ -20,6 +20,9 @@ launches, checks, evidence, cleanup and the AO report. Record the comparison's
 start time before reading docs, and track elapsed time throughout. Use the
 supplied comparison start time when available; otherwise record your first-turn
 start and label earlier intake time unknown. Do not restart the budget for head.
+Create `timing.json` in your session artifacts immediately, with that UTC
+`startedAt` and an empty `phases` array. Update it at every phase boundary while
+working; do not reconstruct timings from memory at the end.
 Spend under two minutes reading the diff and choosing checks. Target about thirty
 seconds for each setup/launch and two minutes of checks per leg. Produce the final
 comparison in under two minutes. Reserve the final ninety seconds for cleanup,
@@ -188,7 +191,7 @@ PR: <URL>. Base: <SHA>. Head: <SHA>.
 | <numbered trigger/input; runtime command and exit status if relevant> | <observed result> | <observed result> | <relative media links> |
 
 Unverified: <skipped checks and exact reasons>.
-Timings: <phase table with UTC boundaries, seconds and sources>.
+Timings: <link to timing.json; totalSeconds; phase table with UTC boundaries, seconds and sources>.
 Cleanup: <base/head receipt paths, state and leftovers>.
 Draft comments: <what to change and supporting evidence, or none>.
 ```
@@ -201,13 +204,18 @@ Otherwise state whether head is still broken or regressed. Label skipped risky
 checks unverified. If no safe check reaches the changed behavior, report an
 unverified verdict with the exact reason rather than calling it fixed or broken.
 
-Record a phase timing table in the comparison and summarize it in the AO report.
-For each phase, save UTC start/end, elapsed seconds and the source receipt or
-command. Include intake/planning, base setup/launch/checks, leg switch and head
-setup/launch/checks, finalization and cleanup, plus total wall time. Record any
-skipped or unverified check. Use controller receipts for internal setup/launch
-timings when available; otherwise record the combined leg-start duration and
-label its internal split unknown. Do not add overlapping phases to the total.
+Writing phase timings is required before the final AO report. Finish `timing.json`
+with UTC `startedAt`, `endedAt`, numeric `totalSeconds` and a nonempty `phases`
+array. Every phase must have `name`, UTC `startedAt` and `endedAt`, numeric
+`seconds`, and `source` identifying its receipt or command. Include planning,
+base leg start, base checks, head leg start including base cleanup, head checks,
+head cleanup, and evidence/report preparation. Record a skipped phase with zero
+seconds and its reason. Use controller receipts for internal setup/launch timings
+when available; otherwise keep the combined leg-start duration and label its
+internal split unknown. Compute total wall time from the comparison's start and
+end, not a sum of overlapping phases. Do not leave `totalSeconds` null or omit
+phases. Link this file and show its short phase table in the comparison; include
+total seconds and the phase durations in the `ao report` note.
 Record model, tokens and cost from available usage facts; mark missing facts unknown.
 Copy the selected screenshot/clip receipts from `evidenceDir` into the worker's
 session artifact directory beside `comparison.html`. Verify the copied hashes

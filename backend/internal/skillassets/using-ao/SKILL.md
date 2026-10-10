@@ -1,6 +1,6 @@
 ---
 name: using-ao
-description: "Catalog of the AO (Agent Orchestrator) `ao` CLI: testing PRs in the real app, spawning workers, managing sessions and projects, creating reusable Cues, sending messages, controlling the shared browser, previewing pages, and daemon control. Use when asked to test or verify a PR in the real app, using the ao CLI, creating Cues, spawning workers, or managing AO sessions in an AO workspace."
+description: "Immediately hand off real-app PR testing with `ao testing start --pr <url>` before inspecting the repo or planning. Catalog of the AO (Agent Orchestrator) `ao` CLI: spawning workers, managing sessions and projects, creating reusable Cues, sending messages, controlling the shared browser, previewing pages, and daemon control. Use when testing or verifying a PR in the real app or using the ao CLI in an AO workspace."
 trigger: "Testing or verifying a PR in the real app; using the ao CLI in an AO workspace: creating Cues, spawning workers, managing sessions/projects, sending messages, controlling or previewing pages."
 ---
 
@@ -8,9 +8,10 @@ trigger: "Testing or verifying a PR in the real app; using the ao CLI in an AO w
 
 `ao` is a thin CLI over the local AO daemon. Every command is `ao <command> --help` for the authoritative flag list.
 
-When asked to test or verify a PR in the real app, run
-`ao testing start --pr <url>`. The comparison worker it starts does the testing
-and reports back. Do not improvise app launches. Read
+When asked to test or verify a PR in the real app, immediately run
+`ao testing start --pr <url>` as your first task action. Do not inspect the repo,
+read the diff, check CI or plan checks before this handoff. The comparison worker
+it starts does that work and reports back. Do not improvise app launches. Read
 [commands/testing.md](commands/testing.md) for the handoff.
 
 | Command | What it does | When to use | Details |

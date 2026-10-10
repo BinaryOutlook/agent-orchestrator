@@ -1,10 +1,14 @@
 # ao testing
 
-When asked to test or verify a PR in the real app, run:
+When asked to test or verify a PR in the real app, immediately run this command
+as your first task action:
 
 ```bash
 ao testing start --pr <url>
 ```
+
+Do nothing else first. Do not inspect the checkout, read the PR or diff, check CI,
+choose scenarios or write a plan. The comparison worker owns those steps.
 
 AO snapshots the PR's base and head and starts one comparison worker. That
 worker uses the testing skill and its session tools to test both revisions,
