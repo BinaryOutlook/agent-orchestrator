@@ -60,25 +60,58 @@ func TestOwnedDaemonCommandHandlesQuotedPaths(t *testing.T) {
 	}
 }
 
-func TestOwnedBuildKeepsCompilerError(t *testing.T) {
+func TestOwnedBuildPreservesCheckoutAndCompilerError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("local macOS target uses POSIX tools")
 	}
-	root := t.TempDir()
-	frontend := filepath.Join(root, "checkout", "frontend")
-	if err := os.Mkdir(filepath.Join(root, "attempt"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "checkout", "backend"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	tool := filepath.Join(root, "go")
-	if err := os.WriteFile(tool, []byte("#!/bin/sh\necho 'compiler diagnostic from pinned revision' >&2\nexit 19\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
-	err := buildOwnedDaemon(context.Background(), frontend, filepath.Join(root, "attempt", "daemon", "ao"))
-	if err == nil || !strings.Contains(err.Error(), "compiler diagnostic from pinned revision") || !strings.Contains(err.Error(), "exit status 19") {
-		t.Fatalf("compiler cause was lost: %v", err)
+	for _, compilerFailure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "module ignores workspace", true: "compiler diagnostic"}[compilerFailure], func(t *testing.T) {
+			root := t.TempDir()
+			checkout := filepath.Join(root, "checkout")
+			frontend := filepath.Join(checkout, "frontend")
+			for _, dir := range []string{"attempt", "checkout/backend/cmd/ao", "checkout/cloud"} {
+				if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			files := map[string]string{
+				"go.work":                "go 1.21\nuse (\n./backend\n./cloud\n)\n",
+				"go.work.sum":            "example.org/unused v1.0.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=\n",
+				"backend/go.mod":         "module example.org/backend\ngo 1.21\n",
+				"backend/go.sum":         "",
+				"backend/cmd/ao/main.go": "package main\nfunc main() {}\n",
+				"cloud/go.mod":           "invalid workspace sibling\n",
+			}
+			for name, data := range files {
+				if err := os.WriteFile(filepath.Join(checkout, name), []byte(data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("GOWORK", filepath.Join(checkout, "go.work"))
+			if compilerFailure {
+				tool := filepath.Join(root, "go")
+				if err := os.WriteFile(tool, []byte("#!/bin/sh\necho 'compiler diagnostic from pinned revision' >&2\nexit 19\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+			}
+			executable := filepath.Join(root, "attempt", "daemon", "ao")
+			err := buildOwnedDaemon(t.Context(), frontend, executable)
+			if compilerFailure {
+				if err == nil || !strings.Contains(err.Error(), "compiler diagnostic from pinned revision") || !strings.Contains(err.Error(), "exit status 19") {
+					t.Fatalf("compiler cause was lost: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			} else if _, err := os.Stat(executable); err != nil {
+				t.Fatal(err)
+			}
+			for name, expected := range files {
+				data, err := os.ReadFile(filepath.Join(checkout, name))
+				if err != nil || string(data) != expected {
+					t.Fatalf("build modified %s: %v", name, err)
+				}
+			}
+		})
 	}
 }

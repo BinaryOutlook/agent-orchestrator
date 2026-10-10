@@ -65,8 +65,10 @@ func buildOwnedDaemon(ctx context.Context, frontend, executable string) error {
 	if err := os.Mkdir(filepath.Dir(executable), 0o700); err != nil {
 		return err
 	}
-	cmd := processutil.CommandContext(ctx, "go", "build", "-p", "2", "-o", executable, "./cmd/ao")
+	// Workspace builds can rewrite the shared checkout's go.work.sum.
+	cmd := processutil.CommandContext(ctx, "go", "build", "-mod=readonly", "-p", "2", "-o", executable, "./cmd/ao")
 	cmd.Dir, cmd.Env = filepath.Join(filepath.Dir(frontend), "backend"), strippedEnv(os.Environ())
+	cmd.Env = append(cmd.Env, "GOWORK=off")
 	output, _, err := runSetupCommand(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("build owned daemon: %w: %s", err, strings.TrimSpace(string(output)))
