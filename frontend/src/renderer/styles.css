@@ -5727,9 +5727,9 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	width: 100%;
 	box-sizing: border-box;
 	height: var(--size-control-md);
-	border-color: var(--color-border);
+	border-color: transparent;
 	border-radius: var(--radius-md);
-	background: var(--bg);
+	background: var(--color-interactive-active);
 	font-family: var(--font-family-base);
 	font-size: 12px;
 	text-align: center;
