@@ -60,7 +60,7 @@ const ignoredRecordingKeys = new Set([
 
 const codeMatchedKeys: ReadonlySet<string> = new Set(["Backquote", "BracketLeft", "BracketRight"]);
 
-function eventBinding(event: KeyboardEvent): ShortcutBinding | null {
+export function eventBinding(event: KeyboardEvent): ShortcutBinding | null {
 	if (ignoredRecordingKeys.has(event.key) || event.getModifierState?.("AltGraph")) return null;
 	return {
 		key: event.key.length === 1 ? event.key.toLowerCase() : event.key,

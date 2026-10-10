@@ -118,6 +118,60 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		await waitFor(() => expect(useKeybindingsStore.getState().overrides).toEqual({}));
 	});
 
+	it("keeps the physical code for bracket chords", async () => {
+		const user = userEvent.setup();
+		renderDialog(true);
+
+		await user.click(screen.getByRole("button", { name: "Change Toggle terminal" }));
+		fireEvent.keyDown(window, { key: "]", code: "BracketRight", ctrlKey: true, altKey: true });
+
+		await waitFor(() =>
+			expect(useKeybindingsStore.getState().overrides["toggle-terminal"]).toEqual([
+				{ key: "]", code: "BracketRight", ctrl: true, meta: false, shift: false, alt: true },
+			]),
+		);
+	});
+
+	it("keeps the physical code for Option-letter chords, whose key is a composed character", async () => {
+		const user = userEvent.setup();
+		renderDialog(true);
+
+		await user.click(screen.getByRole("button", { name: "Change Toggle terminal" }));
+		fireEvent.keyDown(window, { key: "∫", code: "KeyB", altKey: true });
+
+		await waitFor(() =>
+			expect(useKeybindingsStore.getState().overrides["toggle-terminal"]).toEqual([
+				{ key: "∫", code: "KeyB", ctrl: false, meta: false, shift: false, alt: true },
+			]),
+		);
+	});
+
+	it("does not attach a code to a plain letter chord", async () => {
+		const user = userEvent.setup();
+		renderDialog(true);
+
+		await user.click(screen.getByRole("button", { name: "Change Toggle terminal" }));
+		fireEvent.keyDown(window, { key: "J", code: "KeyJ", metaKey: true, shiftKey: true });
+
+		await waitFor(() =>
+			expect(useKeybindingsStore.getState().overrides["toggle-terminal"]).toEqual([
+				{ key: "j", ctrl: false, meta: true, shift: true, alt: false },
+			]),
+		);
+	});
+
+	it("detects a conflict with the default previous-session chord (Cmd+Shift+[)", async () => {
+		const user = userEvent.setup();
+		renderDialog(true);
+
+		await user.click(screen.getByRole("button", { name: "Change Toggle terminal" }));
+		// With Shift held the browser reports "{", so only the code ties it to the default.
+		fireEvent.keyDown(window, { key: "{", code: "BracketLeft", metaKey: true, shiftKey: true });
+
+		expect(await screen.findByRole("dialog", { name: "Shortcut already in use" })).toBeInTheDocument();
+		expect(persistBindings).not.toHaveBeenCalled();
+	});
+
 	it("uses the platform prop for displayed and recorded bindings", async () => {
 		const user = userEvent.setup();
 		renderDialog(true);

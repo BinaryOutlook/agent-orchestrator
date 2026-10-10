@@ -1,6 +1,6 @@
 import { useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
@@ -186,6 +186,7 @@ vi.mock("./TaskComposer", () => ({
 		<div data-testid="task-composer">
 			<span>composer {props.projectId}</span>
 			<StubNestedLayer />
+			<input aria-label="stub-composer-input" />
 			<button type="button" onClick={() => props.onDirtyChange?.(true)}>
 				stub-dirty
 			</button>
@@ -1134,6 +1135,38 @@ describe("CommandPalette inline task composer", () => {
 		pressEscape();
 		expect(await screen.findByText(/discard this draft/i)).toBeInTheDocument();
 		expect(screen.getByTestId("task-composer")).toBeInTheDocument();
+	});
+
+	it("announces the discard prompt as an alert and focuses Keep editing", async () => {
+		await openComposer();
+		fireEvent.click(screen.getByText("stub-dirty"));
+		pressEscape();
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(/discard this draft/i);
+		const keepEditing = within(alert).getByRole("button", { name: /keep editing/i });
+		await waitFor(() => expect(keepEditing).toHaveFocus());
+
+		fireEvent.click(keepEditing);
+		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+		await waitFor(() => expect(screen.getByLabelText("stub-composer-input")).toHaveFocus());
+		expect(screen.getByTestId("task-composer")).toBeInTheDocument();
+	});
+
+	it("lets Tab and Shift+Tab out of the composer to the dialog's focus trap but keeps other keys from cmdk", async () => {
+		const composer = await openComposer();
+		const seen: string[] = [];
+		const onKeyDown = (event: KeyboardEvent) => seen.push(event.key);
+		document.addEventListener("keydown", onKeyDown);
+		try {
+			const input = within(composer).getByLabelText("stub-composer-input");
+			fireEvent.keyDown(input, { key: "Tab" });
+			fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+			fireEvent.keyDown(input, { key: "a" });
+			fireEvent.keyDown(input, { key: "ArrowDown" });
+			expect(seen).toEqual(["Tab", "Tab"]);
+		} finally {
+			document.removeEventListener("keydown", onKeyDown);
+		}
 	});
 
 	it("blocks dismissal while a create is in flight, then navigates on completion", async () => {

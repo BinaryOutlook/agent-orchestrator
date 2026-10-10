@@ -250,6 +250,116 @@ describe("shortcut binding matching and validation", () => {
 		expect(shortcutBindingValidationError(chord({ key: "j", ctrl: true }), false)).toBeNull();
 	});
 
+	it("does not let a physical code override a different layout's printable key", () => {
+		const historyForward = defaultShortcutBindings("history-forward", true)[0];
+		const keyboardHelp = defaultShortcutBindings("keyboard-shortcuts", true)[0];
+		// Dvorak: the physical "[" key types "/", the physical "]" key types "=".
+		const dvorakCmdSlash = chord({ key: "/", code: "BracketLeft", meta: true });
+		const dvorakCmdEqual = chord({ key: "=", code: "BracketRight", meta: true });
+		expect(matchesShortcutBinding(dvorakCmdSlash, keyboardHelp)).toBe(true);
+		expect(matchesAppShortcut("history-back", dvorakCmdSlash, true)).toBe(false);
+		expect(matchesShortcutBinding(dvorakCmdEqual, historyForward)).toBe(false);
+		// Dvorak ⌘] types "]" from a different physical key and still matches by key.
+		expect(matchesShortcutBinding(chord({ key: "]", code: "Equal", meta: true }), historyForward)).toBe(true);
+		// Non-mac Dvorak Ctrl+Shift+physical "[" is Ctrl+Shift+/, not previous-session.
+		expect(
+			matchesAppShortcut("previous-session", chord({ key: "?", code: "BracketLeft", ctrl: true, shift: true }), false),
+		).toBe(false);
+	});
+
+	it("still matches bracket and backquote chords whose key is shifted or non-ASCII", () => {
+		// US shifted forms.
+		expect(matchesAppShortcut("previous-session", chord({ key: "{", code: "BracketLeft", ctrl: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut("next-session", chord({ key: "}", code: "BracketRight", ctrl: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut("new-shell-terminal", chord({ key: "~", code: "Backquote", ctrl: true, shift: true }), false)).toBe(true);
+		// German: physical "[" is Ü (shifted Ü), physical "]" is + / *, backquote is a dead "^".
+		expect(matchesAppShortcut("previous-session", chord({ key: "Ü", code: "BracketLeft", meta: true, shift: true }), true)).toBe(true);
+		expect(matchesAppShortcut("history-back", chord({ key: "ü", code: "BracketLeft", meta: true }), true)).toBe(true);
+		expect(matchesAppShortcut("toggle-terminal", chord({ key: "Dead", code: "Backquote", ctrl: true }), false)).toBe(true);
+		// Option+B types "∫" on macOS, so the Meta+Alt+B alias needs the code.
+		expect(matchesAppShortcut("toggle-inspector", chord({ key: "∫", code: "KeyB", meta: true, alt: true }), true)).toBe(true);
+	});
+
+	it("never matches plain letter or digit chords by physical code", () => {
+		// AZERTY: physical KeyQ types "a"; physical KeyW types "z". Ctrl+physical-Q
+		// is Ctrl+A to the user and must not fire anything bound to Q.
+		for (const isMac of [true, false]) {
+			for (const { id } of APP_SHORTCUTS) {
+				for (const bound of defaultShortcutBindings(id, isMac)) {
+					if (/^[a-z0-9]$/i.test(bound.key)) {
+						expect(bound.code === undefined || bound.code === "KeyB", `${id} carries code ${bound.code}`).toBe(true);
+					}
+				}
+			}
+		}
+		const sidebar = defaultShortcutBindings("toggle-sidebar", false)[0];
+		expect(matchesShortcutBinding(chord({ key: "x", code: "KeyB", ctrl: true }), sidebar)).toBe(false);
+	});
+
+	it("never fires a Windows/Linux default from an AltGr character (reported as Ctrl+Alt)", () => {
+		// [key, code] AltGr outputs on German, French, Spanish, Polish and Brazilian layouts.
+		const altGr: Array<[string, string]> = [
+			["@", "KeyQ"], ["{", "Digit7"], ["}", "Digit0"], ["[", "Digit8"], ["]", "Digit9"], ["\\", "Minus"],
+			["|", "IntlBackslash"], ["~", "BracketRight"], ["€", "KeyE"], ["µ", "KeyM"],
+			["`", "Quote"], ["#", "Digit3"], ["ł", "KeyL"], ["ę", "KeyE"], ["ą", "KeyA"], ["ś", "KeyS"], ["ż", "KeyZ"],
+			["ź", "KeyX"], ["ć", "KeyC"], ["ń", "KeyN"], ["ó", "KeyO"], ["/", "KeyQ"], ["?", "KeyW"], ["¢", "KeyC"],
+			["b", "KeyB"], ["i", "KeyI"], ["t", "KeyT"], ["w", "KeyW"], ["p", "KeyP"], ["1", "Digit1"],
+		];
+		for (const [key, code] of altGr) {
+			for (const shift of [false, true]) {
+				const pressed = chord({ key, code, ctrl: true, alt: true, shift });
+				for (const { id } of APP_SHORTCUTS) {
+					expect(matchesAppShortcut(id, pressed, false), `${id} fired from AltGr ${key}`).toBe(false);
+				}
+			}
+		}
+	});
+
+	it("keeps Windows/Linux defaults off bare terminal-owned chords other than the yielding ones", () => {
+		const readline = ["a", "e", "k", "u", "w", "r", "p", "n", "b", "f", "l", "y", "t", "d", "c", "z"];
+		const yielding = new Set(["k", "p", "w", "t", "b"]);
+		for (const key of readline) {
+			if (yielding.has(key)) continue;
+			for (const { id } of APP_SHORTCUTS) {
+				expect(matchesAppShortcut(id, chord({ key, ctrl: true }), false), `${id} steals Ctrl+${key}`).toBe(false);
+			}
+		}
+		for (const key of ["b", "f", "d", "Backspace"]) {
+			for (const { id } of APP_SHORTCUTS) {
+				expect(matchesAppShortcut(id, chord({ key, alt: true }), false), `${id} steals Alt+${key}`).toBe(false);
+			}
+		}
+		for (const key of ["ArrowLeft", "ArrowRight", "Backspace"]) {
+			for (const { id } of APP_SHORTCUTS) {
+				expect(matchesAppShortcut(id, chord({ key, ctrl: true }), false), `${id} steals Ctrl+${key}`).toBe(false);
+			}
+		}
+	});
+
+	it("does not bind terminal copy/paste or Linux unicode entry chords on Windows/Linux", () => {
+		for (const { id } of APP_SHORTCUTS) {
+			for (const bound of defaultShortcutBindings(id, false)) {
+				if (bound.ctrl && bound.shift && !bound.alt && !bound.meta) {
+					expect(["c", "v", "u"], `${id} binds Ctrl+Shift+${bound.key}`).not.toContain(bound.key.toLowerCase());
+				}
+				expect(bound.alt && bound.shift && !bound.ctrl && !bound.meta, `${id} binds Alt+Shift (layout switch)`).toBe(false);
+			}
+		}
+		// copy-session-path must not be Ctrl+Shift+C.
+		expect(matchesAppShortcut("copy-session-path", chord({ key: "C", ctrl: true, shift: true }), false)).toBe(false);
+	});
+
+	it("gives terminal-safe Shift alternatives for yielding commands on Windows/Linux", () => {
+		expect(matchesAppShortcut("close-shell-terminal", chord({ key: "W", ctrl: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut("new-shell-terminal", chord({ key: "~", code: "Backquote", ctrl: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut("toggle-sidebar", chord({ key: "E", ctrl: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut("toggle-inspector", chord({ key: "B", ctrl: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut("toggle-inspector", chord({ key: "E", ctrl: true, shift: true }), false)).toBe(false);
+		// macOS bindings are unchanged.
+		expect(defaultShortcutBindings("new-shell-terminal", true)).toHaveLength(1);
+		expect(defaultShortcutBindings("close-shell-terminal", true)).toHaveLength(1);
+	});
+
 	it("reserves common platform window and editing chords", () => {
 		expect(shortcutBindingValidationError(chord({ key: "q", meta: true }), true)).not.toBeNull();
 		expect(shortcutBindingValidationError(chord({ key: "F4", alt: true }), false)).not.toBeNull();

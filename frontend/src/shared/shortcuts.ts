@@ -128,10 +128,17 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 	switch (id) {
 		case "new-session":
 			return [isMac ? binding("n", { meta: true }) : binding("n", { ctrl: true, shift: true })];
+		// Plain Ctrl+T/W/B are readline/fzf/tmux keys, so on Windows/Linux they
+		// yield to a focused terminal (see app-shortcuts.ts). The Shift variants
+		// are never terminal input and work from anywhere.
 		case "new-shell-terminal":
-			return [binding("t", primary)];
+			return isMac
+				? [binding("t", { meta: true })]
+				: [binding("t", { ctrl: true }), binding("`", { ctrl: true, shift: true, code: "Backquote" })];
 		case "close-shell-terminal":
-			return [binding("w", primary)];
+			return isMac
+				? [binding("w", { meta: true })]
+				: [binding("w", { ctrl: true }), binding("w", { ctrl: true, shift: true })];
 		case "reopen-closed-tab":
 			return [binding("t", { ...primary, shift: true })];
 		case "keyboard-shortcuts":
@@ -143,11 +150,13 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 		case "open-settings":
 			return [binding(",", primary)];
 		case "toggle-sidebar":
-			return [binding("b", primary)];
+			return isMac
+				? [binding("b", { meta: true })]
+				: [binding("b", { ctrl: true }), binding("e", { ctrl: true, shift: true })];
 		case "toggle-inspector":
 			return isMac
 				? [binding("b", { meta: true, shift: true }), binding("b", { meta: true, alt: true, code: "KeyB" })]
-				: [binding("b", { ctrl: true, shift: true }), binding("e", { ctrl: true, shift: true })];
+				: [binding("b", { ctrl: true, shift: true })];
 		case "toggle-terminal":
 			return isMac
 				? [binding("`", { ctrl: true, code: "Backquote" }), binding("j", { meta: true })]
@@ -207,6 +216,20 @@ function normalizedKey(key: string): string {
 	return key.toLowerCase();
 }
 
+// What the same physical key types with Shift on a US layout.
+const SHIFTED_KEY: Record<string, string> = { "[": "{", "]": "}", "`": "~" };
+
+// `code` is a physical position, so honoring it for an ordinary printable key
+// would fire on whatever another layout puts there (Dvorak's physical "[" types
+// "/", and ⌘/ must stay ⌘/). Fall back to the physical key only when the logical
+// key cannot be compared to the binding: it is not one printable ASCII character
+// (⌥B -> "∫", German "Ü", "Dead", "Unidentified"), or it is the US-shifted form
+// of the bound key ("{" for "[").
+function codeFallbackApplies(chordKey: string, candidateKey: string): boolean {
+	if (!/^[\x21-\x7e]$/.test(chordKey)) return true;
+	return SHIFTED_KEY[normalizedKey(candidateKey)] === chordKey;
+}
+
 export function matchesShortcutBinding(chord: ShortcutChord, candidate: ShortcutBinding): boolean {
 	const keyMatches =
 		candidate.key === "1-9"
@@ -214,9 +237,9 @@ export function matchesShortcutBinding(chord: ShortcutChord, candidate: Shortcut
 			: normalizedKey(candidate.key) === normalizedKey(chord.key);
 	const codeMatches =
 		candidate.code !== undefined &&
-		(chord.code !== undefined
-			? normalizedKey(candidate.code) === normalizedKey(chord.code)
-			: normalizedKey(candidate.code) === normalizedKey(chord.key));
+		chord.code !== undefined &&
+		normalizedKey(candidate.code) === normalizedKey(chord.code) &&
+		codeFallbackApplies(chord.key, candidate.key);
 	return (
 		(keyMatches || codeMatches) &&
 		chord.ctrl === candidate.ctrl &&

@@ -3492,3 +3492,81 @@ describe("resolveNextNavigationAfterSessionKill", () => {
 		expect(route).toEqual({ target: "project" });
 	});
 });
+
+describe("Sidebar active-session reveal", () => {
+	const noop = () => vi.fn().mockResolvedValue(undefined);
+	const other: WorkspaceSession = { ...session, id: "proj-1-2", title: "second task" };
+
+	function mount(expandedProjectIds: string[]) {
+		window.localStorage.setItem("ao.sidebar.expanded-projects", JSON.stringify(expandedProjectIds));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const tree = () => (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<SidebarProvider>
+						<Sidebar
+							workspaces={[{ ...workspace, sessions: [session, other] }]}
+							onCloneProject={noop()}
+							onCreateProject={noop()}
+							onInitializeProject={noop()}
+							onRemoveProject={noop()}
+							onCreateRemoteProject={noop()}
+							onInitializeRemoteProject={noop()}
+						/>
+					</SidebarProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(tree());
+		return {
+			go: (sessionId: string | undefined) => {
+				mockParams.projectId = sessionId ? workspace.id : undefined;
+				mockParams.sessionId = sessionId;
+				view.rerender(tree());
+			},
+		};
+	}
+
+	it("expands the collapsed project and scrolls the active row into view when the session changes", async () => {
+		const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+		const { go } = mount([]);
+		expect(screen.queryByLabelText("Open second task")).not.toBeInTheDocument();
+
+		go(other.id);
+
+		const row = await screen.findByLabelText("Open second task");
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "true");
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual([workspace.id]);
+		await waitFor(() => expect(scroll).toHaveBeenCalledWith({ block: "nearest" }));
+		expect(scroll.mock.contexts.at(-1)).toBe(row);
+	});
+
+	it("reopens a closed Projects section to reveal the active session", async () => {
+		const user = userEvent.setup();
+		const { go } = mount([workspace.id]);
+		await user.click(screen.getByRole("button", { name: "Projects" }));
+		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
+
+		go(session.id);
+
+		await waitFor(() => expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "true"));
+		expect(await screen.findByLabelText("Open fix login")).toHaveAttribute("aria-current", "page");
+	});
+
+	it("does not re-expand a project the user collapses while staying on the same session", async () => {
+		const user = userEvent.setup();
+		const { go } = mount([workspace.id]);
+		go(session.id);
+		await screen.findByLabelText("Open fix login");
+
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+
+		go(session.id);
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		});
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+	});
+});

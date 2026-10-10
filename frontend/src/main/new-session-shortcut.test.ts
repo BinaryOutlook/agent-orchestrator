@@ -278,6 +278,87 @@ describe("attachAppShortcuts", () => {
 		expect(event.preventDefault).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		["Ctrl+T", { key: "t", control: true }],
+		["Ctrl+W", { key: "w", control: true }],
+		["Ctrl+B", { key: "b", control: true }],
+		["Ctrl+/", { key: "/", control: true }],
+		["Alt+Left", { key: "ArrowLeft", alt: true }],
+		["Alt+Right", { key: "ArrowRight", alt: true }],
+	])("lets a focused terminal keep %s on Windows/Linux", (_label, input) => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, false, target, false, () => ({}), () => false, () => true, undefined, () => true);
+
+		const event = source.emit(input);
+
+		expect(target.send).not.toHaveBeenCalled();
+		expect(event.preventDefault).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["Ctrl+Shift+W", { key: "W", control: true, shift: true }, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, undefined],
+		["Ctrl+Shift+`", { key: "~", code: "Backquote", control: true, shift: true }, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, undefined],
+		["Ctrl+Shift+E", { key: "E", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "toggle-sidebar" }],
+		["Ctrl+Shift+B", { key: "B", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "toggle-inspector" }],
+		["Ctrl+Shift+P", { key: "P", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "command-palette" }],
+		["Ctrl+Shift+N", { key: "N", control: true, shift: true }, NEW_SESSION_SHORTCUT_CHANNEL, undefined],
+		["Ctrl+Shift+T", { key: "T", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "reopen-closed-tab" }],
+		["Ctrl+Shift+D", { key: "D", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "toggle-diff" }],
+		["Ctrl+Shift+A", { key: "A", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "archive-session" }],
+		["Ctrl+Shift+O", { key: "O", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "open-in-editor" }],
+		["Ctrl+Shift+L", { key: "L", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "copy-session-path" }],
+		["Ctrl+Shift+M", { key: "M", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "model-picker" }],
+	])("keeps %s live with a focused terminal on Windows/Linux", (_label, input, channel, payload) => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, false, target, false, () => ({}), () => false, () => true, undefined, () => true);
+
+		const event = source.emit(input);
+
+		expect(target.send).toHaveBeenCalledWith(...(payload ? [channel, payload] : [channel]));
+		expect(event.preventDefault).toHaveBeenCalledOnce();
+	});
+
+	it("never forwards Ctrl+Shift+C/V/U or Alt+Shift chords to the app", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, false, target, false, () => ({}), () => false, () => true, undefined, () => true);
+
+		for (const input of [
+			{ key: "C", control: true, shift: true },
+			{ key: "V", control: true, shift: true },
+			{ key: "U", control: true, shift: true },
+			{ key: "Shift", alt: true, shift: true },
+			{ key: "Shift", control: true, shift: true },
+		]) {
+			expect(source.emit(input).preventDefault).not.toHaveBeenCalled();
+		}
+		expect(target.send).not.toHaveBeenCalled();
+	});
+
+	it("does not fire app shortcuts from AltGr characters (Ctrl+Alt) with or without a terminal", () => {
+		for (const terminalFocused of [true, false]) {
+			const source = fakeSource();
+			const target = fakeTarget();
+			attachAppShortcuts(source, false, target, false, () => ({}), () => false, () => true, undefined, () => terminalFocused);
+			for (const input of [
+				{ key: "@", code: "KeyQ" },
+				{ key: "{", code: "Digit7" },
+				{ key: "ł", code: "KeyL" },
+				{ key: "b", code: "KeyB" },
+				{ key: "t", code: "KeyT" },
+				{ key: "w", code: "KeyW" },
+			]) {
+				const event = source.emit({ ...input, control: true, alt: true });
+				expect(event.preventDefault).not.toHaveBeenCalled();
+			}
+			// Ctrl+ArrowLeft (word jump) is not Alt+Left.
+			source.emit({ key: "ArrowLeft", control: true });
+			expect(target.send).not.toHaveBeenCalled();
+		}
+	});
+
 	it("still opens the palette from a focused terminal on macOS", () => {
 		const source = fakeSource();
 		const target = fakeTarget();
