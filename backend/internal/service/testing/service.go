@@ -100,7 +100,7 @@ func WorkerNotRunning() error {
 	return apierr.Conflict("TEST_WORKER_NOT_RUNNING", "Testing worker access is unavailable after supervisor shutdown or revocation", nil)
 }
 
-var launchSecret = regexp.MustCompile(`(?i)(?:AO_TEST_CAPABILITY|api[_-]?key|access[_-]?token|token|password|secret)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s"',;]+)|\bBearer\s+[^\s"',;]+|[A-Za-z0-9_-]{43,}`)
+var launchSecret = regexp.MustCompile(`(?i)(?:AO_TEST_CAPABILITY|api[_-]?key|access[_-]?token|token|password|secret|prompt)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s"',;]+)|\bBearer\s+[^\s"',;]+|[A-Za-z0-9_-]{43,}`)
 
 func workerLaunchCause(err error) string {
 	cause := err.Error()

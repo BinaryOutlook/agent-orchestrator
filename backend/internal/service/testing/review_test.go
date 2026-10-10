@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -111,19 +113,24 @@ func TestInputRefusalIsDistinctFromUnverifiedDelivery(t *testing.T) {
 				f.provider.inputErr = errors.New("provider input failed")
 				wantCode, wantState := "TEST_INPUT_FAILED", `"state":"failed"`
 				if refused {
-					f.provider.inputErr = ports.ErrTestingInputRefused
+					f.provider.inputErr = errors.Join(ports.ErrTestingInputRefused, errors.New("cua window_point_covered: point (608.5,503) is covered by Other PID 999 window 456 layer 27 bounds (600,480,40,40)"))
 					wantCode, wantState = "TEST_INPUT_REFUSED", `"state":"refused"`
 				}
 				id := shot.Screenshot.Frame.ScreenshotID
 				input := map[string]any{"click": domain.TestClickRequest{ScreenshotID: id}, "type": domain.TestTypeRequest{ScreenshotID: id, Text: "hello"}, "key": domain.TestKeyRequest{ScreenshotID: id, Keys: []string{"Enter"}}}[tool]
-				if _, err := f.call("input", tool, input); code(err) != wantCode {
-					t.Fatal("input failure class was lost", err)
+				_, inputErr := f.call("input", tool, input)
+				if code(inputErr) != wantCode {
+					t.Fatal("input failure class was lost", inputErr)
+				}
+				var failure *apierr.Error
+				if refused && (!errors.As(inputErr, &failure) || !strings.Contains(failure.Message, "Other PID 999 window 456 layer 27 bounds (600,480,40,40)")) {
+					t.Fatal("tool refusal lost its exact cause", inputErr)
 				}
 				journal, err := os.ReadFile(filepath.Join(f.dir, "testing", string(f.run.ID), string(f.start.AttemptID), "actions.jsonl"))
 				if err != nil || !bytes.Contains(journal, []byte(wantState)) {
 					t.Fatal("input failure journal missing", err)
 				}
-				if refused && (!bytes.Contains(journal, []byte("nothing was sent")) || bytes.Contains(journal, []byte("partial action may have been delivered"))) {
+				if refused && (!bytes.Contains(journal, []byte("nothing was sent")) || !bytes.Contains(journal, []byte("Other PID 999 window 456 layer 27 bounds (600,480,40,40)")) || bytes.Contains(journal, []byte("partial action may have been delivered"))) {
 					t.Fatal("refusal claimed uncertain delivery")
 				}
 			})

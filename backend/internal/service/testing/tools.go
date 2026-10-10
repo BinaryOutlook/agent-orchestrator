@@ -323,7 +323,7 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 			var failure *apierr.Error
 			if errors.As(err, &failure) && failure.Code == "TEST_INPUT_REFUSED" {
 				record.State = "refused"
-				record.Detail = "Input refused before dispatch; nothing was sent"
+				record.Detail = failure.Message
 			}
 		}
 		if e := s.deps.Evidence.AppendAction(journalCtx, record); e != nil {
@@ -622,7 +622,7 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 
 func inputFailure(err error) error {
 	if errors.Is(err, ports.ErrTestingInputRefused) {
-		return fmt.Errorf("%w: %w", apierr.Conflict("TEST_INPUT_REFUSED", "Target input refused before dispatch; nothing was sent", nil), err)
+		return fmt.Errorf("%w: %w", apierr.Conflict("TEST_INPUT_REFUSED", "Target input refused before dispatch; nothing was sent: "+workerLaunchCause(err), nil), err)
 	}
 	return fmt.Errorf("%w: %w", apierr.Unavailable("TEST_INPUT_FAILED", "Target input failed; delivery is unverified"), err)
 }

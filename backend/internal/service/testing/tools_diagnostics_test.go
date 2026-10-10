@@ -28,7 +28,7 @@ func TestInputFailureRetainsPrivateCauseAndSafeWireClassification(t *testing.T) 
 			if refused {
 				cause = errors.Join(cause, ports.ErrTestingInputRefused)
 				wantCode, wantStatus = "TEST_INPUT_REFUSED", http.StatusConflict
-				wantMessage = "Target input refused before dispatch; nothing was sent"
+				wantMessage = "Target input refused before dispatch; nothing was sent: AX lookup failed; [redacted] [redacted]\ncontext canceled\ntesting input refused before dispatch"
 			}
 			err := inputFailure(cause)
 			var failure *apierr.Error
@@ -45,7 +45,11 @@ func TestInputFailureRetainsPrivateCauseAndSafeWireClassification(t *testing.T) 
 			if json.Unmarshal(response.Body.Bytes(), &wire) != nil || response.Code != wantStatus || wire.Code != wantCode || wire.Message != wantMessage || wire.Details != nil {
 				t.Fatalf("public error envelope changed: %s", response.Body.String())
 			}
-			for _, private := range []string{"AX lookup failed", "private-password", "private-prompt"} {
+			hidden := []string{"private-password", "private-prompt"}
+			if !refused {
+				hidden = append(hidden, "AX lookup failed")
+			}
+			for _, private := range hidden {
 				if strings.Contains(response.Body.String(), private) {
 					t.Fatalf("provider data leaked into safe wire error: %q", private)
 				}
