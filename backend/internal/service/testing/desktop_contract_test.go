@@ -17,9 +17,11 @@ import (
 )
 
 func TestFullFrameAndDeliveryPolicyReachInput(t *testing.T) {
+	const detail = `owned_element role="AXPopUpButton" title="Model" pid=100 window=window; targeted AX action bypassed coverage: Wispr Flow PID 31111 window 8094 layer 1000 bounds (464,196,512,614)`
 	f := newFixture(t, func(deps *Deps) {
 		deps.Desktop = &policyDesktop{fakeProviders: deps.Desktop.(*fakeProviders), mode: "foreground", gap: "declared window recording gap"}
 	})
+	f.provider.inputDetail = detail
 	for _, tool := range []string{"click", "type", "key"} {
 		shot, err := f.call("shot-"+tool, "screenshot", domain.TestScreenshotRequest{})
 		if err != nil {
@@ -69,6 +71,9 @@ func TestFullFrameAndDeliveryPolicyReachInput(t *testing.T) {
 		}
 		if record.ConfiguredDeliveryMode != "foreground" || record.DeliveryMode != "foreground" {
 			t.Fatalf("input policy missing from %s journal: %+v", record.State, record)
+		}
+		if record.State == "completed" && record.Detail != detail {
+			t.Fatal("element ownership/coverage lost from action journal", record)
 		}
 		counts[record.Tool]++
 	}

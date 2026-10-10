@@ -82,6 +82,7 @@ type fakeProviders struct {
 	probeFailAt                  int
 	bindWrong                    bool
 	inputErr                     error
+	inputDetail                  string
 	stopFail                     bool
 	screenshotHook               func(context.Context) error
 	inputFrames                  []domain.TestDesktopFrame
@@ -158,7 +159,7 @@ func (p *fakeProviders) Click(ctx context.Context, _ domain.TestTargetIdentity, 
 	if p.inputErr != nil {
 		return domain.TestActionResult{}, p.inputErr
 	}
-	return domain.TestActionResult{Delivered: true}, ctx.Err()
+	return domain.TestActionResult{Delivered: true, Detail: p.inputDetail}, ctx.Err()
 }
 func (p *fakeProviders) Type(ctx context.Context, t domain.TestTargetIdentity, f domain.TestDesktopFrame, _ domain.TestTypeRequest) (domain.TestActionResult, error) {
 	return p.Click(ctx, t, f, domain.TestClickRequest{})

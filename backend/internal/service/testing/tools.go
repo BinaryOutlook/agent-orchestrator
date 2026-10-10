@@ -312,14 +312,17 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 		if result.Action != nil {
 			record.InputPath = result.Action.InputPath
 			record.RequestedInputPath = result.Action.RequestedInputPath
+			if result.Action.Detail != "" {
+				record.Detail = workerLaunchCause(errors.New(result.Action.Detail))
+			}
 		}
 		if result.ObservationStatus == "failed" {
 			record.State = "failed"
-			record.Detail = "Input delivered; post-action observation failed: " + result.ObservationError
+			record.Detail += "; Input delivered; post-action observation failed: " + result.ObservationError
 		}
 		if err != nil {
 			record.State = "failed"
-			record.Detail = "Tool failed or was cancelled; partial action may have been delivered"
+			record.Detail += "; Tool failed or was cancelled; partial action may have been delivered"
 			var failure *apierr.Error
 			if errors.As(err, &failure) && failure.Code == "TEST_INPUT_REFUSED" {
 				record.State = "refused"
@@ -532,10 +535,10 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		}
 		s.consumeFrame(st, v.ScreenshotID)
 		action, e := s.deps.Desktop.Click(ctx, target, f, *v)
+		result.Action = &action
 		if e != nil {
 			return result, inputFailure(e)
 		}
-		result.Action = &action
 	case *domain.TestTypeRequest:
 		var x, y *int
 		if v.ElementID == "" {
@@ -547,10 +550,10 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		}
 		s.consumeFrame(st, v.ScreenshotID)
 		action, e := s.deps.Desktop.Type(ctx, target, f, *v)
+		result.Action = &action
 		if e != nil {
 			return result, inputFailure(e)
 		}
-		result.Action = &action
 	case *domain.TestKeyRequest:
 		f, e := s.frame(st, target, v.ScreenshotID, nil, nil)
 		if e != nil {
@@ -558,10 +561,10 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		}
 		s.consumeFrame(st, v.ScreenshotID)
 		action, e := s.deps.Desktop.Key(ctx, target, f, *v)
+		result.Action = &action
 		if e != nil {
 			return result, inputFailure(e)
 		}
-		result.Action = &action
 	case *domain.TestReadLogsRequest:
 		logs, e := s.deps.Target.ReadLogs(ctx, target, *v)
 		if e != nil {

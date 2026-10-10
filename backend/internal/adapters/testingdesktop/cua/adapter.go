@@ -95,6 +95,7 @@ type captureReceipt struct {
 	providerID    string
 	screenshotID  string
 	keyToken      string
+	inputDetail   string
 	elements      []capturedElement
 	addressable   map[string]capturedElement
 	width, height int // original provider capture pixels, never worker-supplied
@@ -114,6 +115,8 @@ type captureState struct {
 }
 
 type capturedElement struct {
+	Index   *int            `json:"element_index"`
+	Parent  *int            `json:"parent_index"`
 	Role    string          `json:"role"`
 	Label   string          `json:"label"`
 	Title   string          `json:"title"`
@@ -468,7 +471,7 @@ func (a *Adapter) Click(ctx context.Context, target domain.TestTargetIdentity, f
 	if request.ElementID != "" {
 		p = nil
 	}
-	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, p, request.ElementID)
+	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, p, request.ElementID, request.Button != domain.TestMouseButtonMiddle)
 	if err != nil {
 		return domain.TestActionResult{}, err
 	}
@@ -492,7 +495,7 @@ func (a *Adapter) Click(ctx context.Context, target domain.TestTargetIdentity, f
 		args["button"] = string(request.Button)
 	}
 	b.lastTyped = nil
-	return a.dispatch(ctx, "click", args)
+	return a.dispatchReceipt(ctx, "click", args, receipt)
 }
 
 // Type preserves pixel focus for coordinates and uses AX for an element ID.
@@ -503,7 +506,7 @@ func (a *Adapter) Type(ctx context.Context, target domain.TestTargetIdentity, fr
 	if request.ElementID != "" {
 		p = nil
 	}
-	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, p, request.ElementID)
+	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, p, request.ElementID, true)
 	if err != nil {
 		return domain.TestActionResult{}, err
 	}
@@ -522,7 +525,7 @@ func (a *Adapter) Type(ctx context.Context, target domain.TestTargetIdentity, fr
 	// Remember the addressed field, including uncertain partial delivery. A
 	// subsequent key still requires a new screenshot and a fresh field token.
 	b.lastTyped = &typedFocus{point: point, bounds: frame.Bounds}
-	return a.dispatch(ctx, "type_text", args)
+	return a.dispatchReceipt(ctx, "type_text", args, receipt)
 }
 
 // Key sends only a validated simultaneous chord to the bound window.
@@ -533,7 +536,16 @@ func (a *Adapter) Key(ctx context.Context, target domain.TestTargetIdentity, fra
 	if err != nil {
 		return domain.TestActionResult{}, err
 	}
-	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, nil, "")
+	elementID := ""
+	if b := a.bindings[target.ID]; b != nil && b.lastTyped != nil && b.receipt != nil {
+		for id, element := range b.receipt.addressable {
+			if element.Token == b.receipt.keyToken {
+				elementID = id
+				break
+			}
+		}
+	}
+	b, receipt, err := a.admit(ctx, target, frame, request.ScreenshotID, nil, elementID, true)
 	if err != nil {
 		return domain.TestActionResult{}, err
 	}
@@ -547,7 +559,7 @@ func (a *Adapter) Key(ctx context.Context, target domain.TestTargetIdentity, fra
 		// exact field at the prior Type point using this fresh window snapshot.
 		args["element_token"] = receipt.keyToken
 	}
-	return a.dispatch(ctx, "press_key", args)
+	return a.dispatchReceipt(ctx, "press_key", args, receipt)
 }
 
 func typedFieldToken(elements []capturedElement, point pixel) string {
@@ -569,7 +581,7 @@ func typedFieldToken(elements []capturedElement, point pixel) string {
 
 type pixel struct{ x, y int }
 
-func (a *Adapter) admit(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, screenshotID string, p *pixel, elementID string) (*binding, *captureReceipt, error) {
+func (a *Adapter) admit(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, screenshotID string, p *pixel, elementID string, semantic bool) (*binding, *captureReceipt, error) {
 	if a.cfg.DeliveryMode != Foreground {
 		return nil, nil, refuse("foreground_required", "background input did not register in the owned Electron window")
 	}
@@ -590,11 +602,17 @@ func (a *Adapter) admit(ctx context.Context, target domain.TestTargetIdentity, f
 	if p != nil && (p.x < 0 || p.y < 0 || p.x >= frame.Width || p.y >= frame.Height) {
 		return nil, nil, refuse("coordinate_outside_window", "point lies outside returned screenshot pixels")
 	}
+	var ancestry []capturedElement
 	if elementID != "" {
 		element, ok := r.addressable[elementID]
 		if !ok || (element.Enabled != nil && !*element.Enabled) {
 			return nil, nil, refuse("element_mismatch", "element is foreign, stale or disabled; observe again")
 		}
+		ancestry, err = r.elementAncestry(element)
+		if err != nil {
+			return nil, nil, err
+		}
+		r.inputDetail = fmt.Sprintf("owned_element role=%q title=%q pid=%d window=%s label=%q", element.Role, providerDiagnosticText(element.Title, nil, 256), target.ElectronPID, target.WindowID, providerDiagnosticText(element.Label, nil, 256))
 	}
 	r.screenshotID = screenshotID
 	w, err := a.liveWindow(ctx, b)
@@ -619,7 +637,14 @@ func (a *Adapter) admit(ctx context.Context, target domain.TestTargetIdentity, f
 			f := r.addressable[elementID].Frame
 			point = pixel{int(f.X + f.Width/2), int(f.Y + f.Height/2)}
 		}
-		if err := a.checkClickPoint(ctx, b, r, point); err != nil {
+		// Collection selection can fall back to pointer input in Cua.
+		// Such actions retain the clear-point rule even with an element token.
+		for _, ancestor := range ancestry {
+			if ancestor.Role == "AXRow" || ancestor.Role == "AXCell" || ancestor.Role == "AXListItem" || ancestor.Role == "AXImage" {
+				semantic = false
+			}
+		}
+		if err := a.checkClickPoint(ctx, b, r, point, semantic && elementID != ""); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -630,6 +655,14 @@ func (a *Adapter) admit(ctx context.Context, target domain.TestTargetIdentity, f
 	// whose Cua schemas lack capture_id. No automatic retry can duplicate input.
 	b.receipt = nil
 	return b, r, nil
+}
+
+func (a *Adapter) dispatchReceipt(ctx context.Context, name string, args map[string]any, receipt *captureReceipt) (domain.TestActionResult, error) {
+	result, err := a.dispatch(ctx, name, args)
+	if receipt.inputDetail != "" {
+		result.Detail = receipt.inputDetail + "; " + result.Detail
+	}
+	return result, err
 }
 
 func (a *Adapter) dispatch(ctx context.Context, name string, args map[string]any) (domain.TestActionResult, error) {

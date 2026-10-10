@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -135,7 +136,7 @@ type screenWindow struct {
 	Bounds *domain.TestWindowBounds `json:"kCGWindowBounds"`
 }
 
-func (a *Adapter) checkClickPoint(ctx context.Context, b *binding, r *captureReceipt, point pixel) error {
+func (a *Adapter) checkClickPoint(ctx context.Context, b *binding, r *captureReceipt, point pixel, semantic bool) error {
 	out, err := a.run(ctx, "/usr/bin/osascript", "-l", "JavaScript", "-e", windowListScript)
 	if err != nil {
 		return &Error{Code: "window_hit_test_unknown", Detail: providerCallDiagnostic(ctx, "WindowServer window list", nil, string(out.Stderr), err, nil), cause: errors.Join(ErrRefused, err, ctx.Err())}
@@ -150,42 +151,57 @@ func (a *Adapter) checkClickPoint(ctx context.Context, b *binding, r *captureRec
 	// Convert original capture pixels to global native display points once.
 	x := r.frame.Bounds.X + float64(point.x)/r.frame.Scale
 	y := r.frame.Bounds.Y + float64(point.y)/r.frame.Scale
-	return ownedPoint(snapshot.Windows, snapshot.Displays, b.target, r.frame.Bounds, x, y)
+	covered, err := pointOwners(snapshot.Windows, snapshot.Displays, b.target, r.frame.Bounds, x, y, semantic)
+	if err == nil && len(covered) != 0 {
+		r.inputDetail += "; targeted AX action bypassed coverage: " + strings.Join(covered, "; ")
+	}
+	return err
 }
 
 func ownedPoint(windows []screenWindow, displays []screenDisplay, target domain.TestTargetIdentity, bounds domain.TestWindowBounds, x, y float64) error {
+	_, err := pointOwners(windows, displays, target, bounds, x, y, false)
+	return err
+}
+
+func pointOwners(windows []screenWindow, displays []screenDisplay, target domain.TestTargetIdentity, bounds domain.TestWindowBounds, x, y float64, semantic bool) ([]string, error) {
+	var covered []string
 	for _, w := range windows {
 		if w.Alpha != nil && *w.Alpha == 0 {
 			continue
 		}
 		if w.Bounds == nil {
-			return refuse("window_hit_test_unknown", "WindowServer did not prove a window's bounds")
+			return nil, refuse("window_hit_test_unknown", "WindowServer did not prove a window's bounds")
 		}
 		f := *w.Bounds
 		if f.Width == 0 || f.Height == 0 {
 			continue
 		}
 		if !validBounds(f) {
-			return refuse("window_hit_test_unknown", "WindowServer returned invalid window bounds")
+			return nil, refuse("window_hit_test_unknown", "WindowServer returned invalid window bounds")
 		}
 		if x < f.X || y < f.Y || x >= f.X+f.Width || y >= f.Y+f.Height {
 			continue
 		}
 		if w.Alpha == nil || *w.Alpha < 0 || *w.Alpha > 1 {
-			return refuse("window_hit_test_unknown", "WindowServer did not prove the containing window's opacity")
+			return nil, refuse("window_hit_test_unknown", "WindowServer did not prove the containing window's opacity")
 		}
 		if dockUsablePoint(w, displays, x, y) {
 			continue
 		}
 		if w.PID != target.ElectronPID || strconv.Itoa(w.ID) != target.WindowID {
-			return refuse("window_point_covered", fmt.Sprintf("point (%g,%g) is covered by %s PID %d window %d layer %d bounds (%g,%g,%g,%g)", x, y, providerDiagnosticText(w.Owner, nil, 128), w.PID, w.ID, w.Layer, f.X, f.Y, f.Width, f.Height))
+			detail := fmt.Sprintf("point (%g,%g) is covered by %s PID %d window %d layer %d bounds (%g,%g,%g,%g)", x, y, providerDiagnosticText(w.Owner, nil, 128), w.PID, w.ID, w.Layer, f.X, f.Y, f.Width, f.Height)
+			if !semantic {
+				return nil, refuse("window_point_covered", detail)
+			}
+			covered = append(covered, detail)
+			continue
 		}
 		if f != bounds {
-			return refuse("window_changed", "owned WindowServer bounds differ from the input screenshot")
+			return nil, refuse("window_changed", "owned WindowServer bounds differ from the input screenshot")
 		}
-		return nil
+		return covered, nil
 	}
-	return refuse("window_hit_test_unknown", "no on-screen window contains the input point")
+	return nil, refuse("window_hit_test_unknown", "no on-screen window contains the input point")
 }
 
 // Dock paints its bar inside a full-display window. Only that exact shape may
@@ -232,4 +248,41 @@ func (a *Adapter) placeOnScreen(ctx context.Context, b *binding, w window) error
 		return refuse("window_off_screen", "owned window could not be placed on screen")
 	}
 	return nil
+}
+
+// Cua scopes this snapshot to the verified PID/window. Require its ancestry
+// to reach that window root before using a token instead of pointer input.
+func (r *captureReceipt) elementAncestry(element capturedElement) ([]capturedElement, error) {
+	ancestors := make(map[int]capturedElement, len(r.elements))
+	for _, node := range r.elements {
+		if node.Index == nil {
+			continue
+		}
+		if _, exists := ancestors[*node.Index]; exists {
+			return nil, refuse("element_owner_unknown", "AX snapshot has duplicate element indices")
+		}
+		ancestors[*node.Index] = node
+	}
+	chain := []capturedElement{}
+	seen := map[int]bool{}
+	for element.Index != nil && !seen[*element.Index] {
+		seen[*element.Index] = true
+		chain = append(chain, element)
+		if element.Role == "AXWindow" && element.Parent == nil && element.Frame != nil {
+			f := element.Frame
+			if f.X == 0 && f.Y == 0 && f.Width == float64(r.width) && f.Height == float64(r.height) {
+				return chain, nil
+			}
+			break
+		}
+		if element.Parent == nil {
+			break
+		}
+		next, exists := ancestors[*element.Parent]
+		if !exists {
+			break
+		}
+		element = next
+	}
+	return nil, refuse("element_owner_unknown", "AX ancestry does not reach the owned PID/window root; observe again")
 }

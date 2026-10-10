@@ -73,6 +73,19 @@ type fixture struct {
 	captureData   []byte
 }
 
+func fixtureOwnedElements(elements []capturedElement, width, height int) []capturedElement {
+	root, hidden := 0, false
+	nodes := []capturedElement{{Index: &root, Role: "AXWindow", Visible: &hidden, Frame: &pixelBounds{Width: float64(width), Height: float64(height)}}}
+	for i, element := range elements {
+		if element.Index == nil {
+			index := i + 1
+			element.Index, element.Parent = &index, &root
+		}
+		nodes = append(nodes, element)
+	}
+	return nodes
+}
+
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{born: time.Date(2026, 10, 6, 1, 2, 3, 456000, time.UTC), bounds: domain.TestWindowBounds{X: 70, Y: 90, Width: 640, Height: 400}, width: 1280, height: 800}
@@ -124,7 +137,7 @@ func newFixture(t *testing.T) *fixture {
 				t.Fatal(err)
 			}
 			f.captureData = data.Bytes()
-			return jsonOutput(captureState{PID: 123, WindowID: 456, Bounds: f.bounds, Width: f.width, Height: f.height, Scale: 2, Capture: "private-provider-capture", Elements: f.elements}), nil
+			return jsonOutput(captureState{PID: 123, WindowID: 456, Bounds: f.bounds, Width: f.width, Height: f.height, Scale: 2, Capture: "private-provider-capture", Elements: fixtureOwnedElements(f.elements, f.width, f.height)}), nil
 		case "click", "type_text", "press_key":
 			if args[3] == "click" && input["capture_id"] != nil &&
 				(input["x"] == nil || input["y"] == nil || input["element_token"] != nil) {

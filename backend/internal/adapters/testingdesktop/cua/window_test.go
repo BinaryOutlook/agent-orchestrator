@@ -359,3 +359,65 @@ func TestFocusPreparationRetainsProviderAndCancellationCause(t *testing.T) {
 		t.Fatal("frontmost refusal lost provider or cancellation cause", err)
 	}
 }
+
+func TestCoveredElementRequiresOwnedAXAncestry(t *testing.T) {
+	for _, mode := range []string{"element", "coordinate", "middle", "missing parent", "foreign root", "cycle", "selection fallback"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			index, parent := 1, 0
+			f.elements = []capturedElement{{Index: &index, Parent: &parent, Role: "AXPopUpButton", Title: "Model", Token: "model-token", Frame: &pixelBounds{X: 100, Y: 200, Width: 40, Height: 60}}}
+			switch mode {
+			case "missing parent":
+				parent = 99
+			case "cycle":
+				parent = index
+			case "foreign root":
+				f.elements[0].Parent = nil
+				f.elements[0].Role = "AXApplication"
+			case "selection fallback":
+				f.elements[0].Role = "AXRow"
+			}
+			provider := f.runner.hook
+			f.runner.hook = func(executable string, args []string) (Output, error) {
+				if executable == "/usr/bin/osascript" {
+					alpha := 1.0
+					return jsonOutput(windowSnapshot{Windows: []screenWindow{{ID: 8094, PID: 31111, Owner: "Wispr Flow", Layer: 1000, Alpha: &alpha, Bounds: &f.bounds}, {ID: 456, PID: 123, Alpha: &alpha, Bounds: &f.bounds}}}), nil
+				}
+				return provider(executable, args)
+			}
+			shot, err := f.adapter.Screenshot(context.Background(), f.target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			shot.Frame.ScreenshotID = "current"
+			request := domain.TestClickRequest{ScreenshotID: "current", ElementID: shot.Elements[0].ElementID, Button: domain.TestMouseButtonLeft}
+			if mode == "coordinate" {
+				request.ElementID = ""
+				request.X, request.Y = 60, 115
+			}
+			if mode == "middle" {
+				request.Button = domain.TestMouseButtonMiddle
+			}
+			before := len(f.runner.calls)
+			action, err := f.adapter.Click(context.Background(), f.target, shot.Frame, request)
+			if mode == "element" {
+				if err != nil || !action.Delivered || !strings.Contains(action.Detail, `role="AXPopUpButton" title="Model" pid=123 window=456`) || !strings.Contains(action.Detail, "Wispr Flow PID 31111 window 8094 layer 1000") {
+					t.Fatal("owned element proof lost", action, err)
+				}
+				last := f.runner.calls[len(f.runner.calls)-1]
+				if !strings.Contains(last.args[4], `"element_token":"model-token"`) || strings.Contains(last.args[4], `"x":`) {
+					t.Fatal("semantic action became pointer input", last)
+				}
+			} else {
+				if !errors.Is(err, ErrRefused) {
+					t.Fatal("unsafe covered action admitted", mode, err)
+				}
+				for _, call := range f.runner.calls[before:] {
+					if len(call.args) == 5 && call.args[3] == "click" {
+						t.Fatal("unsafe action dispatched", mode)
+					}
+				}
+			}
+		})
+	}
+}
