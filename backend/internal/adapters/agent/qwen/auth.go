@@ -45,9 +45,13 @@ func qwenLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
+	// Presence of a credential is not proof it is valid: the key can be
+	// revoked, downgraded, or rate-limited with no change on disk, and Qwen
+	// additionally refuses to launch until an auth *type* is selected. Report
+	// configured so a stale key never renders as a ready state.
 	for _, name := range qwenAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
+			return ports.AgentAuthStatusConfigured, true, nil
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -103,9 +107,33 @@ func qwenAuthStatusFromSettings(path string) (ports.AgentAuthStatus, bool, error
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if containsQwenAPIKey(root) || qwenConfiguredEnvPresent(root) || qwenSettingsEnvPresent(root, qwenConfiguredEnvNames(root)...) {
-		return ports.AgentAuthStatusAuthorized, true, nil
+		return ports.AgentAuthStatusConfigured, true, nil
+	}
+	// An OAuth user records the selected auth type instead of a key. Without
+	// this, a correctly authenticated OAuth install falls through to unknown,
+	// which the readiness coordinator counts as a failure and retries forever.
+	if qwenSelectedAuthType(root) != "" {
+		return ports.AgentAuthStatusConfigured, true, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
+}
+
+// qwenSelectedAuthType reads security.auth.selectedType from settings.json.
+// This is the documented record of the auth type Qwen will start with.
+func qwenSelectedAuthType(value any) string {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	security, ok := root["security"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	auth, ok := security["auth"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(stringSetting(auth["selectedType"]))
 }
 
 // qwenSettingsEnvPresent recognizes the documented settings.json "env" map,
@@ -215,7 +243,7 @@ func qwenEnvFileAuthStatus(path string, extraNames ...string) (ports.AgentAuthSt
 			continue
 		}
 		if strings.Trim(strings.TrimSpace(value), `"'`) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
+			return ports.AgentAuthStatusConfigured, true, nil
 		}
 	}
 	return ports.AgentAuthStatusUnknown, false, nil

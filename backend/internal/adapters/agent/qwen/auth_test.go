@@ -9,31 +9,31 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestQwenLocalAuthStatusAuthorizedWithProviderEnv(t *testing.T) {
+func TestQwenLocalAuthStatusConfiguredWithProviderEnv(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "zai-key")
 
 	status, ok, err := qwenLocalAuthStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
-func TestQwenLocalAuthStatusAuthorizedWithDocumentedProtocolEnv(t *testing.T) {
+func TestQwenLocalAuthStatusConfiguredWithDocumentedProtocolEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
 
 	status, ok, err := qwenLocalAuthStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
-func TestQwenAuthStatusFromSettingsAuthorizedWithModelProviderAPIKey(t *testing.T) {
+func TestQwenAuthStatusFromSettingsConfiguredWithModelProviderAPIKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	content := `{
 		"modelProviders": {
@@ -52,12 +52,12 @@ func TestQwenAuthStatusFromSettingsAuthorizedWithModelProviderAPIKey(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
-func TestQwenAuthStatusFromSettingsAuthorizedWithSecurityAuthAPIKey(t *testing.T) {
+func TestQwenAuthStatusFromSettingsConfiguredWithSecurityAuthAPIKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	content := `{
 		"security": {
@@ -74,12 +74,12 @@ func TestQwenAuthStatusFromSettingsAuthorizedWithSecurityAuthAPIKey(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
-func TestQwenAuthStatusFromSettingsAuthorizedWithConfiguredEnvKey(t *testing.T) {
+func TestQwenAuthStatusFromSettingsConfiguredWithConfiguredEnvKey(t *testing.T) {
 	t.Setenv("CUSTOM_QWEN_KEY", "configured-key")
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if err := os.WriteFile(path, []byte(`{"modelProviders":{"custom":{"envKey":"CUSTOM_QWEN_KEY"}}}`), 0o600); err != nil {
@@ -90,12 +90,12 @@ func TestQwenAuthStatusFromSettingsAuthorizedWithConfiguredEnvKey(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
-func TestQwenAuthStatusFromSettingsAuthorizedWithDocumentedEnv(t *testing.T) {
+func TestQwenAuthStatusFromSettingsConfiguredWithDocumentedEnv(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if err := os.WriteFile(path, []byte(`{"env":{"GEMINI_API_KEY":"gemini-key"}}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -105,12 +105,12 @@ func TestQwenAuthStatusFromSettingsAuthorizedWithDocumentedEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
-func TestQwenEnvFileAuthStatusAuthorizedWithDocumentedProviderKey(t *testing.T) {
+func TestQwenEnvFileAuthStatusConfiguredWithDocumentedProviderKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(path, []byte("OPENROUTER_API_KEY=router-key\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -120,8 +120,8 @@ func TestQwenEnvFileAuthStatusAuthorizedWithDocumentedProviderKey(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
@@ -139,8 +139,8 @@ func TestQwenGlobalEnvAuthStatusUsesQwenHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
@@ -164,7 +164,7 @@ func TestQwenGlobalEnvAuthStatusIgnoresDaemonWorkingDirectory(t *testing.T) {
 	}
 }
 
-func TestQwenEnvFileAuthStatusAuthorizedWithConfiguredProviderKey(t *testing.T) {
+func TestQwenEnvFileAuthStatusConfiguredWithConfiguredProviderKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(path, []byte("CUSTOM_QWEN_KEY=custom-key\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -174,8 +174,8 @@ func TestQwenEnvFileAuthStatusAuthorizedWithConfiguredProviderKey(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
@@ -189,7 +189,55 @@ func TestQwenAuthStatusFromSettingsUnknownWhenMissing(t *testing.T) {
 	}
 }
 
-func TestAuthStatusWithoutLocalEvidenceStaysUnknown(t *testing.T) {
+func TestQwenAuthStatusFromSettingsConfiguredWithOAuthSelectedType(t *testing.T) {
+	// An OAuth user records the selected auth type instead of a key. Before
+	// this was read, that install reported unknown, which the readiness
+	// coordinator counts as a failure and retries on backoff forever.
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"security":{"auth":{"selectedType":"qwen-oauth"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, ok, err := qwenAuthStatusFromSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
+	}
+}
+
+func TestQwenAuthStatusNeverReportsAuthorizedFromLocalPresence(t *testing.T) {
+	// ports/agent.go requires that presence-only evidence reports configured
+	// and never renders as a ready state. Guard every local evidence source.
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"security auth apiKey", `{"security":{"auth":{"apiKey":"openai-compatible-key"}}}`},
+		{"modelProviders apiKey", `{"modelProviders":{"openai":[{"id":"m","apiKey":"k"}]}}`},
+		{"documented env map", `{"env":{"DASHSCOPE_API_KEY":"sk-test"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			status, ok, err := qwenAuthStatusFromSettings(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				t.Fatal("want configured evidence to be reported")
+			}
+			if status == ports.AgentAuthStatusAuthorized {
+				t.Fatalf("presence-only evidence reported %q; must never report %q", status, ports.AgentAuthStatusAuthorized)
+			}
+		})
+	}
+}
+
+func TestQwenAuthStatusWithoutLocalEvidenceStaysUnknown(t *testing.T) {
 	for _, name := range qwenAPIKeyEnvVars {
 		t.Setenv(name, "")
 	}
