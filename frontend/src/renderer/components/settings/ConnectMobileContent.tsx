@@ -106,6 +106,7 @@ export function qrValueFor(input: {
  */
 type PairingReadinessStatus = {
 	enabled: boolean;
+	noPublicTunnel?: boolean;
 	endpoints?: readonly PairingEndpoint[];
 	tunnel?: {
 		supported?: boolean;
@@ -119,6 +120,7 @@ type PairingReadinessStatus = {
 function pairingIsPending(status: PairingReadinessStatus | undefined): boolean {
 	if (!status?.enabled) return false;
 	if (!status.endpoints || status.endpoints.length === 0) return true;
+	if (status.noPublicTunnel === true) return false;
 	const tunnel = status.tunnel;
 	if (!tunnel || tunnel.ready || tunnel.lastError) return false;
 	return tunnel.supported === true || tunnel.running;
@@ -183,6 +185,8 @@ const STEP_LINK_CLASS =
 
 interface MobileStatus {
 	enabled: boolean;
+	/** User intent, independent of whether cloudflared is installed or running. */
+	noPublicTunnel?: boolean;
 	/** This machine's stable identity, echoed into the pairing code so the phone
 	 * can verify the endpoints it races. Optional: a daemon predating the
 	 * endpoint race does not send it, and the QR falls back to the v1 payload. */
@@ -397,7 +401,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const activePort = activeEndpoint?.port ?? 0;
 	const noEndpointAvailable =
 		!activeEndpoint &&
-		(status?.tunnel?.supported === false || Boolean(status?.tunnel?.lastError));
+		(status?.noPublicTunnel === true || status?.tunnel?.supported === false || Boolean(status?.tunnel?.lastError));
 	// No connector on this machine at all: cloudflared is absent and nothing
 	// installs it. Pairing still works on the local network, so this is a
 	// caveat to state rather than a failure to block on.

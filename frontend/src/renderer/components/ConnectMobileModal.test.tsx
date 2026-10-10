@@ -10,6 +10,7 @@ import { apiClient } from "../lib/api-client";
 const { mobileStatus } = vi.hoisted(() => ({
 	mobileStatus: {
 		enabled: true,
+		noPublicTunnel: false,
 		host: "192.168.1.42",
 		tailscaleHost: "100.72.46.7",
 		port: 3011,
@@ -95,6 +96,7 @@ async function selectConnectionMethod(mode: "LAN" | "Tailscale") {
 
 beforeEach(() => {
 	mobileStatus.enabled = true;
+	mobileStatus.noPublicTunnel = false;
 	mobileStatus.host = "192.168.1.42";
 	mobileStatus.hostId = "h_fixture";
 	mobileStatus.tunnel = undefined;
@@ -373,6 +375,25 @@ test("shows a hint instead of an unscannable QR when no endpoint is available", 
 	await waitFor(() => expect(screen.getByText(/No network address found/i)).toBeInTheDocument());
 	expect(qrPayload()).toBeNull();
 	expect(screen.queryByTestId("mobile-pairing-preparing")).not.toBeInTheDocument();
+});
+
+test.each([
+	{ name: "empty", endpoints: [] },
+	{ name: "null", endpoints: null },
+])("shows the network hint for LAN-only mode with $name endpoints and an installed connector", async ({ endpoints }) => {
+	mobileStatus.noPublicTunnel = true;
+	mobileStatus.host = "";
+	mobileStatus.tailscaleHost = "";
+	Reflect.set(mobileStatus, "endpoints", endpoints);
+	mobileStatus.tunnel = {
+		supported: true, running: false, ready: false, hostname: "", location: "", lastError: "",
+	};
+	renderMobileSettings();
+
+	expect(await screen.findByText(/No network address found/i)).toBeVisible();
+	expect(screen.queryByTestId("mobile-pairing-preparing")).not.toBeInTheDocument();
+	expect(screen.queryByTestId("mobile-pairing-address")).not.toBeInTheDocument();
+	expect(qrPayload()).toBeNull();
 });
 
 // SKIPPED: drives the connection picker, which is commented out in
@@ -654,6 +675,19 @@ test("does not poll when there is no tunnel to wait for", () => {
 	).toBe(false);
 	expect(mobileStatusRefetchInterval({ enabled: true, endpoints, tunnel: undefined })).toBe(false);
 	expect(mobileStatusRefetchInterval(undefined)).toBe(false);
+});
+
+test("polls LAN-only mode for network recovery but not for a disabled public tunnel", () => {
+	const status = {
+		enabled: true,
+		noPublicTunnel: true,
+		tunnel: { supported: true, running: false, ready: false, lastError: "" },
+	};
+	expect(mobileStatusRefetchInterval({ ...status, endpoints: [] })).toBeGreaterThan(0);
+	expect(mobileStatusRefetchInterval({
+		...status,
+		endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
+	})).toBe(false);
 });
 
 // Remote access is optional: nothing installs cloudflared, so on a machine
