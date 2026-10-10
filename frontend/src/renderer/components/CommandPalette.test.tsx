@@ -154,7 +154,10 @@ vi.mock("../lib/host-clients", () => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
-		app: { openExternal: openExternalMock },
+		app: {
+			openExternal: openExternalMock,
+			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+		},
 		clipboard: { writeText: writeTextMock },
 	},
 }));
@@ -212,6 +215,7 @@ vi.mock("./CreateProjectFlow", () => ({
 }));
 
 import { CommandPalette } from "./CommandPalette";
+import { appShortcutBus } from "../test/app-shortcut-bus";
 
 function renderPalette() {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -238,16 +242,6 @@ function pressEscape(init: KeyboardEventInit = {}): KeyboardEvent {
 		document.body.dispatchEvent(event);
 	});
 	return event;
-}
-
-function focusTerminal() {
-	const xterm = document.createElement("div");
-	xterm.className = "xterm";
-	const input = document.createElement("textarea");
-	xterm.appendChild(input);
-	document.body.appendChild(xterm);
-	input.focus();
-	return xterm;
 }
 
 const paletteInput = () => screen.queryByPlaceholderText(/search projects/i);
@@ -428,28 +422,32 @@ describe("CommandPalette workspace file search", () => {
 	});
 });
 
-describe("CommandPalette shortcut (Windows/Linux)", () => {
-	it("opens on Ctrl+K and toggles closed on a second Ctrl+K", async () => {
+// Chords are matched in the main process (see main/app-shortcuts.ts and its
+// tests, which also cover the Windows/Linux terminal yield); the palette only
+// reacts to the resulting command.
+describe("CommandPalette shortcuts", () => {
+	it("opens on the palette command and toggles closed on a second one", async () => {
 		renderPalette();
-		pressKey({ key: "k", ctrlKey: true });
+		act(() => appShortcutBus.emit({ id: "command-palette" }));
 		expect(await screen.findByPlaceholderText(/search projects/i)).toBeInTheDocument();
-		pressKey({ key: "k", ctrlKey: true });
+		act(() => appShortcutBus.emit({ id: "command-palette" }));
 		await waitFor(() => expect(paletteInput()).toBeNull());
 	});
 
-	it("ignores Cmd+K off macOS (the opening modifier is platform-gated)", () => {
+	it("quick-opens file search for the session on screen and toggles closed on a second press", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
 		renderPalette();
-		const event = pressKey({ key: "k", metaKey: true });
-		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
-		expect(event.defaultPrevented).toBe(false);
+		act(() => appShortcutBus.emit({ id: "quick-open-file" }));
+		expect(await screen.findByPlaceholderText("Search files in fix flake…")).toBeInTheDocument();
+		act(() => appShortcutBus.emit({ id: "quick-open-file" }));
+		await waitFor(() => expect(paletteInput()).toBeNull());
 	});
 
-	it("yields Ctrl+K to a focused terminal (does not open, does not preventDefault)", () => {
+	it("quick-open falls back to the plain palette when no session is on screen", async () => {
+		ctx.params = {};
 		renderPalette();
-		focusTerminal();
-		const event = pressKey({ key: "k", ctrlKey: true });
-		expect(event.defaultPrevented).toBe(false);
-		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
+		act(() => appShortcutBus.emit({ id: "quick-open-file" }));
+		expect(await screen.findByPlaceholderText(/search projects/i)).toBeInTheDocument();
 	});
 
 	it("does not open over an already-open modal", () => {
@@ -459,7 +457,7 @@ describe("CommandPalette shortcut (Windows/Linux)", () => {
 		modal.setAttribute("data-state", "open");
 		modal.setAttribute("data-fake-modal", "");
 		document.body.appendChild(modal);
-		pressKey({ key: "k", ctrlKey: true });
+		act(() => appShortcutBus.emit({ id: "command-palette" }));
 		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
 	});
 
@@ -476,37 +474,6 @@ describe("CommandPalette shortcut (Windows/Linux)", () => {
 	it("does not swallow Cmd+digit while the palette is closed (project switch still works)", () => {
 		renderPalette();
 		const event = pressKey({ key: "1", metaKey: true });
-		expect(event.defaultPrevented).toBe(false);
-	});
-});
-
-describe("CommandPalette shortcut (macOS)", () => {
-	beforeEach(() => {
-		vi.stubGlobal("navigator", {
-			...globalThis.navigator,
-			userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-		});
-	});
-
-	afterEach(() => vi.unstubAllGlobals());
-
-	it("opens on Cmd+K", async () => {
-		renderPalette();
-		pressKey({ key: "k", metaKey: true });
-		expect(await screen.findByPlaceholderText(/search projects/i)).toBeInTheDocument();
-	});
-
-	it("opens on Cmd+K even when a terminal is focused", async () => {
-		renderPalette();
-		focusTerminal();
-		pressKey({ key: "k", metaKey: true });
-		expect(await screen.findByPlaceholderText(/search projects/i)).toBeInTheDocument();
-	});
-
-	it("ignores Ctrl+K on macOS, leaving the system kill-to-end-of-line binding alone", () => {
-		renderPalette();
-		const event = pressKey({ key: "k", ctrlKey: true });
-		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
 		expect(event.defaultPrevented).toBe(false);
 	});
 });

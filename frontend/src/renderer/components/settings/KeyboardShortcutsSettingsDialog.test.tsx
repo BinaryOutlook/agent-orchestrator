@@ -76,7 +76,7 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		const user = userEvent.setup();
 		renderDialog();
 
-		await user.click(screen.getByRole("button", { name: "Change Focus terminal" }));
+		await user.click(screen.getByRole("button", { name: "Change Toggle terminal" }));
 		fireEvent.keyDown(window, { key: "AltGraph", ctrlKey: true, altKey: true });
 		fireEvent.keyDown(window, { key: "CapsLock" });
 		expect(persistBindings).not.toHaveBeenCalled();
@@ -94,23 +94,23 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		const user = userEvent.setup();
 		useKeybindingsStore.setState({
 			overrides: {
-				"focus-terminal": [{ key: "j", ctrl: true, meta: false, shift: false, alt: false }],
+				"toggle-terminal": [{ key: "j", ctrl: true, meta: false, shift: false, alt: false }],
 				"toggle-sidebar": [{ key: "s", ctrl: false, meta: false, shift: false, alt: true }],
 			},
 			loaded: true,
 		});
 		renderDialog();
 
-		await user.click(screen.getByRole("button", { name: "Add alternative for Focus terminal" }));
+		await user.click(screen.getByRole("button", { name: "Add alternative for Toggle terminal" }));
 		fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
-		await waitFor(() => expect(useKeybindingsStore.getState().overrides["focus-terminal"]).toHaveLength(2));
+		await waitFor(() => expect(useKeybindingsStore.getState().overrides["toggle-terminal"]).toHaveLength(2));
 
-		await user.click(screen.getByRole("button", { name: "Remove Ctrl+J from Focus terminal" }));
-		await waitFor(() => expect(useKeybindingsStore.getState().overrides["focus-terminal"]).toHaveLength(1));
+		await user.click(screen.getByRole("button", { name: "Remove Ctrl+J from Toggle terminal" }));
+		await waitFor(() => expect(useKeybindingsStore.getState().overrides["toggle-terminal"]).toHaveLength(1));
 
-		await user.click(screen.getByRole("button", { name: "Reset Focus terminal" }));
+		await user.click(screen.getByRole("button", { name: "Reset Toggle terminal" }));
 		await waitFor(() =>
-			expect(Object.hasOwn(useKeybindingsStore.getState().overrides, "focus-terminal")).toBe(false),
+			expect(Object.hasOwn(useKeybindingsStore.getState().overrides, "toggle-terminal")).toBe(false),
 		);
 
 		await user.click(screen.getByRole("button", { name: "Reset all" }));
@@ -123,11 +123,11 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		renderDialog(true);
 
 		expect(screen.getByText("⌘N")).toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: "Change Focus terminal" }));
+		await user.click(screen.getByRole("button", { name: "Change Toggle terminal" }));
 		fireEvent.keyDown(window, { key: "j", code: "KeyJ", metaKey: true });
 
 		await waitFor(() =>
-			expect(useKeybindingsStore.getState().overrides["focus-terminal"]?.[0]?.meta).toBe(true),
+			expect(useKeybindingsStore.getState().overrides["toggle-terminal"]?.[0]?.meta).toBe(true),
 		);
 		expect(await screen.findByRole("status")).toHaveTextContent("⌘J");
 	});

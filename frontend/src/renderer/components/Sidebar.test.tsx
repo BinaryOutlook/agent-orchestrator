@@ -702,7 +702,12 @@ describe("Sidebar", () => {
 		// the footer content while the sidebar slides away and leave its border behind.
 		expect(expandedButton?.closest("[hidden]")).toBeNull();
 		expect(collapsedButton).toHaveAttribute("tabindex", "0");
-		expect(collapsedButton?.closest('[aria-hidden="true"]')).toBeNull();
+		// The sidebar content is off-screen while collapsed: inert + aria-hidden, but the
+		// edge rail that reopens it stays live.
+		const inertRegion = collapsedButton?.closest("[inert]");
+		expect(inertRegion).toHaveAttribute("aria-hidden", "true");
+		expect(inertRegion?.closest('[data-slot="sidebar-container"]')).not.toBeNull();
+		expect(document.querySelector('[data-sidebar="rail"]')?.closest("[inert]")).toBeNull();
 	});
 
 	it("keeps sidebar scrolling functional without a layout gutter", () => {
@@ -1170,12 +1175,14 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Project actions for Project One")).toBeInTheDocument();
 	});
 
-	it("keeps project disclosure and row actions in the keyboard tab order", () => {
+	it("keeps project row actions in the keyboard tab order without a duplicate disclosure stop", () => {
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
 
-		const disclosure = screen.getByRole("button", { name: "Toggle Project One sessions" });
+		const disclosure = screen.getByLabelText("Toggle Project One sessions");
 		expect(disclosure.tagName).toBe("BUTTON");
-		expect(disclosure).toHaveProperty("tabIndex", 0);
+		// The overlay folder button duplicates the project row's tab stop.
+		expect(disclosure).toHaveProperty("tabIndex", -1);
+		expect(disclosure).toHaveAttribute("aria-hidden", "true");
 		expect(screen.getByLabelText("Spawn Project One orchestrator")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Project actions for Project One")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Pin session")).toHaveProperty("tabIndex", 0);
@@ -1260,7 +1267,7 @@ describe("Sidebar", () => {
 		expect(screen.getByText("fix login")).toBeInTheDocument();
 		expect(screen.getByText("other task")).toBeInTheDocument();
 
-		const folder = screen.getByRole("button", { name: "Toggle Project Two sessions" });
+		const folder = screen.getByLabelText("Toggle Project Two sessions");
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 
@@ -1433,7 +1440,7 @@ describe("Sidebar", () => {
 			workspaces: [{ ...workspace, sessions: [orchestrator, session] }],
 		});
 
-		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
 		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "false");
 
@@ -2519,7 +2526,7 @@ describe("Sidebar", () => {
 		// The sidebar slides away (offcanvas); it has no icon rail, so its lists
 		// must not lift their caps just because it is collapsed.
 		expect(screen.queryByText("Project 11")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /more projects/ })).toBeInTheDocument();
+		expect(screen.getByRole("button", { hidden: true, name: /more projects/ })).toBeInTheDocument();
 	});
 
 	it("does not reopen a closed Projects section when the sidebar is toggled off and on", async () => {
@@ -2533,7 +2540,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
 		// While the sidebar is off, the closed section must not be forced open.
 		expect(screen.queryByText(workspace.name)).not.toBeInTheDocument();
-		await user.click(screen.getAllByRole("button", { name: "Expand sidebar" })[0]);
+		await user.click(screen.getAllByRole("button", { hidden: true, name: "Expand sidebar" })[0]);
 
 		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
 		expect(screen.queryByText(workspace.name)).not.toBeInTheDocument();
@@ -2750,7 +2757,7 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Open second task")).toBeInTheDocument();
 
 		// Collapse via folder icon
-		const folder = screen.getByRole("button", { name: "Toggle Project One sessions" });
+		const folder = screen.getByLabelText("Toggle Project One sessions");
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 
@@ -2765,7 +2772,7 @@ describe("Sidebar", () => {
 		});
 
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute(
 			"aria-expanded",
 			"false",
 		);
@@ -2781,14 +2788,14 @@ describe("Sidebar", () => {
 		});
 
 		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute(
 			"aria-expanded",
 			"true",
 		);
 
-		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute(
 			"aria-expanded",
 			"false",
 		);
@@ -2810,7 +2817,7 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
 		expect(screen.queryByLabelText("Open second task")).not.toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual([]);
 	});
 
@@ -2834,7 +2841,7 @@ describe("Sidebar", () => {
 		expect(projectRow).toHaveAttribute("aria-expanded", "true");
 
 		// Collapse via folder icon
-		const folder = screen.getByRole("button", { name: "Toggle Project One sessions" });
+		const folder = screen.getByLabelText("Toggle Project One sessions");
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 

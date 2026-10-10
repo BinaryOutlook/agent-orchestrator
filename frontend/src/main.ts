@@ -1064,6 +1064,7 @@ const editorHandoff = createEditorHandoff({
 		const error = await shell.openPath(workspacePath);
 		if (error) throw new Error(error);
 	},
+	copyText: (text) => clipboard.writeText(text),
 	logError: (message, error) => console.error(message, error),
 });
 
@@ -2100,6 +2101,10 @@ ipcMain.handle("editorHandoff:getState", (event, sessionId: string) => {
 ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.open(input && typeof input === "object" ? input : { sessionId: "" });
+});
+ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
 });
 ipcMain.handle("app:getVersion", () => app.getVersion());
 ipcMain.handle("app:openExternal", async (_event, url: string) => {

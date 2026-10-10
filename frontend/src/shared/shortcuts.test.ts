@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	APP_SHORTCUTS,
 	matchesAppShortcut,
-	matchesFocusTerminalShortcut,
+	
 	matchesKeyboardShortcutsHelpShortcut,
 	matchesNextTabShortcut,
 	matchesNextSessionShortcut,
@@ -13,6 +13,8 @@ import {
 	matchesPreviousTabShortcut,
 	defaultShortcutBindings,
 	matchesShortcutBinding,
+	shortcutBindingKeys,
+	shortcutBindingLabel,
 	shortcutBindingValidationError,
 	type ShortcutChord,
 } from "./shortcuts";
@@ -104,16 +106,111 @@ describe("additional application shortcuts", () => {
 		}
 	});
 
-	it("matches focus terminal on each platform and rejects extra modifiers", () => {
-		expect(matchesFocusTerminalShortcut(chord({ key: "T", meta: true, shift: true }), true)).toBe(true);
-		expect(matchesFocusTerminalShortcut(chord({ key: "t", ctrl: true, shift: true }), false)).toBe(true);
-		expect(matchesFocusTerminalShortcut(chord({ key: "t", ctrl: true, shift: true, alt: true }), false)).toBe(false);
+	it("matches the terminal toggle on ⌃` and, on macOS, ⌘J", () => {
+		const backquote = chord({ key: "`", code: "Backquote", ctrl: true });
+		expect(matchesAppShortcut("toggle-terminal", backquote, true)).toBe(true);
+		expect(matchesAppShortcut("toggle-terminal", backquote, false)).toBe(true);
+		expect(matchesAppShortcut("toggle-terminal", chord({ key: "j", meta: true }), true)).toBe(true);
+		expect(matchesAppShortcut("toggle-terminal", chord({ key: "j", ctrl: true }), false)).toBe(false);
+		expect(matchesAppShortcut("toggle-terminal", { ...backquote, shift: true }, true)).toBe(false);
 	});
 
 	it("matches close terminal on each platform", () => {
 		expect(matchesAppShortcut("close-shell-terminal", chord({ key: "w", meta: true }), true)).toBe(true);
 		expect(matchesAppShortcut("close-shell-terminal", chord({ key: "w", ctrl: true }), false)).toBe(true);
 		expect(matchesAppShortcut("close-shell-terminal", chord({ key: "w", meta: true }), false)).toBe(false);
+	});
+});
+
+describe("default shortcuts", () => {
+	// [id, chord] pairs a user can press on macOS. ⌘⇧[ reports key "{" with
+	// code BracketLeft, so those chords carry the physical code like Electron does.
+	it.each([
+		["new-session", chord({ key: "n", meta: true })],
+		["new-shell-terminal", chord({ key: "t", meta: true })],
+		["close-shell-terminal", chord({ key: "w", meta: true })],
+		["reopen-closed-tab", chord({ key: "T", meta: true, shift: true })],
+		["keyboard-shortcuts", chord({ key: "/", meta: true })],
+		["command-palette", chord({ key: "k", meta: true })],
+		["command-palette", chord({ key: "P", meta: true, shift: true })],
+		["quick-open-file", chord({ key: "p", meta: true })],
+		["open-settings", chord({ key: ",", meta: true })],
+		["toggle-sidebar", chord({ key: "b", meta: true })],
+		["toggle-inspector", chord({ key: "b", code: "KeyB", meta: true, alt: true })],
+		["toggle-terminal", chord({ key: "`", code: "Backquote", ctrl: true })],
+		["toggle-diff", chord({ key: "D", meta: true, shift: true })],
+		["toggle-inspector", chord({ key: "B", meta: true, shift: true })],
+		["jump-to-session", chord({ key: "1", meta: true })],
+		["jump-to-session", chord({ key: "9", meta: true })],
+		["previous-session", chord({ key: "{", code: "BracketLeft", meta: true, shift: true })],
+		["next-session", chord({ key: "}", code: "BracketRight", meta: true, shift: true })],
+		["previous-session", chord({ key: "ArrowUp", meta: true, alt: true })],
+		["next-session", chord({ key: "ArrowDown", meta: true, alt: true })],
+		["previous-attention-session", chord({ key: "ArrowUp", meta: true, alt: true, shift: true })],
+		["next-attention-session", chord({ key: "ArrowDown", meta: true, alt: true, shift: true })],
+		["history-back", chord({ key: "[", code: "BracketLeft", meta: true })],
+		["history-forward", chord({ key: "]", code: "BracketRight", meta: true })],
+		["previous-tab", chord({ key: "Tab", ctrl: true, shift: true })],
+		["next-tab", chord({ key: "Tab", ctrl: true })],
+		["previous-tab", chord({ key: "ArrowLeft", meta: true, alt: true })],
+		["next-tab", chord({ key: "ArrowRight", meta: true, alt: true })],
+		["archive-session", chord({ key: "A", meta: true, shift: true })],
+		["open-in-editor", chord({ key: "o", meta: true })],
+		["copy-session-path", chord({ key: "C", meta: true, shift: true })],
+		["model-picker", chord({ key: "M", meta: true, shift: true })],
+	] as const)("macOS binds %s to its chord", (id, pressed) => {
+		expect(matchesAppShortcut(id, pressed, true)).toBe(true);
+	});
+
+	it("tells ⌘[ (history) apart from ⌘⇧[ (previous session)", () => {
+		const unshifted = chord({ key: "[", code: "BracketLeft", meta: true });
+		const shifted = chord({ key: "{", code: "BracketLeft", meta: true, shift: true });
+		expect(matchesAppShortcut("history-back", unshifted, true)).toBe(true);
+		expect(matchesAppShortcut("previous-session", unshifted, true)).toBe(false);
+		expect(matchesAppShortcut("previous-session", shifted, true)).toBe(true);
+		expect(matchesAppShortcut("history-back", shifted, true)).toBe(false);
+	});
+
+	it("tells ⌘⌥↑ (session) apart from ⌘⌥⇧↑ (needing attention)", () => {
+		const session = chord({ key: "ArrowUp", meta: true, alt: true });
+		const attention = chord({ key: "ArrowUp", meta: true, alt: true, shift: true });
+		expect(matchesAppShortcut("previous-session", session, true)).toBe(true);
+		expect(matchesAppShortcut("previous-attention-session", session, true)).toBe(false);
+		expect(matchesAppShortcut("previous-attention-session", attention, true)).toBe(true);
+		expect(matchesAppShortcut("previous-session", attention, true)).toBe(false);
+	});
+
+	it("does not bind jump-to-session to 0 or to letters", () => {
+		expect(matchesAppShortcut("jump-to-session", chord({ key: "0", meta: true }), true)).toBe(false);
+		expect(matchesAppShortcut("jump-to-session", chord({ key: "a", meta: true }), true)).toBe(false);
+	});
+
+	it.each([true, false])("never gives two commands the same chord (macOS: %s)", (isMac) => {
+		const seen = new Map<string, string>();
+		for (const { id } of APP_SHORTCUTS) {
+			for (const binding of defaultShortcutBindings(id, isMac)) {
+				const signature = [
+					binding.code ?? binding.key.toLowerCase(),
+					binding.ctrl,
+					binding.meta,
+					binding.shift,
+					binding.alt,
+				].join("|");
+				expect(seen.get(signature), `${id} collides with ${seen.get(signature)}`).toBeUndefined();
+				seen.set(signature, id);
+			}
+		}
+	});
+
+	it("labels macOS chords in Apple's modifier order", () => {
+		const [binding] = defaultShortcutBindings("next-attention-session", true);
+		expect(shortcutBindingKeys(binding, true)).toEqual(["⌥", "⇧", "⌘", "↓"]);
+		const [, alias] = defaultShortcutBindings("toggle-terminal", true);
+		expect(shortcutBindingLabel(alias, true)).toBe("⌘J");
+		const [backquote] = defaultShortcutBindings("toggle-terminal", true);
+		expect(shortcutBindingKeys(backquote, true)).toEqual(["⌃", "`"]);
+		const [history] = defaultShortcutBindings("history-back", false);
+		expect(shortcutBindingLabel(history, false)).toBe("Alt+←");
 	});
 });
 
@@ -127,11 +224,11 @@ describe("shortcut catalog", () => {
 
 	it("uses a user override instead of the default binding", () => {
 		const overrides = {
-			"focus-terminal": [chord({ key: "j", ctrl: true })],
+			"toggle-terminal": [chord({ key: "j", ctrl: true })],
 		};
 
-		expect(matchesAppShortcut("focus-terminal", chord({ key: "j", ctrl: true }), false, overrides)).toBe(true);
-		expect(matchesAppShortcut("focus-terminal", chord({ key: "t", ctrl: true, shift: true }), false, overrides)).toBe(
+		expect(matchesAppShortcut("toggle-terminal", chord({ key: "j", ctrl: true }), false, overrides)).toBe(true);
+		expect(matchesAppShortcut("toggle-terminal", chord({ key: "t", ctrl: true, shift: true }), false, overrides)).toBe(
 			false,
 		);
 	});
