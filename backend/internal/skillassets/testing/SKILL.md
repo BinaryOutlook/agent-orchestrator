@@ -151,9 +151,9 @@ exact error and the requested and actual delivery modes from the action journal.
 
 For UI changes, each leg needs an actual action that reaches the PR's trigger
 and a screenshot of its result. Keep matching before/after images. Retain a
-short clip around the trigger when recording is available. If capture or
-recording fails, save the exact error and report the missing evidence. A
-recording gap is not a successful capture.
+full recording MP4 with the trigger's timestamps from `actions.jsonl` when
+recording is available. If capture or recording fails, save the exact error
+and report the missing evidence. A recording gap is not a successful capture.
 
 For backend and CLI changes, run the selected runtime requests or commands on
 both revisions. Save the exact command, cwd, SHA, exit status and meaningful
@@ -178,15 +178,20 @@ run still needs cleanup evidence. Cancel an active attempt with the supervisor's
 `ao testing stop <attemptId>` and verify its cleanup receipt. Keep recording
 metadata and originals.
 
-When exporting video, use this skill's `scripts/export_clip.py` with
-`--attempt-dir`, `--recording`, `--start`, `--duration` and `--label before|after`.
-Select at most 15 seconds per clip. The script checks ownership, duration and
-checksums. Decode and inspect the exported frames before describing them.
-State any omitted gaps and preserve the originals.
+Do not trim recordings by default. Link each leg's full MP4 and the relevant
+action timestamps from `actions.jsonl`. Include UTC times and recording-relative
+seconds using the recording metadata's `startedAt`, so the reader can seek to
+each action. Retain the action journal and metadata beside the media receipts.
+Only export a trimmed clip if the full recording is unavailable or over 200 MB.
+For that exception, use this skill's `scripts/export_clip.py` with
+`--attempt-dir`, `--recording`, `--start`, `--duration` and `--label before|after`
+on an available retained recording. Select at most 15 seconds, inspect the
+exported frames before describing them, state gaps and preserve the original.
+If no recording is available, report the gap.
 
 Write one comparison in the session artifacts directory, never in the repository.
 Write the fixed template below directly as `comparison.md` and finish evidence
-export, the comparison and the AO report in at most ninety seconds. No narrative,
+retention, the comparison and the AO report in at most ninety seconds. No narrative,
 custom dashboard, hash table or repeated receipt contents in the body. Link
 receipts instead. Copy only the media linked from its rows; if optional media
 is not ready within the budget, record its gap and report the available evidence.
@@ -195,9 +200,9 @@ is not ready within the budget, record its gap and report the available evidence
 Verdict: fixed | not fixed | regressed | unverified. Confidence: <level and reason>.
 PR: <URL>. Base: <SHA>. Head: <SHA>.
 
-| Check and expected result | Base result | Head result | Paired screenshots and clips |
+| Check and expected result | Base result | Head result | Paired screenshots; full MP4s and action times |
 |---|---|---|---|
-| <numbered trigger/input; runtime command and exit status if relevant> | <observed result> | <observed result> | <relative media links> |
+| <numbered trigger/input; runtime command and exit status if relevant> | <observed result> | <observed result> | <relative screenshot/MP4 links; base/head action UTC times and recording-relative seconds> |
 
 Unverified: <skipped checks and exact reasons>.
 Timings: <totalSeconds; phase names and seconds; link to timing.json for boundaries and sources>.
@@ -206,7 +211,8 @@ Receipts: <launch, action, media and hash receipt links>.
 Draft comments: <what to change and supporting evidence, or none>.
 ```
 
-Keep two to four check rows with paired base/head screenshots and clip links.
+Keep two to four check rows with paired base/head screenshots, full MP4 links
+and action times. Use trimmed clips only for the exception above.
 Record missing media and its exact error instead of delaying the report.
  Label base as broken only if reproduced;
 label head as fixed only if the same trigger reached the expected result.
@@ -227,7 +233,7 @@ end, not a sum of overlapping phases. Do not leave `totalSeconds` null or omit
 phases. Link this file and show its short phase table in the comparison; include
 total seconds and the phase durations in the `ao report` note.
 Record model, tokens and cost from available usage facts; mark missing facts unknown.
-Copy the selected screenshot/clip receipts from `evidenceDir` into the worker's
+Copy the selected screenshot/recording receipts from `evidenceDir` into the worker's
 session artifact directory beside `comparison.md`. Verify the copied hashes
 and use relative media links. Keep the retained originals. Attach the absolute
 comparison path with `ao report --artifact <path>` so it appears in AO.
@@ -237,8 +243,8 @@ run file and use standard Python `urllib.request` to GET
 `http://127.0.0.1:<supervisorPort>/api/v1/sessions/<workerSessionId>`.
 Read `session.artifactFiles`, whose entries contain `path`, `rawUrl`,
 `previewUrl` and `inlineUrl`. Select the comparison by its artifact path.
-Run `ao preview <comparison.previewUrl>`; use `ao preview <clip.rawUrl>` for a
-playable clip. These URLs are confined to that session's artifact directory.
+Run `ao preview <comparison.previewUrl>`; use `ao preview <recording.rawUrl>`
+for a playable MP4. These URLs are confined to that session's artifact directory.
 Do not use `ao session get --json` for this lookup; it omits `artifactFiles`.
 Workspace file previews cannot read external artifact paths. Do not copy
 evidence into the repo or start a server solely to show it.
@@ -246,8 +252,8 @@ evidence into the repo or start a server solely to show it.
 For a completed comparison, finish with `ao report --done --note <verdict>`
 and `--artifact <comparison>`. Start the note with a one-line verdict:
 `fixed`, `not fixed` or `regressed`, plus confidence based on the observed
-checks. Include the base/head comparison with screenshots and clips, and
-draft review comments stating what to change and the evidence for each.
+checks. Include screenshots, recordings and action times in the base/head
+comparison, plus draft review comments with evidence for each requested change.
 
 For risky or unavailable checks, report the completed safe checks with `--done`
 and list the unverified coverage. If all changed behavior is unverified, use
