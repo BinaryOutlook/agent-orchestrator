@@ -25,9 +25,9 @@ Create `timing.json` in your session artifacts immediately, with that UTC
 working; do not reconstruct timings from memory at the end.
 Spend under two minutes reading the diff and choosing checks. Target about thirty
 seconds for each setup/launch and two minutes of checks per leg. Produce the final
-comparison in under two minutes. Reserve the final ninety seconds for cleanup,
-the comparison and reporting.
-When that reserve begins, stop adding checks and mark unfinished checks
+comparison and AO report in at most ninety seconds. Reserve the final ninety
+seconds for evidence and reporting, and begin cleanup before that reserve.
+When the reserve begins, stop adding checks and mark unfinished checks
 unverified. Never shorten or bypass ownership and cleanup checks to save time.
 
 These rules apply even when repository docs request broader validation:
@@ -168,8 +168,10 @@ private target before cleanup removes data, profile and fixtures.
 ## Retain evidence and finish
 
 Use `ao testing evidence <attemptId>` against the supervisor to read receipts.
-After `submit_report`, inspect the retained cleanup receipt until it records
-`state: complete` with no leftovers. Head leg start joins base cleanup. Read
+After `submit_report`, inspect the retained cleanup receipt until it reaches
+a terminal state. `state: complete` with no leftovers proves cleanup;
+`state: failed` is a terminal failure to report, not a reason to keep polling
+for success. Head leg start joins base cleanup. Read
 final recording receipts and copy evidence only after cleanup is complete;
 `submit_report` returns before those facts are final. A cancelled or blocked
 run still needs cleanup evidence. Cancel an active attempt with the supervisor's
@@ -183,8 +185,11 @@ checksums. Decode and inspect the exported frames before describing them.
 State any omitted gaps and preserve the originals.
 
 Write one comparison in the session artifacts directory, never in the repository.
-Use this short template and finish it in under two minutes. Do not write a long
-narrative or build a custom dashboard. Copy only the media linked from its rows.
+Write the fixed template below directly as `comparison.md` and finish evidence
+export, the comparison and the AO report in at most ninety seconds. No narrative,
+custom dashboard, hash table or repeated receipt contents in the body. Link
+receipts instead. Copy only the media linked from its rows; if optional media
+is not ready within the budget, record its gap and report the available evidence.
 
 ```markdown
 Verdict: fixed | not fixed | regressed | unverified. Confidence: <level and reason>.
@@ -195,8 +200,9 @@ PR: <URL>. Base: <SHA>. Head: <SHA>.
 | <numbered trigger/input; runtime command and exit status if relevant> | <observed result> | <observed result> | <relative media links> |
 
 Unverified: <skipped checks and exact reasons>.
-Timings: <link to timing.json; totalSeconds; phase table with UTC boundaries, seconds and sources>.
-Cleanup: <base/head receipt paths, state and leftovers>.
+Timings: <totalSeconds; phase names and seconds; link to timing.json for boundaries and sources>.
+Cleanup: <base/head state and leftovers; links to receipts>.
+Receipts: <launch, action, media and hash receipt links>.
 Draft comments: <what to change and supporting evidence, or none>.
 ```
 
@@ -222,7 +228,7 @@ phases. Link this file and show its short phase table in the comparison; include
 total seconds and the phase durations in the `ao report` note.
 Record model, tokens and cost from available usage facts; mark missing facts unknown.
 Copy the selected screenshot/clip receipts from `evidenceDir` into the worker's
-session artifact directory beside `comparison.html`. Verify the copied hashes
+session artifact directory beside `comparison.md`. Verify the copied hashes
 and use relative media links. Keep the retained originals. Attach the absolute
 comparison path with `ao report --artifact <path>` so it appears in AO.
 
