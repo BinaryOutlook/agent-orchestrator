@@ -137,6 +137,9 @@ type screenWindow struct {
 }
 
 func (a *Adapter) checkClickPoint(ctx context.Context, b *binding, r *captureReceipt, point pixel, semantic bool) error {
+	if !semantic {
+		return a.checkAXClickPoint(ctx, b, r, point)
+	}
 	out, err := a.run(ctx, "/usr/bin/osascript", "-l", "JavaScript", "-e", windowListScript)
 	if err != nil {
 		return &Error{Code: "window_hit_test_unknown", Detail: providerCallDiagnostic(ctx, "WindowServer window list", nil, string(out.Stderr), err, nil), cause: errors.Join(ErrRefused, err, ctx.Err())}

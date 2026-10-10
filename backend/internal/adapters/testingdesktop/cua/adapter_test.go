@@ -100,6 +100,10 @@ func newFixture(t *testing.T) *fixture {
 			return Output{Stdout: []byte("<plist><dict><key>IOConsoleLocked</key><" + value + "/></dict></plist>")}, nil
 		}
 		if executable == "/usr/bin/osascript" {
+			if len(args) >= 4 && args[3] == axHitTestScript {
+				zero := 0
+				return jsonOutput(axHitTest{Trusted: boolPointer(true), HitCode: &zero, WindowCode: &zero, WindowID: 456, Ancestry: []axHitNode{{PID: 123, Role: "AXButton", Owner: "Electron"}, {PID: 123, Role: "AXWindow", Owner: "Electron"}}}), nil
+			}
 			alpha := 1.0
 			return jsonOutput(windowSnapshot{Windows: []screenWindow{{ID: 456, PID: 123, Owner: "Electron", Alpha: &alpha, Bounds: &f.bounds}}}), nil
 		}
@@ -362,7 +366,7 @@ func TestForegroundKeyUsesFreshTypedFieldAndForegroundClick(t *testing.T) {
 		t.Fatal(err)
 	}
 	last = f.runner.calls[len(f.runner.calls)-1]
-	if !strings.Contains(last.args[4], `"delivery_mode":"foreground"`) || !strings.HasPrefix(result.Detail, "delivery_mode=foreground;") {
+	if !strings.Contains(last.args[4], `"delivery_mode":"foreground"`) || !strings.Contains(result.Detail, "delivery_mode=foreground;") {
 		t.Fatal("click did not follow configured foreground policy")
 	}
 }

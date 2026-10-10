@@ -77,6 +77,13 @@ func TestRecordingControlOnlyBlocksItsCoveredPoint(t *testing.T) {
 			provider := f.runner.hook
 			f.runner.hook = func(executable string, args []string) (Output, error) {
 				if executable == "/usr/bin/osascript" {
+					if len(args) >= 4 && args[3] == axHitTestScript {
+						if !covering {
+							return provider(executable, args)
+						}
+						zero := 0
+						return jsonOutput(axHitTest{Trusted: boolPointer(true), HitCode: &zero, WindowCode: &zero, WindowID: 999, Ancestry: []axHitNode{{PID: 123, Role: "AXButton", Owner: "Electron recording control"}, {PID: 123, Role: "AXWindow"}}}), nil
+					}
 					alpha := 1.0
 					bounds := domain.TestWindowBounds{X: 70, Y: 60, Width: 66, Height: 20}
 					if covering {
@@ -100,7 +107,7 @@ func TestRecordingControlOnlyBlocksItsCoveredPoint(t *testing.T) {
 			before := len(f.runner.calls)
 			_, err := f.adapter.Click(context.Background(), f.target, frame, domain.TestClickRequest{ScreenshotID: frame.ScreenshotID, X: 100, Y: 100})
 			if covering {
-				if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "window_point_covered") || !strings.Contains(err.Error(), "PID 123 window 999 layer 27 bounds (70,130,66,20)") {
+				if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "window_point_not_owned") || !strings.Contains(err.Error(), `owner="Electron recording control" pid=123 window=999`) {
 					t.Fatal("cover identity lost", err)
 				}
 			} else if err != nil {
@@ -380,6 +387,10 @@ func TestCoveredElementRequiresOwnedAXAncestry(t *testing.T) {
 			provider := f.runner.hook
 			f.runner.hook = func(executable string, args []string) (Output, error) {
 				if executable == "/usr/bin/osascript" {
+					if len(args) >= 4 && args[3] == axHitTestScript {
+						zero := 0
+						return jsonOutput(axHitTest{Trusted: boolPointer(true), HitCode: &zero, WindowCode: &zero, WindowID: 8094, Ancestry: []axHitNode{{PID: 31111, Role: "AXWindow", Owner: "Wispr Flow"}}}), nil
+					}
 					alpha := 1.0
 					return jsonOutput(windowSnapshot{Windows: []screenWindow{{ID: 8094, PID: 31111, Owner: "Wispr Flow", Layer: 1000, Alpha: &alpha, Bounds: &f.bounds}, {ID: 456, PID: 123, Alpha: &alpha, Bounds: &f.bounds}}}), nil
 				}
@@ -416,6 +427,84 @@ func TestCoveredElementRequiresOwnedAXAncestry(t *testing.T) {
 					if len(call.args) == 5 && call.args[3] == "click" {
 						t.Fatal("unsafe action dispatched", mode)
 					}
+				}
+			}
+		})
+	}
+}
+
+func TestCoordinateRoutingUsesRecordedAXHit(t *testing.T) {
+	data, err := os.ReadFile("testdata/ax-hit-composer.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"owned behind overlay", "foreign PID", "foreign window", "foreign ancestor", "permission missing", "AX error", "window missing", "broken ancestry", "provider failure"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			var hit axHitTest
+			if err := json.Unmarshal(data, &hit); err != nil {
+				t.Fatal(err)
+			}
+			hit.WindowID = 456
+			for i := range hit.Ancestry {
+				hit.Ancestry[i].PID = 123
+			}
+			switch mode {
+			case "foreign PID":
+				hit.Ancestry[0].PID = 31111
+				hit.Ancestry[0].Owner = "Wispr Flow"
+			case "foreign window":
+				hit.WindowID = 999
+			case "foreign ancestor":
+				hit.Ancestry[1].PID = 31111
+				hit.Ancestry[1].Owner = "Wispr Flow"
+			case "permission missing":
+				hit.Trusted = boolPointer(false)
+			case "AX error":
+				hit.Error = "AXUIElementCopyElementAtPosition failed: -25204"
+			case "window missing":
+				hit.WindowCode = nil
+			case "broken ancestry":
+				hit.Ancestry = hit.Ancestry[:len(hit.Ancestry)-1]
+			}
+			provider := f.runner.hook
+			f.runner.hook = func(executable string, args []string) (Output, error) {
+				if executable == "/usr/bin/osascript" && len(args) >= 4 && args[3] == axHitTestScript {
+					if args[4] != "120" || args[5] != "140" {
+						t.Fatal("scaled point changed", args[4:])
+					}
+					if mode == "provider failure" {
+						return Output{Stderr: []byte("AX unavailable")}, errors.New("hit test exited")
+					}
+					return jsonOutput(hit), nil
+				}
+				return provider(executable, args)
+			}
+			frame := f.screenshot(t)
+			before := len(f.runner.calls)
+			action, err := f.adapter.Click(context.Background(), f.target, frame, domain.TestClickRequest{ScreenshotID: frame.ScreenshotID, X: 100, Y: 100})
+			inputs := 0
+			for _, call := range f.runner.calls[before:] {
+				if len(call.args) == 5 && call.args[3] == "click" {
+					inputs++
+					if strings.Contains(call.args[4], "element_token") {
+						t.Fatal("coordinate became AXPress")
+					}
+				}
+			}
+			if mode == "owned behind overlay" {
+				if err != nil || inputs != 1 || !strings.Contains(action.Detail, `pid=123 window=456 role="AXPopUpButton"`) || !strings.Contains(action.Detail, "ancestry=") {
+					t.Fatal("owned routing proof lost", action, err, inputs)
+				}
+			} else {
+				if !errors.Is(err, ErrRefused) || inputs != 0 {
+					t.Fatal("unknown or foreign hit dispatched", err, inputs)
+				}
+				if strings.HasPrefix(mode, "foreign") && !strings.Contains(err.Error(), "window_point_not_owned") {
+					t.Fatal("owner reason lost", err)
+				}
+				if mode == "AX error" && !strings.Contains(err.Error(), "-25204") {
+					t.Fatal("AX cause lost", err)
 				}
 			}
 		})
