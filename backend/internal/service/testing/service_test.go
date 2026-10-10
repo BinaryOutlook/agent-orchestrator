@@ -734,10 +734,33 @@ func TestRestoreWrongTargetFailsAndCleanupFailureKeepsOutcome(t *testing.T) {
 }
 func TestToolValidationAndSecretExclusion(t *testing.T) {
 	f := newFixture(t)
+	for _, test := range []struct{ aliases, canonical string }{
+		{"Escape Esc ESC escape", "Escape"}, {"Enter Return RETURN enter", "Enter"},
+		{"Tab TAB tab", "Tab"}, {"ArrowUp UP up arrowup", "Up"}, {"ArrowDown DOWN down", "Down"},
+		{"ArrowLeft LEFT left", "Left"}, {"ArrowRight RIGHT right", "Right"},
+		{"Backspace BACKSPACE", "Backspace"}, {"Delete Del DEL", "Delete"}, {"Space Spacebar SPACE", "Space"},
+		{"Home HOME", "Home"}, {"End END", "End"}, {"PageUp PgUp PGUP", "PageUp"}, {"PageDown PgDn PGDN", "PageDown"},
+		{"Control Ctrl CTRL", "Control"}, {"Shift SHIFT", "Shift"}, {"Alt Option OPTION", "Alt"},
+		{"Meta Command Cmd Super CMD", "Meta"}, {"F1 f1", "F1"}, {"F12 f12", "F12"}, {"A a", "a"}, {"0", "0"},
+	} {
+		for _, alias := range strings.Fields(test.aliases) {
+			raw, err := json.Marshal(domain.TestKeyRequest{ScreenshotID: "frame", Keys: []string{alias}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, canonical, err := decodeInput(raw, "key")
+			if err != nil || input.(*domain.TestKeyRequest).Keys[0] != test.canonical || !bytes.Contains(canonical, []byte(`"keys":["`+test.canonical+`"]`)) {
+				t.Fatalf("key %q was not normalized to %q: %s, %v", alias, test.canonical, canonical, err)
+			}
+		}
+	}
 	for _, test := range []struct{ name, raw string }{{"screenshot", `{"target":"host"}`}, {"screenshot", `null`}, {"click", `{"screenshotId":"x","y":0}`}, {"key", `{"screenshotId":"x","keys":["shell"]}`}, {"read_target_logs", `{"maxBytes":262145}`}, {"target_daemon_query", `{"resource":"shutdown"}`}, {"submit_report", `{"outcome":"pass","markdown":"x"}`}} {
 		_, err := f.svc.Execute(context.Background(), f.start.AttemptID, f.start.WorkerSessionID, f.worker.binding.Capability, "invalid", test.name, json.RawMessage(test.raw))
 		if code(err) != "INVALID_TESTING_REQUEST" {
 			t.Fatal("invalid input admitted", test.name, err)
+		}
+		if test.name == "key" && (!strings.Contains(err.Error(), "Allowed keys (case-insensitive)") || !strings.Contains(err.Error(), allowedKeyNames)) {
+			t.Fatal("key validation omitted allowed names", err)
 		}
 	}
 	if _, err := f.call("large", "submit_report", domain.TestSubmitReportRequest{Outcome: domain.TestOutcomePartial, Markdown: strings.Repeat("x", 65537)}); err == nil {

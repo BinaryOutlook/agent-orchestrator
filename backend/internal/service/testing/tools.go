@@ -39,15 +39,41 @@ func validOutcome(out domain.TestOutcome) bool {
 	}
 	return false
 }
-func validKey(key string) bool {
+
+const allowedKeyNames = "a-z, 0-9, Enter (Return), Tab, Escape (Esc), Backspace, Delete (Del), Space (Spacebar), Up/Down/Left/Right (ArrowUp/ArrowDown/ArrowLeft/ArrowRight), Home, End, PageUp (PgUp), PageDown (PgDn), F1-F12, Control (Ctrl), Shift, Alt (Option), Meta (Command, Cmd, Super)"
+
+func canonicalKey(key string) string {
 	if len(key) == 1 && ((key[0] >= 'a' && key[0] <= 'z') || (key[0] >= 'A' && key[0] <= 'Z') || (key[0] >= '0' && key[0] <= '9')) {
-		return true
+		return strings.ToLower(key)
 	}
-	switch key {
-	case "Enter", "Tab", "Escape", "Backspace", "Delete", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Control", "Shift", "Alt", "Meta":
-		return true
+	switch strings.ToLower(key) {
+	case "esc":
+		key = "Escape"
+	case "return":
+		key = "Enter"
+	case "del":
+		key = "Delete"
+	case "spacebar":
+		key = "Space"
+	case "arrowup", "arrowdown", "arrowleft", "arrowright":
+		key = key[len("Arrow"):]
+	case "pgup":
+		key = "PageUp"
+	case "pgdn":
+		key = "PageDown"
+	case "ctrl":
+		key = "Control"
+	case "option":
+		key = "Alt"
+	case "command", "cmd", "super":
+		key = "Meta"
 	}
-	return false
+	for _, name := range strings.Fields("Enter Tab Escape Backspace Delete Space Up Down Left Right Home End PageUp PageDown F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 Control Shift Alt Meta") {
+		if strings.EqualFold(key, name) {
+			return name
+		}
+	}
+	return ""
 }
 func decodeInput(raw json.RawMessage, name string) (any, json.RawMessage, error) {
 	var input any
@@ -133,10 +159,12 @@ func decodeInput(raw json.RawMessage, name string) (any, json.RawMessage, error)
 		if v.ScreenshotID == "" || len(v.Keys) < 1 || len(v.Keys) > 4 {
 			return nil, nil, invalid("Invalid key input")
 		}
-		for _, key := range v.Keys {
-			if !validKey(key) {
-				return nil, nil, invalid("Key is not allowed")
+		for i, key := range v.Keys {
+			canonical := canonicalKey(key)
+			if canonical == "" {
+				return nil, nil, invalid("Key is not allowed. Allowed keys (case-insensitive): " + allowedKeyNames)
 			}
+			v.Keys[i] = canonical
 		}
 	case *domain.TestReadLogsRequest:
 		if _, provided := fields["maxBytes"]; !provided {
