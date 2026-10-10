@@ -12,10 +12,20 @@ import uuid
 
 def duration(path):
     result = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,duration",
+         "-of", "json", str(path)],
         check=True, capture_output=True, text=True)
-    return float(result.stdout.strip())
+    metadata = json.loads(result.stdout)
+    video = [stream for stream in metadata.get("streams", []) if stream.get("codec_type") == "video"]
+    if video:
+        for value in [metadata.get("format", {}).get("duration"), *(stream.get("duration") for stream in video)]:
+            try:
+                seconds = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(seconds) and seconds > 0:
+                return seconds
+    raise ValueError(f"Recording has no video with a finite positive duration: {path}")
 
 
 def digest(path):
@@ -29,17 +39,20 @@ def export(attempt, recording, start, seconds, label):
     attempt = attempt.resolve(strict=True)
     recording = recording.resolve(strict=True)
     source = recording.relative_to(attempt)
-    if start + seconds > duration(recording):
+    source_seconds = duration(recording)
+    if start + seconds > source_seconds:
         raise ValueError("Selected segment exceeds the original recording")
     clips = attempt / "clips"
     clips.mkdir(exist_ok=True)
     if clips.resolve() != clips:
         raise ValueError("Clip directory must not contain symlinks")
     output = clips / f"{label}-{uuid.uuid4()}.mp4"
+    # Screen recordings can hold their final frame beyond its last timestamp.
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
-         "-ss", str(start), "-i", str(recording),
-         "-t", str(seconds), "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+         "-i", str(recording), "-ss", str(start),
+         "-t", str(seconds), "-an", "-vf", f"tpad=stop_mode=clone:stop_duration={source_seconds}",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p",
          "-movflags", "+faststart", str(output)], check=True)
     export_seconds = duration(output)
     if not 0 < export_seconds <= 15:

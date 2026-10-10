@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 path = Path(__file__).resolve().parents[3] / "skillassets/testing/scripts/export_clip.py"
 spec = importlib.util.spec_from_file_location("export_clip", path)
@@ -17,7 +17,7 @@ class ClipSelectionTest(unittest.TestCase):
             root = Path(tmp)
             attempt = root / "attempt"
             attempt.mkdir()
-            movie = attempt / "original.mov"
+            movie = attempt / "original.mp4"
             movie.write_bytes(b"original")
             foreign = root / "foreign.mov"
             foreign.write_bytes(b"foreign")
@@ -30,15 +30,30 @@ class ClipSelectionTest(unittest.TestCase):
                 command.assert_not_called()
 
     def test_selected_clip_retains_original_and_records_hashes(self):
+        for metadata, expected in [
+            ({"format": {"duration": "30"}, "streams": [{"codec_type": "video", "duration": "N/A"}]}, 30),
+            ({"format": {"duration": "N/A"}, "streams": [{"codec_type": "video", "duration": "9"}]}, 9),
+            ({"format": {}, "streams": []}, None),
+            ({"format": {"duration": "N/A"}, "streams": [{"codec_type": "video", "duration": "nan"}]}, None),
+        ]:
+            with self.subTest(metadata=metadata):
+                with patch.object(clip.subprocess, "run", return_value=Mock(stdout=json.dumps(metadata))):
+                    if expected is None:
+                        with self.assertRaisesRegex(ValueError, "finite positive duration"):
+                            clip.duration(Path("recording.mp4"))
+                    else:
+                        self.assertEqual(clip.duration(Path("recording.mp4")), expected)
         with tempfile.TemporaryDirectory() as tmp:
             attempt = Path(tmp)
-            movie = attempt / "original.mov"
+            movie = attempt / "original.mp4"
             movie.write_bytes(b"retained original")
 
             def command(args, **kwargs):
                 if "-movflags" in args:
                     Path(args[-1]).write_bytes(b"selected clip")
                     self.assertIn("-n", args)
+                    self.assertLess(args.index("-i"), args.index("-ss"))
+                    self.assertEqual(args[args.index("-vf") + 1], "tpad=stop_mode=clone:stop_duration=30")
 
             with patch.object(clip, "duration", side_effect=[30, 9]):
                 with patch.object(clip.subprocess, "run", side_effect=command):
