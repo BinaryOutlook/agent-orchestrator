@@ -129,8 +129,11 @@ Use the attached testing tools to `observe`, `screenshot`, `click`, `type`,
 only for an AO target. Input belongs to the returned screenshot and exact
 bound window. Use the fresh observation returned by an action; call `observe`
 again only if it did not return one or the screenshot is stale. Keep one before
-and one result capture per check. After a refused input, retain its exact reason
-and mark that check unverified instead of cycling through captures or workarounds.
+and one result capture per check. For `INVALID_TESTING_REQUEST`, read the error
+and tool schema for allowed values, correct the input and retry once. Do not
+repeat the invalid request. This applies only to input validation. After a
+safety or ownership refusal, retain its exact reason and mark that check
+unverified instead of cycling through captures or workarounds.
 Never reuse a base screenshot ID or send input to an unverified window.
 
 For AO's local desktop recipe, input is foreground-only. Cua must bring the
