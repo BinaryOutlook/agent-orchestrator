@@ -4077,6 +4077,10 @@ html.sidebar-reordering * {
  * (gap width + x-transform). Dragging updates --ao-inspector-w directly. */
 
 .session-inspector__topbar {
+	/* Width the tab list can need (four tabs, their gaps and the leading pad).
+	   The centered field never grows past what is left once both side tracks
+	   hold that much, so it cannot overlap the last tab. */
+	--inspector-tabs-reserve: calc(4 * var(--size-control-md) + 3 * var(--space-1) + var(--space-1));
 	background: var(--bg);
 	color: var(--fg);
 	user-select: none;
@@ -4087,13 +4091,13 @@ html.sidebar-reordering * {
    which shifts it right because the tab controls are wider than the actions. */
 .session-inspector__topbar--browser {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) minmax(0, clamp(120px, calc(100cqw - 2 * var(--inspector-tabs-reserve)), 240px)) minmax(0, 1fr);
 	padding-left: 0;
 	transition: grid-template-columns var(--duration-fast) ease;
 }
 
 .session-inspector__topbar--browser:has(.browser-panel__address-bar--editing) {
-	grid-template-columns: minmax(0, 1fr) clamp(240px, 52cqw, 560px) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) clamp(120px, min(52cqw, calc(100cqw - 2 * var(--inspector-tabs-reserve))), 560px) minmax(0, 1fr);
 }
 
 .session-inspector__topbar--browser > .session-inspector__tablist {
@@ -4153,7 +4157,7 @@ html.sidebar-reordering * {
 	height: var(--size-control-md);
 	border-color: transparent;
 	border-radius: var(--radius-md);
-	background: var(--color-interactive-hover);
+	background: var(--color-interactive-active);
 	font-family: var(--font-family-base);
 	font-size: 12px;
 	transition:
@@ -4179,13 +4183,13 @@ html.sidebar-reordering * {
    widening, and drops to its own row at the same narrow width (below). */
 .session-inspector__topbar:has(> .files-panel__topbar-host) {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) minmax(0, clamp(120px, calc(100cqw - 2 * var(--inspector-tabs-reserve)), 240px)) minmax(0, 1fr);
 	padding-left: 0;
 	transition: grid-template-columns var(--duration-fast) ease;
 }
 
 .session-inspector__topbar:has(> .files-panel__topbar-host :focus) {
-	grid-template-columns: minmax(0, 1fr) clamp(240px, 52cqw, 560px) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) clamp(120px, min(52cqw, calc(100cqw - 2 * var(--inspector-tabs-reserve))), 560px) minmax(0, 1fr);
 }
 
 .session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__tablist {

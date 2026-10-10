@@ -64,8 +64,9 @@ const TREE_ICONS = {
 	remap: { "file-tree-icon-chevron": { name: "ao-folder", width: 14, height: 14, viewBox: "0 0 24 24" } },
 } as const;
 
-// Folders never read as "active" (only the open file does) and a clicked row
-// gets no focus ring unless focus came from the keyboard.
+// Folders never read as "active" (only the open file does). The row focus ring
+// is hidden while the last input was a pointer (the hook below sets
+// data-pointer-focus on the tree host) and returns on the first key press.
 const TREE_UNSAFE_CSS = `
   [data-item-type="folder"] > [data-item-section="icon"] > [data-icon-name="file-tree-icon-chevron"] {
     transform: none !important;
@@ -78,7 +79,7 @@ const TREE_UNSAFE_CSS = `
   button[data-item-type="folder"][data-item-selected]:not(:hover) {
     background-color: transparent;
   }
-  button[data-type="item"][data-item-focused="true"]:not(:focus-visible):before {
+  :host([data-pointer-focus]) button[data-type="item"][data-item-focused="true"]:before {
     outline: none;
   }
 `;
@@ -110,30 +111,49 @@ function restoreFileSelection(model: TreeModel, selectedPath: string | null, syn
  * runs imperatively on its shadow root: the new child rows slide and fade in,
  * and every row below the folder glides by the height that was added or
  * removed, which reads as the list growing and shrinking.
+ *
+ * A folder toggle is spotted from the user's click or key press on a folder
+ * row, not by diffing the tree on every model event. Lazy folders report their
+ * children a fetch later, so the change in visible rows is what triggers the
+ * settle. The hook also tracks the last input device so the row focus ring
+ * only shows for keyboard focus.
  */
 function useTreeExpandAnimation(model: TreeModel) {
 	const hostRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
-		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-		const expandedDirs = () => new Set(
-			model.getVisibleRows(0, model.getVisibleCount())
-				.filter((row) => row.kind === "directory" && row.isExpanded)
-				.map((row) => row.path),
-		);
-		let previous = expandedDirs();
+		const wrapper = hostRef.current;
+		if (!wrapper) return;
+		const treeHost = () => wrapper.querySelector("file-tree-container");
 		let pending: { path: string; at: number } | null = null;
 		let frame = 0;
 		const timing: KeyframeAnimationOptions = { duration: EXPAND_SECONDS * 1000, easing: EXPAND_EASE };
+		const folderRowOf = (event: Event) =>
+			event.composedPath().find(
+				(node): node is HTMLElement => node instanceof HTMLElement && node.dataset.itemType === "folder" && node.dataset.itemPath != null,
+			);
+		const markFolderToggle = (event: Event) => {
+			const row = folderRowOf(event);
+			if (row?.dataset.itemPath) pending = { path: row.dataset.itemPath, at: performance.now() };
+		};
+		const onPointerDown = (event: PointerEvent) => {
+			treeHost()?.setAttribute("data-pointer-focus", "");
+			markFolderToggle(event);
+		};
+		const onKeyDown = (event: KeyboardEvent) => {
+			treeHost()?.removeAttribute("data-pointer-focus");
+			if (["Enter", " ", "ArrowRight", "ArrowLeft"].includes(event.key)) markFolderToggle(event);
+		};
 		const animate = (dir: string, delta: number) => {
-			const root = hostRef.current?.querySelector("file-tree-container")?.shadowRoot;
+			if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+			const root = treeHost()?.shadowRoot;
 			if (!root) return;
-			const rows = [...root.querySelectorAll<HTMLElement>('button[data-type="item"][data-item-path]')];
+			// Sticky ancestor rows repeat a folder's path; only the list rows move.
+			const rows = [...root.querySelectorAll<HTMLElement>('button[data-type="item"][data-item-path]:not([data-file-tree-sticky-row])')];
 			const dirIndex = rows.findIndex((row) => row.dataset.itemPath === dir);
 			if (dirIndex < 0) return;
 			const added = Math.max(delta, 0);
 			rows.slice(dirIndex + 1).forEach((row, offset) => {
-				const isChild = offset < added;
-				if (isChild) {
+				if (offset < added) {
 					row.animate(
 						[{ opacity: 0, transform: `translateY(-${EXPAND_SLIDE_PX}px)` }, { opacity: 1, transform: "none" }],
 						timing,
@@ -147,13 +167,7 @@ function useTreeExpandAnimation(model: TreeModel) {
 		let lastCount = model.getVisibleCount();
 		const unsubscribe = model.subscribe(() => {
 			const count = model.getVisibleCount();
-			const next = expandedDirs();
-			const toggledDirs = [...next].filter((path) => !previous.has(path)).concat([...previous].filter((path) => !next.has(path)));
-			previous = next;
-			if (toggledDirs.length === 1) pending = { path: toggledDirs[0], at: performance.now() };
 			if (pending && performance.now() - pending.at > EXPAND_WATCH_MS) pending = null;
-			// Lazy folders report their children a fetch after the toggle, so the
-			// row-count change (not the toggle itself) is what triggers the settle.
 			if (pending && count !== lastCount) {
 				const { path } = pending;
 				const delta = count - lastCount;
@@ -163,9 +177,13 @@ function useTreeExpandAnimation(model: TreeModel) {
 			}
 			lastCount = count;
 		});
+		wrapper.addEventListener("pointerdown", onPointerDown, true);
+		wrapper.addEventListener("keydown", onKeyDown, true);
 		return () => {
 			unsubscribe();
 			cancelAnimationFrame(frame);
+			wrapper.removeEventListener("pointerdown", onPointerDown, true);
+			wrapper.removeEventListener("keydown", onKeyDown, true);
 		};
 	}, [model]);
 	return hostRef;
