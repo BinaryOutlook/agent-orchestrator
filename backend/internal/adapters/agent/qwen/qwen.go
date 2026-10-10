@@ -103,6 +103,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	cmd = []string{binary}
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	appendModelFlag(&cmd, cfg.Config)
+	appendToolRestrictionFlags(&cmd, cfg.AllowedTools, cfg.DisallowedTools)
 
 	systemPrompt, err := launchSystemPromptText(cfg)
 	if err != nil {
@@ -157,6 +158,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	cmd = append(cmd, binary)
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	appendModelFlag(&cmd, cfg.Config)
+	appendToolRestrictionFlags(&cmd, cfg.AllowedTools, cfg.DisallowedTools)
 	systemPrompt, err := restoreSystemPromptText(cfg)
 	if err != nil {
 		return nil, false, err
@@ -355,6 +357,23 @@ func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
+	}
+}
+
+// appendToolRestrictionFlags maps AO's tool allow/deny lists onto Qwen Code's
+// repeatable `--allowed-tools` / `--exclude-tools` options. These lists are the
+// enforced read-only guarantee a restricted launch relies on, so they are
+// translated rather than dropped.
+func appendToolRestrictionFlags(cmd *[]string, allowed, disallowed []string) {
+	for _, tool := range allowed {
+		if tool = strings.TrimSpace(tool); tool != "" {
+			*cmd = append(*cmd, "--allowed-tools", tool)
+		}
+	}
+	for _, tool := range disallowed {
+		if tool = strings.TrimSpace(tool); tool != "" {
+			*cmd = append(*cmd, "--exclude-tools", tool)
+		}
 	}
 }
 

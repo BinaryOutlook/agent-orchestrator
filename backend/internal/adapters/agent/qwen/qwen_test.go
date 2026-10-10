@@ -796,3 +796,67 @@ func TestInvalidateBinaryResolutionClearsCachedPath(t *testing.T) {
 		t.Fatalf("resolvedBinary = %q, want empty after invalidation", p.resolvedBinary)
 	}
 }
+
+func TestGetLaunchCommandAppliesToolRestrictions(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Permissions:     ports.PermissionModeAcceptEdits,
+		AllowedTools:    []string{"read_file", " run_shell_command "},
+		DisallowedTools: []string{"edit", ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"--allowed-tools", "read_file"},
+		{"--allowed-tools", "run_shell_command"},
+		{"--exclude-tools", "edit"},
+	}
+	for _, pair := range want {
+		if !containsSubsequence(cmd, pair) {
+			t.Fatalf("command %#v missing %#v", cmd, pair)
+		}
+	}
+}
+
+func TestGetLaunchCommandOmitsToolFlagsWhenUnrestricted(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Permissions: ports.PermissionModeAcceptEdits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--allowed-tools", "--exclude-tools"} {
+		if containsSubsequence(cmd, []string{flag}) {
+			t.Fatalf("command %#v emitted %s with no restrictions configured", cmd, flag)
+		}
+	}
+}
+
+func TestGetRestoreCommandAppliesToolRestrictions(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Permissions:     ports.PermissionModeAcceptEdits,
+		AllowedTools:    []string{"read_file"},
+		DisallowedTools: []string{"edit"},
+		Session:         ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "sess-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected a restorable session")
+	}
+	for _, pair := range [][]string{
+		{"--allowed-tools", "read_file"},
+		{"--exclude-tools", "edit"},
+	} {
+		if !containsSubsequence(cmd, pair) {
+			t.Fatalf("restore command %#v missing %#v", cmd, pair)
+		}
+	}
+}
