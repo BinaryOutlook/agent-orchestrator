@@ -47,11 +47,11 @@ def export(attempt, recording, start, seconds, label):
     if clips.resolve() != clips:
         raise ValueError("Clip directory must not contain symlinks")
     output = clips / f"{label}-{uuid.uuid4()}.mp4"
-    # Screen recordings can hold their final frame beyond its last timestamp.
+    # Fill sparse frame gaps before trimming, including the held final frame.
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
          "-i", str(recording), "-ss", str(start),
-         "-t", str(seconds), "-an", "-vf", f"tpad=stop_mode=clone:stop_duration={source_seconds}",
+         "-t", str(seconds), "-an", "-vf", f"fps=30,tpad=stop_mode=clone:stop_duration={source_seconds}",
          "-c:v", "libx264", "-pix_fmt", "yuv420p",
          "-movflags", "+faststart", str(output)], check=True)
     export_seconds = duration(output)
