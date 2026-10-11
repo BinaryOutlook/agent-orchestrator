@@ -191,7 +191,7 @@ function humanMessageTitle(text: string): string {
 }
 
 export function canRollbackTurn(snapshot: ConversationSnapshot, turn: ConversationTurn): boolean {
-	return snapshot.capabilities?.includes("rollback") === true &&
+	return snapshot.controller.state !== "hibernated" && snapshot.capabilities?.includes("rollback") === true &&
 		!snapshot.turns.some((candidate) => candidate.state === "running" || candidate.state === "queued") &&
 		turn.state !== "running" && turn.state !== "queued" &&
 		Boolean(turn.providerTurnId) &&

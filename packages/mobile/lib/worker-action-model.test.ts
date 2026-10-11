@@ -62,13 +62,12 @@ describe("workerContextActions", () => {
 		expect(everything).not.toContain("pause");
 	});
 
-	it("keeps the destructive action last and marked", () => {
+	it("keeps the restorable archive action last without destructive styling", () => {
 		for (const over of [{}, { pinned: true, hasPr: true }, { terminated: true }]) {
 			const actions = workerContextActions(state(over));
 			const last = actions.at(-1);
-			expect(last?.id).toBe("delete");
-			expect(last?.destructive).toBe(true);
-			expect(actions.filter((a) => a.destructive)).toHaveLength(1);
+			expect(last).toEqual({ id: "delete", title: "Archive session" });
+			expect(actions.filter((a) => a.destructive)).toHaveLength(0);
 		}
 	});
 
@@ -86,6 +85,10 @@ describe("workerActionSymbol", () => {
 
 	it("distinguishes pin from unpin", () => {
 		expect(workerActionSymbol("pin")).not.toBe(workerActionSymbol("unpin"));
+	});
+
+	it("uses the archive box for the restorable session action", () => {
+		expect(workerActionSymbol("delete")).toBe("archivebox");
 	});
 });
 
@@ -106,6 +109,10 @@ describe("workerActionGlyph", () => {
 	it("pins with the same pushpin the desktop uses", () => {
 		expect(workerActionGlyph("pin")).toEqual({ family: "feather", name: "pin" });
 		expect(workerActionGlyph("unpin")).toEqual({ family: "feather", name: "pin-off" });
+	});
+
+	it("uses the archive glyph for the restorable session action", () => {
+		expect(workerActionGlyph("delete")).toEqual({ family: "feather", name: "archive" });
 	});
 
 	// Destructive and recovery actions are the ones you must not confuse.

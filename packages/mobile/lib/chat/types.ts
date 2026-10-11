@@ -1,6 +1,6 @@
 import type { SessionMode } from "../api";
 
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped";
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
 export type TurnState = "queued" | "running" | "completed" | "interrupted" | "failed";
 export type ActivityStatus = "running" | "completed" | "failed" | "cancelled" | "pending" | "resolved";
 export type ActivityKind =
@@ -267,6 +267,7 @@ export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | u
 }
 
 export function can(snapshot: ConversationSnapshot | undefined, capability: string): boolean {
+	if (snapshot?.controller.state === "hibernated" && (capability === "compaction" || capability === "rollback")) return false;
 	return Boolean(snapshot?.capabilities?.includes(capability));
 }
 

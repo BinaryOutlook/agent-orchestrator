@@ -275,6 +275,14 @@ describe("held order", () => {
 	const a = session({ id: "a", lastEventAt: "2026-08-09T10:00:00Z" });
 	const b = session({ id: "b", lastEventAt: "2026-08-09T09:00:00Z" });
 	const c = session({ id: "c", lastEventAt: "2026-08-09T08:00:00Z" });
+	it("reuses an unchanged snapshot but accepts rank, event, pin, host and removal changes", () => {
+		const snapshot = snapshotOrder([a, b], key);
+		expect(snapshotOrder([{ ...a, displayName: "New title" }, b], key, snapshot)).toBe(snapshot);
+		for (const ordered of [[b, a], [{ ...a, lastEventAt: "later" }, b], [{ ...a, isPinned: true }, b], [{ ...a, hostId: "mac" }, b], [a], []]) {
+			expect(snapshotOrder(ordered, key, snapshot)).not.toBe(snapshot);
+			expect(snapshotOrder(ordered, key, snapshot)).toEqual(snapshotOrder(ordered, key));
+		}
+	});
 
 	// The point of the snapshot: news does not move rows under a thumb.
 	it("keeps the shown order when a session has news, and counts it", () => {
@@ -296,6 +304,16 @@ describe("held order", () => {
 
 	it("counts nothing when nothing changed", () => {
 		expect(updatedSince(snapshotOrder([a, b, c], key), [a, b, c], key)).toBe(0);
+	});
+
+	it("baselines a newly loaded host instead of holding its existing workers as news", () => {
+		const local = { ...a, hostId: "mac" };
+		const remote = { ...b, hostId: "dev" };
+		const snapshot = snapshotOrder([local], key);
+		expect(updatedSince(snapshot, [local, remote], key)).toBe(0);
+		expect(shouldResnapshot(snapshot, [local, remote], true, key)).toBe(true);
+		const hydrated = snapshotOrder([local, remote], key);
+		expect(updatedSince(hydrated, [local, { ...remote, lastEventAt: "2026-08-09T11:00:00Z" }], key)).toBe(1);
 	});
 
 	it("absorbs news that did not move a row, so a later pin ranks most recent first", () => {

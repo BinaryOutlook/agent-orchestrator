@@ -34,7 +34,7 @@ export function ConversationActionsSheet({ entry, snapshot, onAction }: { entry:
 			case "pin": return { icon: "bookmark" as const, label: entry.pinned ? "Unpin worker" : "Pin worker", run: entry.onTogglePin };
 			case "compact": return { icon: "archive" as const, label: entry.compacting ? "Compacting history…" : "Compact history", disabled: turnInFlight || entry.compacting, run: entry.onCompact };
 			case "terminal_ui": return { icon: "repeat" as const, label: entry.interfaceSwitching ? "Switching interface…" : "Open Terminal UI", hint: !entry.interfaceSupported ? entry.interfaceReason || "This agent does not support a compatible handoff" : undefined, disabled: !entry.interfaceSupported || entry.interfaceSwitching, run: entry.onSwitchInterface };
-			case "delete": return { icon: "trash-2" as const, label: "Delete session", hint: "Terminates the agent. Conversation and worktree are kept.", destructive: true, run: entry.onDelete };
+			case "delete": return { icon: "archive" as const, label: "Archive session", hint: "Stops the agent and moves the session to Archive. Conversation and worktree are kept.", run: entry.onDelete };
 			case "reload_mcp": return { icon: "tool" as const, label: entry.mcpReloading ? "Reloading MCP servers…" : "Reload MCP servers", disabled: turnInFlight || entry.mcpReloading, run: entry.onReload };
 		}
 	};

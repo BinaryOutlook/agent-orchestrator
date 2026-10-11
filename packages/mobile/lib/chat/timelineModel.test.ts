@@ -21,6 +21,11 @@ function snapshot(): ConversationSnapshot {
 }
 
 describe("mobile Chat timeline model", () => {
+	it("does not offer rollback on a hibernated provider", () => {
+		const value = snapshot();
+		value.controller.state = "hibernated";
+		expect(canRollbackTurn(value, value.turns[0])).toBe(false);
+	});
 	it("keeps the empty state outside the inverted conversation surface", () => {
 		const value = snapshot();
 		value.items = [];
