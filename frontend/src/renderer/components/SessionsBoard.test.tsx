@@ -121,7 +121,7 @@ vi.mock("../lib/platform", async (importOriginal) => {
 import { archiveToggleHeightClassName, archiveToggleOffsetClassName } from "@aoagents/product-ui";
 import { useUiStore } from "../stores/ui-store";
 import { SessionsBoard } from "./SessionsBoard";
-import { toBoardSessionPresentation } from "./SessionsBoardAdapters";
+import { latestSessionArtifacts, toBoardSessionPresentation } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
 
 function renderBoard(projectId?: string) {
@@ -1850,6 +1850,18 @@ describe("SessionsBoard artifacts", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "p1", sessionId: "s-art" },
 		});
+	});
+
+	it("orders artifacts with equal or unparseable timestamps by path", () => {
+		const latest = latestSessionArtifacts(
+			[
+				artifact("b.md", "2026-01-01T00:00:00Z"),
+				artifact("bad.md", "not-a-date"),
+				artifact("a.md", "2026-01-01T00:00:00Z"),
+			],
+			3,
+		);
+		expect(latest.map((file) => file.name)).toEqual(["a.md", "b.md", "bad.md"]);
 	});
 
 	it("shows no artifacts for sessions whose output is not artifacts", async () => {

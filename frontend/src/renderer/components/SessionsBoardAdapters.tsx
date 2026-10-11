@@ -327,7 +327,10 @@ const BOARD_ARTIFACT_LIMIT = 2;
 /** The session's most recently updated artifacts, newest first. */
 export function latestSessionArtifacts(artifacts: SessionArtifact[], limit = BOARD_ARTIFACT_LIMIT): SessionArtifact[] {
 	return [...artifacts]
-		.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+		.sort(
+			(a, b) =>
+				(Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
+		)
 		.slice(0, limit);
 }
 
