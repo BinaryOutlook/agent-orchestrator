@@ -2289,6 +2289,45 @@ func TestRememberProjectPermissionsPinsExistingSessions(t *testing.T) {
 	}
 }
 
+func TestSessionOutputKindRoundTripsAndSurvivesUpdate(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "outputs")
+	rec := sampleRecord("outputs")
+	rec.Metadata.OutputKind = domain.SpawnOutputArtifact
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("load: %v %v", ok, err)
+	}
+	if got.Metadata.OutputKind != domain.SpawnOutputArtifact {
+		t.Fatalf("OutputKind = %q, want artifact", got.Metadata.OutputKind)
+	}
+	// A generic update from a record without the field must not clear it.
+	got.Metadata.OutputKind = ""
+	got.DisplayName = "renamed"
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, _, err := s.GetSession(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Metadata.OutputKind != domain.SpawnOutputArtifact {
+		t.Fatalf("OutputKind after update = %q, want artifact", reloaded.Metadata.OutputKind)
+	}
+	plain, err := s.CreateSession(ctx, sampleRecord("outputs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Metadata.OutputKind != "" {
+		t.Fatalf("default OutputKind = %q, want empty", plain.Metadata.OutputKind)
+	}
+}
+
 func TestClaimChatControllerGenerationPreservesRecency(t *testing.T) {
 	st := newTestStore(t)
 	seedProject(t, st, "restart")

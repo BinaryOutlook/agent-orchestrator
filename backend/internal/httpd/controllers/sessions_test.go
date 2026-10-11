@@ -2162,6 +2162,53 @@ func TestSessionsAPI_OrchestratorRejectsUnknownApprovalMode(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_APPROVAL_MODE")
 }
 
+func TestSessionsAPI_SpawnAcceptsArtifactOutputKind(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "project", body: `{"projectId":"ao","kind":"worker","harness":"codex","outputKind":"artifact","displayName":"New artifact"}`},
+		{name: "standalone", body: `{"kind":"worker","harness":"codex","outputKind":"artifact","displayName":"New artifact"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", tc.body)
+			if status != http.StatusCreated {
+				t.Fatalf("status = %d, want 201; body=%s", status, body)
+			}
+			if svc.lastSpawn.OutputKind != domain.SpawnOutputArtifact {
+				t.Fatalf("OutputKind = %q, want artifact", svc.lastSpawn.OutputKind)
+			}
+		})
+	}
+}
+
+func TestSessionsAPI_SpawnOmittedOutputKindStaysEmpty(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", `{"projectId":"ao","kind":"worker","harness":"codex"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.OutputKind != "" {
+		t.Fatalf("OutputKind = %q, want empty", svc.lastSpawn.OutputKind)
+	}
+}
+
+func TestSessionsAPI_SpawnRejectsUnknownOutputKind(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", `{"projectId":"ao","kind":"worker","harness":"codex","outputKind":"slides"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_OUTPUT_KIND")
+	if svc.lastSpawn.OutputKind != "" || svc.lastSpawn.ProjectID != "" {
+		t.Fatalf("rejected request reached the service: %#v", svc.lastSpawn)
+	}
+}
+
 func TestSessionsAPI_PreviewDiscoversAndServesStaticIndex(t *testing.T) {
 	svc := newFakeSessionService()
 	workspace := t.TempDir()

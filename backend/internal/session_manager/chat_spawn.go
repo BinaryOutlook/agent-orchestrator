@@ -249,6 +249,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 				DiffBaseSHA:       diffBaseSHA,
 				DiffBaseRef:       diffBaseRef,
 				ArtifactDir:       in.record.Metadata.ArtifactDir,
+				OutputKind:        in.record.Metadata.OutputKind,
 				// No RuntimeHandleID or RuntimeLaunchID: a chat session has no
 				// agent pane. Leaving them empty keeps the reaper from probing for
 				// a terminal that was never created.
@@ -443,7 +444,7 @@ func (m *Manager) resumeChatController(
 
 	// Recomputed rather than persisted, matching the terminal path: a restored
 	// session keeps its standing instructions across the relaunch.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, true)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.Metadata.OutputKind, true)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}

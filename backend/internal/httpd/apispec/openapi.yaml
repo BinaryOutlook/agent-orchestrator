@@ -16928,6 +16928,10 @@ components:
         model:
           maxLength: 256
           type: string
+        outputKind:
+          enum:
+          - artifact
+          type: string
         parentSessionId:
           type: string
         projectId:

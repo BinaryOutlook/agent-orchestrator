@@ -85,6 +85,19 @@ const (
 	SessionOutputPRAndArtifact SessionOutputType = "pr_artifact"
 )
 
+// SpawnOutputKind is the deliverable a spawn asks for. Empty is the ordinary
+// task flow; it does not change derived status or the Kanban column.
+type SpawnOutputKind string
+
+// SpawnOutputArtifact asks the agent to deliver a file in the session's
+// artifact directory instead of a pull request.
+const SpawnOutputArtifact SpawnOutputKind = "artifact"
+
+// Valid reports whether k is empty or a known output kind.
+func (k SpawnOutputKind) Valid() bool {
+	return k == "" || k == SpawnOutputArtifact
+}
+
 // HasPR reports whether a session's output includes a claimed/observed PR.
 func (t SessionOutputType) HasPR() bool {
 	return t == SessionOutputPR || t == SessionOutputPRAndArtifact
@@ -203,6 +216,9 @@ type SessionMetadata struct {
 	// ArtifactDir is the session-owned artifact directory under AO's data dir.
 	// It is outside the git workspace and is never exposed directly on the API.
 	ArtifactDir string `json:"-"`
+	// OutputKind is the deliverable requested at spawn. It is fixed after
+	// insertion so restore and agent switching rebuild the same worker prompt.
+	OutputKind SpawnOutputKind `json:"-"`
 	// BrowserCapabilityVerifier is a one-way verifier for the random browser
 	// capability held by this session's worker process. The bearer token itself
 	// is never persisted, so reading the database cannot grant access to another
