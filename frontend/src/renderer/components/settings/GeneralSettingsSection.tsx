@@ -123,6 +123,8 @@ function TerminalShellRows() {
 	);
 }
 
+const COLOR_THEME_OPTIONS = THEMES.map(({ id, label }) => ({ value: id, label })) satisfies SettingsOption<ThemeStyle>[];
+
 export function GeneralSettingsSection({
 	titleHidden,
 }: {
@@ -147,11 +149,14 @@ export function GeneralSettingsSection({
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
 
-	const colorThemeOptions = THEMES.map((theme) => ({
-		value: theme.id,
-		label: theme.label,
-		icon: <ThemePaletteSwatch palette={theme[resolvedTheme]} compact />,
-	})) satisfies SettingsOption<ThemeStyle>[];
+	// Trigger and menu rows share one layout: name, then the palette on the right.
+	const renderColorTheme = (option: SettingsOption<ThemeStyle> | undefined, compact = false) =>
+		option ? (
+			<>
+				<span className="min-w-0 flex-1 truncate">{option.label}</span>
+				<ThemePaletteSwatch palette={getThemeDefinition(option.value)[resolvedTheme]} compact={compact} />
+			</>
+		) : null;
 
 	const themeOptions = [
 		{ value: "light", label: t("settings.theme.light") },
@@ -179,16 +184,12 @@ export function GeneralSettingsSection({
 						<SettingsOptionMenu
 							aria-label={t("settings.colorTheme")}
 							value={themeStyle}
-							options={colorThemeOptions}
+							options={COLOR_THEME_OPTIONS}
 							onChange={setThemeStyle}
 							onHighlight={(previewed) => previewDocumentThemeStyle(previewed, useUiStore.getState().themeStyle)}
 							menuClassName="min-w-60"
-							renderMenuItem={(option) => (
-								<>
-									<span className="min-w-0 flex-1 truncate">{option.label}</span>
-									<ThemePaletteSwatch palette={getThemeDefinition(option.value)[resolvedTheme]} />
-								</>
-							)}
+							renderTrigger={(selected) => renderColorTheme(selected, true)}
+							renderMenuItem={(option) => renderColorTheme(option)}
 						/>
 						<SettingsOptionMenu
 							aria-label={t("settings.theme")}
