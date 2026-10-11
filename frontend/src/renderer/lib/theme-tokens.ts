@@ -3,9 +3,14 @@ import { THEMES, type ThemeDefinition, type ThemePalette } from "./theme-palette
 
 type Mode = "dark" | "light";
 
-/** Whichever of the two candidates reads better on `fill`. */
-function readableOn(fill: string, a: string, b: string): string {
-	return contrastRatio(fill, a) >= contrastRatio(fill, b) ? a : b;
+/**
+ * Label color for a filled surface: white when it clears AA (the conventional
+ * choice on saturated fills), otherwise whichever of white or black contrasts
+ * more. Mid-tone fills like #da702c or #4493f8 get black.
+ */
+function textOn(fill: string): string {
+	const onWhite = contrastRatio(fill, "#ffffff");
+	return onWhite >= 4.5 || onWhite >= contrastRatio(fill, "#000000") ? "#ffffff" : "#000000";
 }
 
 /**
@@ -16,8 +21,8 @@ function readableOn(fill: string, a: string, b: string): string {
 export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, string> {
 	const dark = mode === "dark";
 	const primary = p.primary ?? p.accent;
-	const onPrimary = readableOn(primary, p.bg, p.text);
-	const onAccent = readableOn(p.accent, p.bg, p.text);
+	const onPrimary = textOn(primary);
+	const onAccent = textOn(p.accent);
 	// Lift popovers off the canvas: lighter than panels in dark, near-white in light.
 	const popover = dark ? mixColor(p.panel, p.element, 0.6) : mixColor(p.panel, "#ffffff", 0.6);
 	const fade = (amount: number) => mixColor(p.bg, p.text, amount);

@@ -60,6 +60,12 @@ export function applyDocumentThemeStyle(style: ThemeStyle): void {
 	}
 }
 
+/** True when the document already shows `style`, e.g. because it is being previewed. */
+export function isDocumentThemeStyle(style: ThemeStyle): boolean {
+	if (typeof document === "undefined") return false;
+	return (document.documentElement.dataset.styleTheme ?? DEFAULT_THEME_STYLE) === style;
+}
+
 let previewing = false;
 
 /**
