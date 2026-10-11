@@ -1,16 +1,9 @@
+import { DEFAULT_THEME_STYLE, isThemeStyle, type ThemeStyle } from "./theme-palettes";
+import { installThemeStylesheet } from "./theme-tokens";
+
 export type Theme = "light" | "dark";
 export type ThemePreference = Theme | "system";
-
-export type ThemeStyle =
-	| "orchestrate"
-	| "github"
-	| "catppuccin"
-	| "dracula"
-	| "tokyo-night"
-	| "rose-pine"
-	| "nord"
-	| "gruvbox"
-	| "solarized";
+export type { ThemeStyle };
 
 export const themeStorageKey = "ao.theme";
 export const themeStyleStorageKey = "ao.theme-style";
@@ -44,23 +37,11 @@ export function resolveTheme(preference: ThemePreference = readStoredThemePrefer
 export function readStoredThemeStyle(): ThemeStyle {
 	try {
 		const stored = getLocalStorage()?.getItem(themeStyleStorageKey);
-		if (
-			stored === "orchestrate" ||
-			stored === "github" ||
-			stored === "catppuccin" ||
-			stored === "dracula" ||
-			stored === "tokyo-night" ||
-			stored === "rose-pine" ||
-			stored === "nord" ||
-			stored === "gruvbox" ||
-			stored === "solarized"
-		) {
-			return stored;
-		}
+		if (isThemeStyle(stored)) return stored;
 	} catch {
 		// ignore
 	}
-	return "orchestrate";
+	return DEFAULT_THEME_STYLE;
 }
 
 export function applyDocumentTheme(theme: Theme): void {
@@ -71,9 +52,10 @@ export function applyDocumentTheme(theme: Theme): void {
 
 export function applyDocumentThemeStyle(style: ThemeStyle): void {
 	if (typeof document === "undefined") return;
-	if (style === "orchestrate") {
+	if (style === DEFAULT_THEME_STYLE) {
 		delete document.documentElement.dataset.styleTheme;
 	} else {
+		installThemeStylesheet();
 		document.documentElement.dataset.styleTheme = style;
 	}
 }

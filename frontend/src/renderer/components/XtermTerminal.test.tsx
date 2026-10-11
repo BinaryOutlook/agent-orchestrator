@@ -803,11 +803,6 @@ describe("XtermTerminal", () => {
 				--color-text-terminal: #d7d7d2;
 				--color-working: #60a5fa;
 			}
-			:root[data-style-theme="github"] {
-				--background: #0d1117;
-				--foreground: #ccd3d8;
-				--primary: #58a6ff;
-			}
 		`;
 		document.head.appendChild(style);
 		delete document.documentElement.dataset.styleTheme;
@@ -819,10 +814,12 @@ describe("XtermTerminal", () => {
 
 			act(() => useUiStore.getState().setThemeStyle("github"));
 
+			// Named palettes come from the injected theme catalog stylesheet.
 			expect(state.lastTerminal!.options.theme).toMatchObject({
 				background: "#0d1117",
-				cursor: "#58a6ff",
-				foreground: "#ccd3d8",
+				cursor: "#4493f8",
+				foreground: "#e6edf3",
+				red: "#f85149",
 			});
 		} finally {
 			style.remove();

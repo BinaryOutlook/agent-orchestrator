@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { ThemePreference, ThemeStyle } from "../../lib/theme";
+import type { ThemePreference } from "../../lib/theme";
 import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
@@ -11,6 +11,7 @@ import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { ThemePicker } from "./ThemePicker";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
 import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
@@ -121,18 +122,6 @@ function TerminalShellRows() {
 	);
 }
 
-const COLOR_THEME_OPTIONS = [
-	{ value: "orchestrate", label: "Orchestrate" },
-	{ value: "github", label: "GitHub" },
-	{ value: "catppuccin", label: "Catppuccin" },
-	{ value: "dracula", label: "Dracula" },
-	{ value: "tokyo-night", label: "Tokyo Night" },
-	{ value: "rose-pine", label: "Rosé Pine" },
-	{ value: "nord", label: "Nord" },
-	{ value: "gruvbox", label: "Gruvbox" },
-	{ value: "solarized", label: "Solarized" },
-] satisfies SettingsOption<ThemeStyle>[];
-
 export function GeneralSettingsSection({
 	titleHidden,
 }: {
@@ -143,6 +132,7 @@ export function GeneralSettingsSection({
 	const setThemePreference = useUiStore((state) => state.setThemePreference);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const setThemeStyle = useUiStore((state) => state.setThemeStyle);
+	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const locale = useLocaleStore((state) => state.locale);
 	const setLocale = useLocaleStore((state) => state.setLocale);
 	const localeSaving = useLocaleStore((state) => state.saving);
@@ -178,21 +168,22 @@ export function GeneralSettingsSection({
 			{/* Appearance */}
 			<SettingsSection title={t("settings.appearance")} titleHidden={titleHidden} grouped>
 				<SettingsRow label={t("settings.theme")}>
-					<div className="flex items-center gap-1.5">
-						<SettingsOptionMenu
-							aria-label={t("settings.colorTheme")}
-							value={themeStyle}
-							options={COLOR_THEME_OPTIONS}
-							onChange={setThemeStyle}
-						/>
-						<SettingsOptionMenu
-							aria-label={t("settings.theme")}
-							value={themePreference}
-							options={themeOptions}
-							onChange={setThemePreference}
-						/>
-					</div>
+					<SettingsOptionMenu
+						aria-label={t("settings.theme")}
+						value={themePreference}
+						options={themeOptions}
+						onChange={setThemePreference}
+					/>
 				</SettingsRow>
+				<div className="settings-row-bar h-auto flex-col items-stretch gap-3">
+					<span className="text-sm leading-5 text-settings-label">{t("settings.colorTheme")}</span>
+					<ThemePicker
+						aria-label={t("settings.colorTheme")}
+						value={themeStyle}
+						mode={resolvedTheme}
+						onChange={setThemeStyle}
+					/>
+				</div>
 				<SettingsRow label={t("settings.language")}>
 					<SettingsOptionMenu
 						aria-label={t("settings.language")}
