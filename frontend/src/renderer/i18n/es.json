@@ -751,7 +751,7 @@
 	"mobile.disable": "Desactivar conexión móvil",
 	"mobile.keepAwake.label": "Mantener este Mac activo",
 	"mobile.keepAwake.help": "Evita que tu Mac entre en reposo mientras la conexión móvil está activa, para que tu teléfono siga pudiendo acceder a tus agentes. La pantalla puede apagarse y puedes bloquearla. Actívalo antes de alejarte.",
-	"mobile.keepAwake.laptopNote": "Cerrar la tapa sigue poniendo el MacBook en reposo, salvo que esté conectado a la corriente y a una pantalla externa.",
+	"mobile.keepAwake.laptopNote": "Cerrar la tapa sigue poniendo el MacBook en reposo, lo que pausa tus agentes y la conexión con tu teléfono, así que mantenla abierta salvo que esté conectado a la corriente y a una pantalla externa.",
 	"mobile.devices.empty": "Aún no hay dispositivos emparejados.",
 	"mobile.devices.loading": "Cargando dispositivos…",
 	"mobile.devices.notificationsFor": "Notificaciones de {{name}}",

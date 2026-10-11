@@ -744,7 +744,7 @@
 	"mobile.disable": "关闭移动连接",
 	"mobile.keepAwake.label": "保持这台 Mac 唤醒",
 	"mobile.keepAwake.help": "在移动连接开启期间阻止 Mac 进入睡眠，让手机仍能访问你的代理。显示器仍可关闭，你也可以锁定屏幕。离开前请打开此选项。",
-	"mobile.keepAwake.laptopNote": "除非 MacBook 接通电源并连接外接显示器，否则合上盖子仍会让它进入睡眠。",
+	"mobile.keepAwake.laptopNote": "合上盖子仍会让 MacBook 进入睡眠，你的代理和手机连接都会暂停。除非它接通电源并连接外接显示器，否则请保持盖子打开。",
 	"mobile.devices.empty": "尚未配对任何设备。",
 	"mobile.devices.loading": "正在加载设备…",
 	"mobile.devices.notificationsFor": "{{name}} 的通知",

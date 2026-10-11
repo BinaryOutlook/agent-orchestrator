@@ -751,7 +751,7 @@
 	"mobile.disable": "Désactiver la connexion mobile",
 	"mobile.keepAwake.label": "Garder ce Mac éveillé",
 	"mobile.keepAwake.help": "Empêche votre Mac de se mettre en veille tant que la connexion mobile est active, pour que votre téléphone puisse toujours joindre vos agents. L'écran peut quand même s'éteindre et vous pouvez le verrouiller. Activez cette option avant de vous absenter.",
-	"mobile.keepAwake.laptopNote": "Fermer l'écran met quand même un MacBook en veille, sauf s'il est branché sur secteur avec un écran externe.",
+	"mobile.keepAwake.laptopNote": "Fermer l'écran met quand même un MacBook en veille, ce qui suspend vos agents et la connexion avec votre téléphone : gardez-le ouvert, sauf s'il est branché sur secteur avec un écran externe.",
 	"mobile.devices.empty": "Aucun appareil associé pour le moment.",
 	"mobile.devices.loading": "Chargement des appareils…",
 	"mobile.devices.notificationsFor": "Notifications pour {{name}}",

@@ -65,7 +65,7 @@ The Expo/React Native app is a native control surface over the same daemon resou
 
 Mobile supports structured Chat, Terminal UI, session creation, the same capability-gated Chat/TUI handoff, approvals and structured input, model and agent controls, compaction and rollback when the session advertises those capabilities, voice dictation, attachments, a workspace shell, and generated previews.
 
-Mobile also exposes pull request, workspace review, and reviewer-run views. Push notifications need mobile permission, an unmuted paired device, and a running daemon with network access to its push service. Pairing alone does not guarantee push delivery. Supported macOS hosts can enable keep-awake in Connect Mobile; the host must remain awake and reachable for interactive access.
+Mobile also exposes pull request, workspace review, and reviewer-run views. Push notifications need mobile permission, an unmuted paired device, and a running daemon with network access to its push service. Pairing alone does not guarantee push delivery. Supported macOS hosts can enable keep-awake in Connect Mobile; the host must remain awake and reachable for interactive access. Keep-awake does not stop a MacBook from sleeping when its lid closes, so keep the lid open unless the Mac is plugged in with an external display.
 
 ## If the phone cannot connect
 
@@ -75,7 +75,7 @@ Mobile also exposes pull request, workspace review, and reviewer-run views. Push
 | Works on Wi-Fi but not elsewhere | Confirm a managed HTTPS endpoint is ready, rescan the refreshed QR, and test off Wi-Fi. A plain LAN or raw Tailscale address is not an iOS remote endpoint. |
 | Wrong computer or contract-version error | Check the computer name shown by the phone and update both apps. QR pairing checks the offered host identity before sending the password. |
 | Password rejected | Copy the current password from Connect Mobile or scan a new QR. Regeneration invalidates old credentials. Repeated wrong attempts can trigger a temporary lockout. |
-| Connection drops after sleep or full app exit | Wake the desktop and reopen Orchestrator. On supported Macs, enable keep-awake if appropriate; ordinary Quit/Cmd+Q leaves the server running, but **Quit AO Completely** stops it. Reopen the session after the network returns. |
+| Connection drops after sleep or full app exit | Wake the desktop and reopen Orchestrator. On supported Macs, enable keep-awake if appropriate and keep a MacBook's lid open unless it is plugged in with an external display; ordinary Quit/Cmd+Q leaves the server running, but **Quit AO Completely** stops it. Reopen the session after the network returns. |
 | No push alerts | Allow phone notifications, check that the device is not muted, and confirm the daemon can reach its push service. Open the app directly for interactive work. |
 
 <details>

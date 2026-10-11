@@ -741,7 +741,7 @@
 	"mobile.disable": "Turn off mobile connection",
 	"mobile.keepAwake.label": "Keep this Mac awake",
 	"mobile.keepAwake.help": "Stops your Mac from going to sleep while the mobile connection is on, so your phone can still reach your agents. The display can still turn off and you can lock the screen. Turn this on before you step away.",
-	"mobile.keepAwake.laptopNote": "Closing the lid still puts a MacBook to sleep unless it's plugged in with an external display.",
+	"mobile.keepAwake.laptopNote": "Closing the lid still puts a MacBook to sleep, pausing your agents and your phone connection, so keep the lid open unless it's plugged in with an external display.",
 	"mobile.devices.empty": "No devices paired yet.",
 	"mobile.devices.loading": "Loading devices…",
 	"mobile.devices.notificationsFor": "Notifications for {{name}}",

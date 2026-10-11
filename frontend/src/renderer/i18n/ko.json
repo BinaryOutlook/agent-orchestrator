@@ -744,7 +744,7 @@
 	"mobile.disable": "모바일 연결 끄기",
 	"mobile.keepAwake.label": "이 Mac 깨어 있게 유지",
 	"mobile.keepAwake.help": "모바일 연결이 켜져 있는 동안 Mac이 잠자기 모드로 전환되지 않게 하여 휴대폰에서 계속 에이전트에 접속할 수 있게 합니다. 디스플레이는 꺼질 수 있고 화면 잠금도 가능합니다. 자리를 비우기 전에 켜세요.",
-	"mobile.keepAwake.laptopNote": "MacBook은 전원과 외장 디스플레이에 연결되어 있지 않으면 덮개를 닫을 때 잠자기 모드로 전환됩니다.",
+	"mobile.keepAwake.laptopNote": "MacBook은 덮개를 닫으면 잠자기 모드로 전환되어 에이전트와 휴대폰 연결이 일시 중지됩니다. 전원과 외장 디스플레이에 연결되어 있지 않다면 덮개를 열어 두세요.",
 	"mobile.devices.empty": "아직 페어링된 기기가 없습니다.",
 	"mobile.devices.loading": "기기를 불러오는 중…",
 	"mobile.devices.notificationsFor": "{{name}}의 알림",

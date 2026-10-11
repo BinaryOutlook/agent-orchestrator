@@ -751,7 +751,7 @@
 	"mobile.disable": "Desativar conexão móvel",
 	"mobile.keepAwake.label": "Manter este Mac ativo",
 	"mobile.keepAwake.help": "Impede que o Mac entre em repouso enquanto a conexão móvel estiver ativa, para que seu celular continue acessando seus agentes. A tela ainda pode desligar e você pode bloqueá-la. Ative antes de se afastar.",
-	"mobile.keepAwake.laptopNote": "Fechar a tampa ainda coloca o MacBook em repouso, a menos que ele esteja na tomada e conectado a um monitor externo.",
+	"mobile.keepAwake.laptopNote": "Fechar a tampa ainda coloca o MacBook em repouso, o que pausa seus agentes e a conexão com o celular. Mantenha a tampa aberta, a menos que ele esteja na tomada e conectado a um monitor externo.",
 	"mobile.devices.empty": "Nenhum dispositivo emparelhado ainda.",
 	"mobile.devices.loading": "Carregando dispositivos…",
 	"mobile.devices.notificationsFor": "Notificações de {{name}}",
