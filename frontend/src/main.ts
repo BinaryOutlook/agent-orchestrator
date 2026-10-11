@@ -346,6 +346,7 @@ let keybindingOverrides: KeybindingOverrides = {};
 let keybindingRecordingActive = false;
 let closeShellTerminalShortcutEnabled = false;
 let terminalFocused = false;
+let terminalFontSizeFocused = false;
 let chatDraftRisks: ChatDraftBoundaryKind[] = [];
 let chatDraftDialog: ChatDraftDialogCopy | undefined;
 let chatDraftQuitConfirmed = false;
@@ -828,6 +829,7 @@ async function createWindowInternal(): Promise<void> {
 			void toggleAppDevTools(browserViewHost, getShellWebContents);
 		},
 		() => terminalFocused,
+		() => terminalFontSizeFocused,
 	);
 
 	browserViewHost = createBrowserViewHost({
@@ -930,9 +932,11 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("render-process-gone", () => {
 		keybindingRecordingActive = false;
 		terminalFocused = false;
+		terminalFontSizeFocused = false;
 	});
 	shellWebContents.on("did-start-loading", () => {
 		terminalFocused = false;
+		terminalFontSizeFocused = false;
 		trayLifecycle.clear();
 	});
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
@@ -2173,9 +2177,10 @@ ipcMain.on(SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, (_event, enabled: 
 	closeShellTerminalShortcutEnabled = enabled === true;
 });
 
-ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown) => {
+ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown, handlesFontSize: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof focused !== "boolean") return;
 	terminalFocused = focused;
+	terminalFontSizeFocused = focused && handlesFontSize === true;
 });
 
 ipcMain.on(SET_CHAT_DRAFT_RISK_CHANNEL, (event, risks: unknown, dialogCopy: unknown) => {

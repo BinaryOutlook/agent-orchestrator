@@ -439,4 +439,29 @@ describe("attachAppShortcuts", () => {
 		expect(appZoomEvent.preventDefault).not.toHaveBeenCalled();
 		expect(target.send).not.toHaveBeenCalled();
 	});
+
+	it("lets a focused terminal without font resizing keep Ctrl+W while app zoom stays free", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(
+			source,
+			false,
+			target,
+			false,
+			() => ({}),
+			() => false,
+			() => true,
+			undefined,
+			() => true,
+			() => false,
+		);
+
+		const closeEvent = source.emit({ key: "w", code: "KeyW", control: true });
+		expect(closeEvent.preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
+
+		const zoomEvent = source.emit({ key: "+", code: "Equal", control: true });
+		expect(zoomEvent.preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
+	});
 });

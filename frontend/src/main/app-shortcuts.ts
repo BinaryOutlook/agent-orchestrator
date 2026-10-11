@@ -93,6 +93,10 @@ export function attachAppShortcuts(
 	shouldHandle: (id: AppShortcutId, chord: ShortcutChord) => boolean = () => true,
 	onShortcut?: (id: AppShortcutId) => void,
 	isTerminalFocused: () => boolean = () => false,
+	// Only terminals that resize their own font claim the zoom chords; the rest
+	// leave them to app zoom. Defaults to "any focused terminal" for callers that
+	// do not distinguish.
+	isTerminalFontSizeFocused: () => boolean = isTerminalFocused,
 ): void {
 	contents.on("before-input-event", (event, input) => {
 		if (input.type !== "keyDown") return;
@@ -105,7 +109,7 @@ export function attachAppShortcuts(
 			alt: input.alt,
 		};
 		const fontSizeDelta = terminalFontSizeDelta(chord, isMac);
-		if (fontSizeDelta !== 0 && isTerminalFocused()) {
+		if (fontSizeDelta !== 0 && isTerminalFontSizeFocused()) {
 			event.preventDefault();
 			if (focusTarget) target.focus();
 			target.send(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, fontSizeDelta);

@@ -301,7 +301,8 @@ const api = {
 	terminal: {
 		saveDroppedFile: (input: { name: string; bytes: Uint8Array }) =>
 			ipcRenderer.invoke("terminal:saveDroppedFile", input) as Promise<string>,
-		setFocused: (focused: boolean) => ipcRenderer.send(SET_TERMINAL_FOCUSED_CHANNEL, focused),
+		setFocused: (focused: boolean, handlesFontSize = false) =>
+			ipcRenderer.send(SET_TERMINAL_FOCUSED_CHANNEL, focused, handlesFontSize),
 		onFontSizeShortcut: (listener: (delta: -1 | 1) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, delta: -1 | 1) => listener(delta);
 			ipcRenderer.on(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, wrapped);
