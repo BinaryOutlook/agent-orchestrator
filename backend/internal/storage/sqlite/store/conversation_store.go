@@ -2512,7 +2512,6 @@ func (s *Store) SettleAssistantMessage(
 	return nil
 }
 
-// UpsertActivity records or updates a non-message timeline entry.
 // ActivityStatusByProviderItem reports the status of one provider item.
 // Missing rows return ok=false.
 func (s *Store) ActivityStatusByProviderItem(ctx context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {
@@ -2529,6 +2528,7 @@ func (s *Store) ActivityStatusByProviderItem(ctx context.Context, conversationID
 	return row.Status, true, nil
 }
 
+// UpsertActivity records or updates a non-message timeline entry.
 func (s *Store) UpsertActivity(
 	ctx context.Context,
 	conversationID, providerTurnID string,
