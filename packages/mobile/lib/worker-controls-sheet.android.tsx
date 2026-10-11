@@ -11,6 +11,8 @@ import { useTheme } from "./ThemeProvider";
 import { ALL_WORKER_ENVIRONMENTS, ALL_WORKER_PROJECTS, workerEnvironmentOptions, workerProjectOptions, type WorkerEnvironment } from "./worker-controls";
 import { iconSize, space, type } from "./tokens";
 
+const ANDROID_SHEET_HIDE_MS = 180;
+
 export function WorkerControlsSheet({
 	open,
 	onDismiss,
@@ -35,7 +37,11 @@ export function WorkerControlsSheet({
 	const t = useTheme();
 	const styles = makeStyles(t);
 	const insets = useSafeAreaInsets();
-	const draft = useWorkerControlsDraft({ open, selectedEnvironmentId, selectedProjectId, projects, onSelectEnvironment, onSelectProject, onDismiss, onSearch });
+	// @expo/ui fires Android onClose as soon as the sheet is told to close, while
+	// its window is still animating out. Focusing search then leaves the field
+	// focused without a keyboard (reproduced on a Samsung M31), so wait for the
+	// hide to finish, as the sheet did before it moved to onClose.
+	const draft = useWorkerControlsDraft({ open, selectedEnvironmentId, selectedProjectId, projects, onSelectEnvironment, onSelectProject, onDismiss, onSearch, searchDelayMs: ANDROID_SHEET_HIDE_MS });
 	const environmentOptions = workerEnvironmentOptions(environments);
 	const projectOptions = workerProjectOptions(projects, draft.environmentId);
 

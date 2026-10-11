@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { workerProjectForEnvironment } from "./worker-controls";
 
 /** Apply selections on tap; only search waits for the native sheet to dismiss. */
-export function useWorkerControlsDraft({ open, selectedEnvironmentId, selectedProjectId, projects, onSelectEnvironment, onSelectProject, onDismiss, onSearch }: {
+export function useWorkerControlsDraft({ open, selectedEnvironmentId, selectedProjectId, projects, onSelectEnvironment, onSelectProject, onDismiss, onSearch, searchDelayMs = 0 }: {
 	open: boolean;
 	selectedEnvironmentId: string;
 	selectedProjectId: string;
@@ -11,6 +11,8 @@ export function useWorkerControlsDraft({ open, selectedEnvironmentId, selectedPr
 	onSelectProject(id: string): void;
 	onDismiss(): void;
 	onSearch(): void;
+	/** Extra wait after onClose before focusing search; see the Android sheet. */
+	searchDelayMs?: number;
 }) {
 	const [environmentId, setEnvironmentId] = useState(selectedEnvironmentId);
 	const [projectId, setProjectId] = useState(selectedProjectId);
@@ -47,9 +49,12 @@ export function useWorkerControlsDraft({ open, selectedEnvironmentId, selectedPr
 		didClose() {
 			if (closed.current) return;
 			closed.current = true;
-			// Native onClose fires after SwiftUI dismissal / Android hide completes.
+			// iOS fires onClose after the SwiftUI dismissal finishes. Android fires it
+			// as soon as a programmatic close starts, hence searchDelayMs there.
 			onDismiss();
-			if (searchAfterClose.current) onSearch();
+			if (!searchAfterClose.current) return;
+			if (searchDelayMs > 0) setTimeout(onSearch, searchDelayMs);
+			else onSearch();
 		},
 	};
 }

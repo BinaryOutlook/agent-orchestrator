@@ -68,9 +68,11 @@ const props = {
 };
 
 describe.each([
-	["iOS fallback", WorkerControlsSheet],
-	["Android", AndroidWorkerControlsSheet],
-])("%s worker controls", (_platform, Controls) => {
+	// iOS reports onClose after the dismissal finishes. Android reports it as the
+	// hide starts, and focusing search then left the keyboard closed on device.
+	["iOS fallback", WorkerControlsSheet, 0],
+	["Android", AndroidWorkerControlsSheet, 180],
+] as const)("%s worker controls", (_platform, Controls, searchDelayMs) => {
 	it("shows each saved host symbol instead of a generic monitor", async () => {
 		await act(async () => { renderer = create(<Controls {...props} environments={[
 			{ id: "mac", name: "Mac", appearance: { symbol: "laptop" } },
@@ -138,13 +140,22 @@ describe.each([
 		expect(onSelectEnvironment).not.toHaveBeenCalled();
 	});
 
-	it("opens search after dismissal rather than after a guessed timeout", async () => {
-		const onSearch = vi.fn();
-		await act(async () => { renderer = create(<Controls {...props} onSearch={onSearch} />); });
-		await act(async () => { renderer!.root.findByProps({ accessibilityLabel: "Search workers" }).props.onPress(); });
-		expect(onSearch).not.toHaveBeenCalled();
-		await act(async () => { renderer!.root.findByType("BottomSheet" as never).props.onClose(); });
-		expect(onSearch).toHaveBeenCalledTimes(1);
+	it("opens search only once the sheet has finished hiding", async () => {
+		vi.useFakeTimers();
+		try {
+			const onSearch = vi.fn();
+			await act(async () => { renderer = create(<Controls {...props} onSearch={onSearch} />); });
+			await act(async () => { renderer!.root.findByProps({ accessibilityLabel: "Search workers" }).props.onPress(); });
+			expect(onSearch).not.toHaveBeenCalled();
+			await act(async () => { renderer!.root.findByType("BottomSheet" as never).props.onClose(); });
+			if (searchDelayMs > 0) {
+				expect(onSearch).not.toHaveBeenCalled();
+				await act(async () => { vi.advanceTimersByTime(searchDelayMs); });
+			}
+			expect(onSearch).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("starts a reopened sheet from the applied selection instead of its previous draft", async () => {
