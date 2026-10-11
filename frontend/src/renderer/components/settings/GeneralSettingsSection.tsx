@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { ThemePreference, ThemeStyle } from "../../lib/theme";
-import { THEMES } from "../../lib/theme-palettes";
+import { applyDocumentThemeStyle, runThemeTransition, type ThemePreference, type ThemeStyle } from "../../lib/theme";
+import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
 import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
@@ -12,6 +12,7 @@ import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
 import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
@@ -122,8 +123,6 @@ function TerminalShellRows() {
 	);
 }
 
-const COLOR_THEME_OPTIONS = THEMES.map(({ id, label }) => ({ value: id, label })) satisfies SettingsOption<ThemeStyle>[];
-
 export function GeneralSettingsSection({
 	titleHidden,
 }: {
@@ -134,6 +133,7 @@ export function GeneralSettingsSection({
 	const setThemePreference = useUiStore((state) => state.setThemePreference);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const setThemeStyle = useUiStore((state) => state.setThemeStyle);
+	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const locale = useLocaleStore((state) => state.locale);
 	const setLocale = useLocaleStore((state) => state.setLocale);
 	const localeSaving = useLocaleStore((state) => state.saving);
@@ -146,6 +146,12 @@ export function GeneralSettingsSection({
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
+
+	const colorThemeOptions = THEMES.map((theme) => ({
+		value: theme.id,
+		label: theme.label,
+		icon: <ThemePaletteSwatch palette={theme[resolvedTheme]} compact />,
+	})) satisfies SettingsOption<ThemeStyle>[];
 
 	const themeOptions = [
 		{ value: "light", label: t("settings.theme.light") },
@@ -173,8 +179,20 @@ export function GeneralSettingsSection({
 						<SettingsOptionMenu
 							aria-label={t("settings.colorTheme")}
 							value={themeStyle}
-							options={COLOR_THEME_OPTIONS}
+							options={colorThemeOptions}
 							onChange={setThemeStyle}
+							onHighlight={(previewed) =>
+								runThemeTransition(() =>
+									applyDocumentThemeStyle(previewed ?? useUiStore.getState().themeStyle),
+								)
+							}
+							menuClassName="min-w-60"
+							renderMenuItem={(option) => (
+								<>
+									<span className="min-w-0 flex-1 truncate">{option.label}</span>
+									<ThemePaletteSwatch palette={getThemeDefinition(option.value)[resolvedTheme]} />
+								</>
+							)}
 						/>
 						<SettingsOptionMenu
 							aria-label={t("settings.theme")}

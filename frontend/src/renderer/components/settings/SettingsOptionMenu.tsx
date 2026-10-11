@@ -20,6 +20,7 @@ export function SettingsOptionMenu<T extends string>({
 	value,
 	options,
 	onChange,
+	onHighlight,
 	disabled,
 	placeholder,
 	renderMenuItem,
@@ -39,6 +40,8 @@ export function SettingsOptionMenu<T extends string>({
 	value: T;
 	options: SettingsOption<T>[];
 	onChange: (value: T) => void;
+	/** Called with the pointer- or keyboard-highlighted option, and `null` when the menu closes. */
+	onHighlight?: (value: T | null) => void;
 	disabled?: boolean;
 	placeholder?: string;
 	renderMenuItem?: (option: SettingsOption<T>, selected: boolean) => ReactNode;
@@ -89,7 +92,10 @@ export function SettingsOptionMenu<T extends string>({
 		<DropdownMenu
 			onOpenChange={(open) => {
 				setMenuOpen(open);
-				if (!open) setSearch("");
+				if (!open) {
+					setSearch("");
+					onHighlight?.(null);
+				}
 			}}
 		>
 			<DropdownMenuTrigger asChild disabled={disabled}>
@@ -141,6 +147,7 @@ export function SettingsOptionMenu<T extends string>({
 								key={option.value}
 								disabled={option.disabled}
 								onSelect={() => onChange(option.value)}
+								onFocus={onHighlight ? () => onHighlight(option.value) : undefined}
 								className={cn(
 									SETTINGS_MENU_ITEM,
 									option.value === value && "border-settings-menu bg-settings-menu-selected text-settings-title",
