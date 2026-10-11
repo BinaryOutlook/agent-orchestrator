@@ -52,7 +52,7 @@ beforeEach(() => {
 it("hands the folder row to the flow, which owns the picker and any git preparation", async () => {
 	renderStep();
 
-	await userEvent.click(screen.getByRole("button", { name: "Import an existing project" }));
+	await userEvent.click(screen.getByRole("button", { name: "Open a local folder" }));
 
 	expect(flowMocks.triggers.at(-1)).toEqual({ kind: "folder", nonce: 1 });
 });
@@ -60,14 +60,14 @@ it("hands the folder row to the flow, which owns the picker and any git preparat
 it("hands the clone row to the flow", async () => {
 	renderStep();
 
-	await userEvent.click(screen.getByRole("button", { name: "Clone from Git" }));
+	await userEvent.click(screen.getByRole("button", { name: "Clone a repo" }));
 
 	expect(flowMocks.triggers.at(-1)).toEqual({ kind: "clone", nonce: 1 });
 });
 
 it("re-triggers the flow when the same row is picked again", async () => {
 	renderStep();
-	const clone = screen.getByRole("button", { name: "Clone from Git" });
+	const clone = screen.getByRole("button", { name: "Clone a repo" });
 
 	await userEvent.click(clone);
 	await userEvent.click(clone);
