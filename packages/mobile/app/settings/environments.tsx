@@ -18,7 +18,7 @@ import { probeEndpoint } from "../../lib/connectRuntime";
 import { forgetPairedHost, forgetServer } from "../../lib/disconnect";
 import { EnvironmentEditorActions, EnvironmentMachineRow, type EnvironmentEditorState, type EnvironmentMachineSave } from "../../lib/EnvironmentMachineRow";
 import { haptics } from "../../lib/haptics";
-import { activeHost, loadHosts, renameHost, saveHost, updateHostAppearance, type Host as PairedHost } from "../../lib/hosts";
+import { activeHost, activeHostMetadata, loadHosts, renameHost, saveHost, updateHostAppearance, type Host as PairedHost } from "../../lib/hosts";
 import { Feather } from "../../lib/icons";
 import { DifferentMachineError, persistManualHostEdit } from "../../lib/manualConnect";
 import { NativeHeaderButton } from "../../lib/native-header-button";
@@ -133,13 +133,16 @@ export default function EnvironmentsScreen() {
 
 	async function forgetEnvironment(host: PairedHost) {
 		if (deletingHostId !== null || switchingHostId !== null) return;
-		const deletingDefault = host.id === defaultHostId;
 		setDeletingHostId(host.id);
 		setNotice(undefined);
 		try {
+			// defaultHostId is only refreshed on focus; account sync may have moved
+			// the selection since. Decide from storage, and always forget this row.
+			let selectedId = defaultHostId;
 			let failed = false;
 			try {
-				if (deletingDefault) await forgetServer();
+				selectedId = (await activeHostMetadata())?.id ?? null;
+				if (selectedId === host.id) await forgetServer(host);
 				else await forgetPairedHost(host);
 			} catch {
 				failed = true;
@@ -158,9 +161,10 @@ export default function EnvironmentsScreen() {
 				return;
 			}
 			setHosts(remaining);
+			const deletingDefault = selectedId === host.id;
 			// removeHost clears the selected pointer; loadHosts is recency-sorted,
 			// matching activeHost's fallback without another keychain/network wait.
-			const nextDefault = remaining.find((candidate) => candidate.id === defaultHostId) ?? remaining[0];
+			const nextDefault = remaining.find((candidate) => candidate.id === selectedId) ?? remaining[0];
 			setDefaultHostId(nextDefault?.id ?? null);
 			setExpandedHostId((current) => current === host.id ? null : current);
 			setEditor((current) => current?.hostId === host.id ? null : current);

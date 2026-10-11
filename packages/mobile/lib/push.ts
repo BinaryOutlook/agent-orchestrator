@@ -352,7 +352,11 @@ export async function unpairFromServer(target: HostMetadata | null): Promise<voi
 
 let pendingUnpairRetry: Promise<void> | undefined;
 let retryAgain = false;
-export function retryPendingUnpairs(): Promise<void> {
+let retryImmediately = false;
+/** `immediate` (launch, foreground) skips the unreachable-machine backoff:
+ * the network has most likely changed since the last attempt. */
+export function retryPendingUnpairs(options: { immediate?: boolean } = {}): Promise<void> {
+	retryImmediately ||= options.immediate === true;
 	if (pendingUnpairRetry) {
 		retryAgain = true;
 		return pendingUnpairRetry;
@@ -360,7 +364,9 @@ export function retryPendingUnpairs(): Promise<void> {
 	pendingUnpairRetry = orderedMutation(async () => {
 		do {
 			retryAgain = false;
-			await flushMachineUnpairs();
+			const immediate = retryImmediately;
+			retryImmediately = false;
+			await flushMachineUnpairs({ ignoreBackoff: immediate });
 		} while (retryAgain);
 	}).finally(() => { pendingUnpairRetry = undefined; });
 	return pendingUnpairRetry;

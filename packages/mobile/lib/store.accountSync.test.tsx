@@ -83,3 +83,21 @@ it("keeps the live connection on an unchanged account sync", async () => {
 	await act(async () => { state.finishSync!(); });
 	expect(state.resolveConfig).toHaveBeenCalledTimes(1);
 });
+
+it("does not restart a launch race that is still in flight when sync finishes", async () => {
+	state.hosts = [host];
+	let finishRace!: (value: typeof config) => void;
+	state.resolveConfig.mockImplementation(() => new Promise((resolve) => { finishRace = resolve; }));
+	await act(async () => { renderer = create(<AppProvider><></></AppProvider>); });
+	await act(async () => { state.finishSync!(); });
+	expect(state.resolveConfig).toHaveBeenCalledTimes(1);
+	await act(async () => { finishRace(config); });
+});
+
+it("leaves an unreachable selected host to the reconnect timer on unchanged syncs", async () => {
+	state.hosts = [host];
+	state.resolveConfig.mockResolvedValue(null);
+	await act(async () => { renderer = create(<AppProvider><></></AppProvider>); });
+	await act(async () => { state.finishSync!(); });
+	expect(state.resolveConfig).toHaveBeenCalledTimes(1);
+});

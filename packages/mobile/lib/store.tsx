@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 // Aliased: this file already declares its own `AppState` type for the
 // provider's context value, so the React Native app-lifecycle API imports
 // under a different name to avoid colliding with it.
@@ -514,10 +514,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				const selected = await activeHost();
 				if (!current) return;
 				// Reconcile removal and credential/route rotation, but do not tear
-				// down a working connection on unchanged directory polls.
+				// down a working connection on unchanged directory polls. A selected
+				// host with no config yet is either mid-race (launch, resume) or
+				// offline; the reconnect timer below owns that, and racing again here
+				// would discard the in-flight attempt.
 				if (!sameHostConnections(previousSelected ? [previousSelected] : [], selected ? [selected] : []) ||
-					(cfgRef.current?.hostId && !hosts.some((host) => host.id === cfgRef.current?.hostId)) ||
-					(!cfgRef.current && selected)) void reloadConfig();
+					(cfgRef.current?.hostId && !hosts.some((host) => host.id === cfgRef.current?.hostId))) void reloadConfig();
 			}).catch(() => {});
 		};
 		sync();
@@ -804,9 +806,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			lastSyncAt: lastSyncAtRef.current,
 		};
 	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, projects, projectsKnown, visibleSessions, visibleOrchestrators, orchestratorId, stats, notificationsUnread]);
-	primarySnapshotRef.current = selectedHostId
-		? hostStates.find((host) => host.hostId === selectedHostId) ?? null
-		: null;
+	// Published after commit, never during render: an interrupted or replayed
+	// render must not hand switchHost a snapshot that never reached the screen.
+	// A layout effect runs before any user event can call switchHost.
+	useLayoutEffect(() => {
+		primarySnapshotRef.current = selectedHostId
+			? hostStates.find((host) => host.hostId === selectedHostId) ?? null
+			: null;
+	}, [hostStates, selectedHostId]);
 	const [sessionRows] = useState(() => createHostedRowsCache<DashboardSession>());
 	const [projectRows] = useState(() => createHostedRowsCache<ProjectInfo>());
 	const [orchestratorRows] = useState(() => createHostedRowsCache<OrchestratorLink>());

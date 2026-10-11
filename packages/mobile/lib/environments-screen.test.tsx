@@ -54,6 +54,7 @@ vi.mock("../lib/EnvironmentMachineRow", async () => {
 vi.mock("../lib/haptics", () => ({ haptics: { error: vi.fn(), success: vi.fn(), select: vi.fn(), tap: vi.fn() } }));
 vi.mock("../lib/hosts", () => ({
 	activeHost: fixtures.activeHost,
+	activeHostMetadata: fixtures.activeHost,
 	loadHosts: fixtures.loadHosts,
 	renameHost: vi.fn(),
 	saveHost: vi.fn(),
@@ -164,7 +165,8 @@ describe("forgetting environments", () => {
 		fixtures.activeHost.mockResolvedValue(a);
 		await act(async () => { renderer = create(<EnvironmentsScreen />); });
 		fixtures.loadHosts.mockResolvedValue(lastMachine ? [] : [b]);
-		fixtures.activeHost.mockResolvedValue(lastMachine ? null : b);
+		// A is still selected when Forget reads storage; B (or nothing) afterwards.
+		fixtures.activeHost.mockResolvedValueOnce(a).mockResolvedValue(lastMachine ? null : b);
 		let release!: () => void;
 		fixtures.reloadConfig.mockReturnValue(new Promise<void>((resolve) => { release = resolve; }));
 		vi.mocked(forgetServer).mockResolvedValue(undefined);
@@ -215,5 +217,34 @@ describe("forgetting environments", () => {
 		expect(fixtures.reloadConfig).not.toHaveBeenCalled();
 		expect(renderer!.root.findByType("EnvironmentMachineRow" as never).props.isDefault).toBe(true);
 		expect(renderer!.root.findByProps({ testID: "environment-forgotten-notice" }).props.children).toBe("B forgotten.");
+	});
+
+	it("forgets the tapped machine even when the selection changed while the screen was open", async () => {
+		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 2 };
+		const b = { ...a, id: "b", name: "B", lastConnected: 1 };
+		fixtures.loadHosts.mockResolvedValue([a, b]);
+		fixtures.activeHost.mockResolvedValue(a);
+		await act(async () => { renderer = create(<EnvironmentsScreen />); });
+		// Account sync moved the default to B; this screen still shows A as default.
+		fixtures.activeHost.mockResolvedValue(b);
+		fixtures.loadHosts.mockResolvedValue([b]);
+		await act(async () => { await renderer!.root.findAllByType("EnvironmentMachineRow" as never)[0].props.onForget(); });
+		expect(forgetServer).not.toHaveBeenCalled();
+		expect(forgetPairedHost).toHaveBeenCalledWith(a);
+		expect(fixtures.reloadConfig).not.toHaveBeenCalled();
+		expect(renderer!.root.findByType("EnvironmentMachineRow" as never).props.isDefault).toBe(true);
+		expect(renderer!.root.findByProps({ testID: "environment-forgotten-notice" }).props.children).toBe("A forgotten.");
+	});
+
+	it("passes the tapped default to forgetServer instead of re-reading the selection", async () => {
+		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 1 };
+		fixtures.loadHosts.mockResolvedValue([a]);
+		fixtures.activeHost.mockResolvedValue(a);
+		await act(async () => { renderer = create(<EnvironmentsScreen />); });
+		fixtures.loadHosts.mockResolvedValue([]);
+		fixtures.reloadConfig.mockResolvedValue(undefined);
+		await act(async () => { await renderer!.root.findByType("EnvironmentMachineRow" as never).props.onForget(); });
+		expect(forgetServer).toHaveBeenCalledWith(a);
+		expect(forgetPairedHost).not.toHaveBeenCalled();
 	});
 });

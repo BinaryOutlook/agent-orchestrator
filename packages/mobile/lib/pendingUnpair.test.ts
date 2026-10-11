@@ -13,11 +13,17 @@ vi.mock("expo-secure-store", () => ({
 	setItemAsync: async (key: string, value: string) => void secure.set(key, value),
 	deleteItemAsync: async (key: string) => void secure.delete(key),
 }));
-vi.mock("./api", () => ({ unpairFromDaemon: vi.fn(async () => {}) }));
+vi.mock("./api", async (importOriginal) => ({ ...await importOriginal<typeof import("./api")>(), unpairFromDaemon: vi.fn(async () => {}) }));
 
-import { unpairFromDaemon } from "./api";
+import { ApiError, unpairFromDaemon } from "./api";
 import { loadHosts, removeHost, saveHost } from "./hosts";
-import { flushMachineUnpairs, markMachineUnpaired, queueMachineUnpair } from "./pendingUnpair";
+import { flushMachineUnpairs, markMachineUnpaired, MAX_PENDING_UNPAIRS, PENDING_UNPAIR_MAX_AGE_MS, queueMachineUnpair } from "./pendingUnpair";
+
+/** Retries back off per job; move the clock past the first retry delay. */
+function advanceClock(ms: number) {
+	vi.useFakeTimers({ toFake: ["Date"] });
+	vi.setSystemTime(Date.now() + ms);
+}
 
 const host: Host = { id: "h_a", name: "A", platform: "darwin", lastConnected: 1,
 	token: "secret-a", endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }] };
@@ -47,6 +53,7 @@ describe("durable machine unpair cleanup", () => {
 		expect(unpairFromDaemon).not.toHaveBeenCalled();
 		expect(secure.size).toBeGreaterThan(0);
 		vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ hostId: "h_a", apiVersion: 1 }) } as Response);
+		advanceClock(30_000);
 		await flushMachineUnpairs();
 		expect(unpairFromDaemon).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hostId: "h_a", password: "secret-a" }), "phone-id");
 		expect(secure.size).toBe(0);
@@ -57,6 +64,7 @@ describe("durable machine unpair cleanup", () => {
 		vi.mocked(unpairFromDaemon).mockRejectedValueOnce(new Error("timeout"));
 		await flushMachineUnpairs();
 		expect(secure.size).toBeGreaterThan(0);
+		advanceClock(30_000);
 		await flushMachineUnpairs();
 		expect(unpairFromDaemon).toHaveBeenCalledTimes(2);
 		expect(secure.size).toBe(0);
@@ -147,5 +155,76 @@ describe("durable machine unpair cleanup", () => {
 		await flushMachineUnpairs();
 		expect(unpairFromDaemon).toHaveBeenLastCalledWith(expect.objectContaining({ hostId: "h_b", password: "secret-b" }), "phone-id");
 		expect(secure.size).toBe(0);
+	});
+
+	it("backs off an unreachable machine instead of probing it on every tick", async () => {
+		await queueMachineUnpair(host, "phone-id");
+		vi.mocked(fetch).mockRejectedValue(new Error("offline"));
+		await flushMachineUnpairs();
+		await flushMachineUnpairs();
+		expect(fetch).toHaveBeenCalledOnce();
+		advanceClock(30_000);
+		await flushMachineUnpairs();
+		expect(fetch).toHaveBeenCalledTimes(2);
+		advanceClock(30_000);
+		await flushMachineUnpairs();
+		expect(fetch).toHaveBeenCalledTimes(2);
+		advanceClock(30_000);
+		await flushMachineUnpairs();
+		expect(fetch).toHaveBeenCalledTimes(3);
+	});
+
+	it("lets a launch or foreground retry skip the backoff", async () => {
+		await queueMachineUnpair(host, "phone-id");
+		vi.mocked(fetch).mockRejectedValueOnce(new Error("offline"));
+		await flushMachineUnpairs();
+		await flushMachineUnpairs({ ignoreBackoff: true });
+		expect(unpairFromDaemon).toHaveBeenCalledOnce();
+		expect(secure.size).toBe(0);
+	});
+
+	it("drops cleanup the verified machine rejects as unauthorized", async () => {
+		await queueMachineUnpair(host, "phone-id");
+		vi.mocked(unpairFromDaemon).mockRejectedValueOnce(new ApiError(401, "unauthorized"));
+		await flushMachineUnpairs();
+		expect(secure.size).toBe(0);
+		expect(plain.has("ao.pendingUnpairIds")).toBe(false);
+	});
+
+	it("keeps cleanup after a server error", async () => {
+		await queueMachineUnpair(host, "phone-id");
+		vi.mocked(unpairFromDaemon).mockRejectedValueOnce(new ApiError(500, "boom"));
+		await flushMachineUnpairs();
+		expect([...secure.values()].join("")).toContain("secret-a");
+	});
+
+	it("abandons cleanup for a machine unreachable past the retention window", async () => {
+		await queueMachineUnpair(host, "phone-id");
+		vi.mocked(fetch).mockRejectedValue(new Error("offline"));
+		advanceClock(PENDING_UNPAIR_MAX_AGE_MS + 1);
+		await flushMachineUnpairs();
+		expect(fetch).not.toHaveBeenCalled();
+		expect(secure.size).toBe(0);
+	});
+
+	it("caps queued cleanups by dropping the oldest", async () => {
+		for (let index = 0; index <= MAX_PENDING_UNPAIRS; index++) {
+			await queueMachineUnpair({ ...host, id: `h_${index}`, token: `secret-${index}` }, "phone-id");
+		}
+		expect(secure.size).toBe(MAX_PENDING_UNPAIRS);
+		expect(JSON.parse(plain.get("ao.pendingUnpairIds")!)).toHaveLength(MAX_PENDING_UNPAIRS);
+		expect([...secure.values()].some((value) => value.includes("\"secret-0\""))).toBe(false);
+	});
+
+	it("does not let one corrupted entry stall other cleanups", async () => {
+		await queueMachineUnpair(host, "phone-id");
+		const [key] = JSON.parse(plain.get("ao.pendingUnpairIds")!) as string[];
+		secure.set(key, "{not json");
+		await queueMachineUnpair({ ...host, id: "h_b", token: "secret-b" }, "phone-id");
+		vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ hostId: "h_b", apiVersion: 1 }) } as Response);
+		await flushMachineUnpairs();
+		expect(unpairFromDaemon).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hostId: "h_b" }), "phone-id");
+		expect(secure.size).toBe(0);
+		expect(plain.has("ao.pendingUnpairIds")).toBe(false);
 	});
 });

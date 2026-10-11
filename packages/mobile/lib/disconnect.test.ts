@@ -204,6 +204,13 @@ describe("forgetServer and the host list", () => {
 		expect(calls).toContain("removeHost:h_active");
 	});
 
+	it("forgets the machine the caller chose even if the selection moved", async () => {
+		await forgetServer(other);
+		expect(unpairTargets).toEqual([other]);
+		expect(calls).toContain("removeHost:h_other");
+		expect(calls).not.toContain("removeHost:h_active");
+	});
+
 	it("finishes local cleanup when removing the host token fails", async () => {
 		removeHostThrows = new Error("SecureStore unavailable");
 

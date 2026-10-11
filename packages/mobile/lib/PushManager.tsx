@@ -56,12 +56,12 @@ export function PushManager(): null {
 	// Runs even with zero paired hosts, including onboarding after forgetting
 	// the last machine. The durable outbox also survives an app restart.
 	useEffect(() => {
-		const retry = () => {
-			if (shouldPoll(AppState.currentState)) void retryPendingUnpairs().catch(() => {});
+		const retry = (immediate: boolean) => {
+			if (shouldPoll(AppState.currentState)) void retryPendingUnpairs({ immediate }).catch(() => {});
 		};
-		retry();
-		const timer = setInterval(retry, 30_000);
-		const sub = AppState.addEventListener("change", (state) => { if (shouldPoll(state)) retry(); });
+		retry(true);
+		const timer = setInterval(() => retry(false), 30_000);
+		const sub = AppState.addEventListener("change", (state) => { if (shouldPoll(state)) retry(true); });
 		return () => { clearInterval(timer); sub.remove(); };
 	}, []);
 
