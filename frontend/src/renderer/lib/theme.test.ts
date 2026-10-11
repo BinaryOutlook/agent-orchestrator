@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
+	previewDocumentThemeStyle,
 	runThemeTransition,
 } from "./theme";
 
@@ -77,5 +78,45 @@ describe("applyDocumentThemeStyle", () => {
 		document.documentElement.dataset.styleTheme = "nord";
 		applyDocumentThemeStyle("orchestrate");
 		expect(document.documentElement.dataset.styleTheme).toBeUndefined();
+	});
+});
+
+describe("previewDocumentThemeStyle", () => {
+	const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+
+	afterEach(() => {
+		Reflect.deleteProperty(document, "startViewTransition");
+		delete document.documentElement.dataset.styleTheme;
+		delete document.documentElement.dataset.themeTransition;
+	});
+
+	it("swaps the theme synchronously without a View Transition and restores the saved one", async () => {
+		const startViewTransition = vi.fn();
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: startViewTransition,
+		});
+
+		previewDocumentThemeStyle("nord", "github");
+		expect(document.documentElement.dataset.styleTheme).toBe("nord");
+		expect(document.documentElement.dataset.themeTransition).toBe("active");
+
+		previewDocumentThemeStyle("dracula", "github");
+		expect(document.documentElement.dataset.styleTheme).toBe("dracula");
+
+		previewDocumentThemeStyle(null, "github");
+		expect(document.documentElement.dataset.styleTheme).toBe("github");
+		expect(document.documentElement.dataset.themeTransition).toBe("active");
+		await nextFrame();
+		await nextFrame();
+		expect(document.documentElement.dataset.themeTransition).toBeUndefined();
+		expect(startViewTransition).not.toHaveBeenCalled();
+	});
+
+	it("leaves the document alone when no preview is active", () => {
+		document.documentElement.dataset.styleTheme = "nord";
+		previewDocumentThemeStyle(null, "github");
+		expect(document.documentElement.dataset.styleTheme).toBe("nord");
 	});
 });

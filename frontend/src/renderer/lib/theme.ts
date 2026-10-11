@@ -60,6 +60,34 @@ export function applyDocumentThemeStyle(style: ThemeStyle): void {
 	}
 }
 
+let previewing = false;
+
+/**
+ * Show `style` while the user browses the theme menu; `null` ends the preview
+ * and restores `saved`. Skips the View Transition: its snapshot freezes the
+ * page (hover states included) on every swap. Transitions are held off for the
+ * whole preview instead, so nothing tweens between palettes, and released two
+ * frames after it ends so the restored palette paints without tweening.
+ */
+export function previewDocumentThemeStyle(style: ThemeStyle | null, saved: ThemeStyle): void {
+	if (typeof document === "undefined") return;
+	const root = document.documentElement;
+	if (style !== null) {
+		previewing = true;
+		root.dataset.themeTransition = "active";
+		applyDocumentThemeStyle(style);
+		return;
+	}
+	if (!previewing) return;
+	previewing = false;
+	applyDocumentThemeStyle(saved);
+	requestAnimationFrame(() =>
+		requestAnimationFrame(() => {
+			if (!previewing) delete root.dataset.themeTransition;
+		}),
+	);
+}
+
 /**
  * Apply a theme DOM update under a View Transition so per-element
  * `transition-colors` / background tweens are hidden behind a snapshot.

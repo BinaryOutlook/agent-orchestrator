@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { applyDocumentThemeStyle, runThemeTransition, type ThemePreference, type ThemeStyle } from "../../lib/theme";
+import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from "../../lib/theme";
 import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
 import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
@@ -181,11 +181,7 @@ export function GeneralSettingsSection({
 							value={themeStyle}
 							options={colorThemeOptions}
 							onChange={setThemeStyle}
-							onHighlight={(previewed) =>
-								runThemeTransition(() =>
-									applyDocumentThemeStyle(previewed ?? useUiStore.getState().themeStyle),
-								)
-							}
+							onHighlight={(previewed) => previewDocumentThemeStyle(previewed, useUiStore.getState().themeStyle)}
 							menuClassName="min-w-60"
 							renderMenuItem={(option) => (
 								<>
