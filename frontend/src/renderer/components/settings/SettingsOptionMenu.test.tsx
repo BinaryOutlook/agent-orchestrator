@@ -54,6 +54,28 @@ describe("SettingsOptionMenu", () => {
 		expect(onHighlight).toHaveBeenLastCalledWith(null);
 	});
 
+	it("clears the highlight when the menu unmounts while open", async () => {
+		const onHighlight = vi.fn();
+		const { unmount } = render(
+			<SettingsOptionMenu
+				aria-label="Color theme"
+				value="github"
+				options={[
+					{ value: "github", label: "GitHub" },
+					{ value: "nord", label: "Nord" },
+				]}
+				onChange={() => {}}
+				onHighlight={onHighlight}
+			/>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Color theme" }));
+		await userEvent.hover(screen.getByRole("menuitem", { name: "Nord" }));
+		unmount();
+
+		expect(onHighlight).toHaveBeenLastCalledWith(null);
+	});
+
 	it("keeps an action footer outside the shrinking options region", async () => {
 		render(
 			<SettingsOptionMenu

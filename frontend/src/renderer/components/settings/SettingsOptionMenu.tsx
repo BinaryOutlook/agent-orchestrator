@@ -1,4 +1,4 @@
-import { type ReactNode, type Ref, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, type Ref, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
@@ -87,6 +87,11 @@ export function SettingsOptionMenu<T extends string>({
 		return () => observer.disconnect();
 	}, [menuOpen, updateScrollCue, visibleOptions.length]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
+	// Radix skips onOpenChange when an open menu unmounts (e.g. a shortcut closes
+	// the settings view), so end any highlight here or a preview would stick.
+	const highlightCleanupRef = useRef<(() => void) | null>(null);
+	highlightCleanupRef.current = menuOpen && onHighlight ? () => onHighlight(null) : null;
+	useEffect(() => () => highlightCleanupRef.current?.(), []);
 
 	return (
 		<DropdownMenu
