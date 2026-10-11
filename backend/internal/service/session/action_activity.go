@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -196,7 +198,7 @@ func (s *Service) recordRenamed(ctx context.Context, id domain.SessionID, previo
 		return
 	}
 	rec := s.lookupActionSession(ctx, id)
-	operationID := string(id) + ":" + previous + "->" + next + ":" + strconv.FormatUint(s.renameMutations.Add(1), 10)
+	operationID := string(id) + ":" + previous + "->" + next + ":" + uuid.NewString()
 	if status != domain.ActivityStatusCompleted {
 		failed := failureOperationID(ctx, "rename")
 		if failed == "" {
