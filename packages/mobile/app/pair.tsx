@@ -53,7 +53,9 @@ export default function PairScreen() {
 			return;
 		}
 		let current = true;
-		void findHost(repairHostId).then((host) => {
+		// An unreadable host list must not leave the screen on a spinner; it reads
+		// as "no longer saved", which offers the way back.
+		void findHost(repairHostId).catch(() => null).then((host) => {
 			if (current) setRepairHost(host);
 		});
 		return () => { current = false; };

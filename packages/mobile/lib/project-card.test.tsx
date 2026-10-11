@@ -45,7 +45,7 @@ describe("ProjectCard", () => {
 				name: "AO Mobile",
 				hostId: "host-1",
 				hostName: "Build Laptop",
-				hostAppearance: { symbol: "laptop", tone: "blue" },
+				hostAppearance: { symbol: "laptop" },
 			},
 			link: null,
 			workers: [],
@@ -63,14 +63,14 @@ describe("ProjectCard", () => {
 
 		const identity = renderer.root.findByType(MachineIdentity);
 		expect(identity.props.name).toBe("Build Laptop");
-		expect(identity.props.appearance).toEqual({ symbol: "laptop", tone: "blue" });
+		expect(identity.props.appearance).toEqual({ symbol: "laptop" });
 	});
 
 	it("shows the routed machine rather than the default machine in a project header", async () => {
 		const projectCard = await import("./project-card") as typeof import("./project-card") & {
 			ProjectMachineIndicator?: (props: {
 				hostId: string | undefined;
-				hosts: Array<{ hostId: string; name: string; appearance: { symbol: "server" | "laptop"; tone: "blue" | "purple" } }>;
+				hosts: Array<{ hostId: string; name: string; appearance: { symbol: "server" | "laptop" } }>;
 			}) => React.ReactNode;
 		};
 		expect(projectCard.ProjectMachineIndicator).toBeTypeOf("function");
@@ -83,8 +83,8 @@ describe("ProjectCard", () => {
 				<ProjectMachineIndicator
 					hostId="host-dev"
 					hosts={[
-						{ hostId: "host-mac", name: "Mac", appearance: { symbol: "server", tone: "blue" } },
-						{ hostId: "host-dev", name: "Development Laptop", appearance: { symbol: "laptop", tone: "purple" } },
+						{ hostId: "host-mac", name: "Mac", appearance: { symbol: "server" } },
+						{ hostId: "host-dev", name: "Development Laptop", appearance: { symbol: "laptop" } },
 					]}
 				/>,
 			);
@@ -92,6 +92,6 @@ describe("ProjectCard", () => {
 
 		const identity = renderer.root.findByType(MachineIdentity);
 		expect(identity.props.name).toBe("Development Laptop");
-		expect(identity.props.appearance).toEqual({ symbol: "laptop", tone: "purple" });
+		expect(identity.props.appearance).toEqual({ symbol: "laptop" });
 	});
 });

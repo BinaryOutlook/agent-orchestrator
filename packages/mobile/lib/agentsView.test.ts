@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardPR, DashboardSession } from "./api";
 import {
+	absorbNewHosts,
 	boardZoneOf,
 	eventAtOf,
 	groupSessions,
@@ -311,9 +312,24 @@ describe("held order", () => {
 		const remote = { ...b, hostId: "dev" };
 		const snapshot = snapshotOrder([local], key);
 		expect(updatedSince(snapshot, [local, remote], key)).toBe(0);
-		expect(shouldResnapshot(snapshot, [local, remote], true, key)).toBe(true);
-		const hydrated = snapshotOrder([local, remote], key);
+		const hydrated = absorbNewHosts(snapshot, [local, remote], key);
+		expect(holdOrder(hydrated, [remote, local], key).map((s) => s.id)).toEqual(["a", "b"]);
+		expect(shouldResnapshot(hydrated, [local, remote], false, key)).toBe(false);
 		expect(updatedSince(hydrated, [local, { ...remote, lastEventAt: "2026-08-09T11:00:00Z" }], key)).toBe(1);
+	});
+
+	it("keeps news held when another host's first workers arrive", () => {
+		const local = [{ ...a, hostId: "mac" }, { ...b, hostId: "mac" }, { ...c, hostId: "mac" }];
+		const snapshot = snapshotOrder(local, key);
+		const cNews = { ...local[2], lastEventAt: "2026-08-09T11:00:00Z" };
+		const remote = { ...session({ id: "r", lastEventAt: "2026-08-09T09:30:00Z" }), hostId: "dev" };
+		// Fresh order: c's news on top, the remote worker between a and b.
+		const fresh = [cNews, local[0], remote, local[1]];
+		const absorbed = absorbNewHosts(snapshot, fresh, key);
+		expect(holdOrder(absorbed, fresh, key).map((s) => s.id)).toEqual(["a", "r", "b", "c"]);
+		expect(updatedSince(absorbed, fresh, key)).toBe(1);
+		expect(shouldResnapshot(absorbed, fresh, true, key)).toBe(false);
+		expect(absorbNewHosts(absorbed, fresh, key)).toBe(absorbed);
 	});
 
 	it("absorbs news that did not move a row, so a later pin ranks most recent first", () => {

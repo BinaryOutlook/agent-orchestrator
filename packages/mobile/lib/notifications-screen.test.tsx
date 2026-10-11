@@ -17,7 +17,7 @@ const fixtures = vi.hoisted(() => {
 					{ id: "dev-2", sessionId: "worker-1", projectId: "project-1", prUrl: "", type: "ready_to_merge", title: "Second update", body: "Two", status: "unread", createdAt: "2026-10-08T09:00:00Z" },
 				]
 				: [{ id: "mac-1", sessionId: "worker-2", projectId: "project-2", prUrl: "", type: "pr_merged", title: "Third update", body: "Three", status: "read", createdAt: "2026-10-08T08:00:00Z" }],
-			nextCursor: undefined,
+			nextCursor: undefined as string | undefined,
 			unreadCount: config.hostId === "dev" ? 2 : 0,
 		})),
 	};
@@ -64,8 +64,8 @@ vi.mock("./api", () => ({
 }));
 vi.mock("./store", () => ({ useApp: () => ({
 	hostStates: [
-		{ hostId: "dev", name: "Dev", appearance: { symbol: "linux", tone: "blue" }, config: fixtures.configs.dev, notificationsUnread: 2, sessions: [], loading: false },
-		{ hostId: "mac", name: "Mac", appearance: { symbol: "mac-mini", tone: "green" }, config: fixtures.configs.mac, notificationsUnread: 0, sessions: [], loading: false },
+		{ hostId: "dev", name: "Dev", appearance: { symbol: "linux" }, config: fixtures.configs.dev, notificationsUnread: 2, sessions: [], loading: false },
+		{ hostId: "mac", name: "Mac", appearance: { symbol: "mac-mini" }, config: fixtures.configs.mac, notificationsUnread: 0, sessions: [], loading: false },
 	],
 	allSessions: [],
 	allProjects: [],
@@ -145,9 +145,9 @@ describe("NotificationsScreen", () => {
 		expect(renderer!.root.findAll((node) => String(node.type) === "AgentLogo")).toHaveLength(0);
 		expect(renderer!.root.findAll((node) => String(node.type) === "Pressable" && String(node.props.accessibilityLabel).startsWith("Clear "))).toHaveLength(0);
 		expect(renderer!.root.findAllByType(MachineIdentity).map((identity) => ({ name: identity.props.name, appearance: identity.props.appearance }))).toEqual([
-			{ name: "Dev", appearance: { symbol: "linux", tone: "blue" } },
-			{ name: "Dev", appearance: { symbol: "linux", tone: "blue" } },
-			{ name: "Mac", appearance: { symbol: "mac-mini", tone: "green" } },
+			{ name: "Dev", appearance: { symbol: "linux" } },
+			{ name: "Dev", appearance: { symbol: "linux" } },
+			{ name: "Mac", appearance: { symbol: "mac-mini" } },
 		]);
 	});
 
@@ -163,5 +163,28 @@ describe("NotificationsScreen", () => {
 
 		expect(fixtures.clearNotification).toHaveBeenCalledWith(fixtures.configs.dev, "dev-1");
 		expect(renderer!.root.findAll((node) => node.props.accessibilityLabel === "First update, Needs input, Dev machine")).toHaveLength(0);
+	});
+
+	it("releases pagination when a refresh supersedes a page that is still loading", async () => {
+		const page = (id: string, nextCursor?: string) => ({
+			notifications: [{ id, sessionId: "worker-1", projectId: "project-1", prUrl: "", type: "needs_input", title: id, body: "", status: "read", createdAt: "2026-10-08T07:00:00Z" }],
+			nextCursor,
+			unreadCount: 0,
+		});
+		fixtures.getNotifications.mockImplementation(async (config: { hostId: "dev" | "mac" }) =>
+			config.hostId === "dev" ? page("dev-first", "cursor-1") : page("mac-first"));
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		const list = () => renderer!.root.findByType("SectionList" as never);
+
+		let releaseMore!: () => void;
+		fixtures.getNotifications.mockImplementationOnce(() => new Promise((resolve) => { releaseMore = () => resolve(page("dev-stale")); }));
+		act(() => { list().props.onEndReached(); });
+		await act(async () => { await list().props.refreshControl.props.onRefresh(); });
+		await act(async () => { releaseMore(); });
+
+		expect(renderer!.root.findAllByType("ActivityIndicator" as never)).toHaveLength(0);
+		fixtures.getNotifications.mockClear();
+		await act(async () => { list().props.onEndReached(); });
+		expect(fixtures.getNotifications).toHaveBeenCalledWith(fixtures.configs.dev, expect.objectContaining({ cursor: "cursor-1" }));
 	});
 });

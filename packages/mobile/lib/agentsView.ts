@@ -307,6 +307,43 @@ export function hasNewHost(snapshot: OrderSnapshot, sessions: DashboardSession[]
 }
 
 /**
+ * Adds a newly loaded machine's workers to the held order without re-sorting
+ * anything already shown. Each one is placed after the shown row that precedes
+ * it in the fresh order, so a baseline lands where it belongs while any news
+ * held behind the pill stays held. When nothing is held, the next comparison
+ * finds the order already fresh or re-sorts it as usual.
+ */
+export function absorbNewHosts(
+	snapshot: OrderSnapshot,
+	fresh: DashboardSession[],
+	keyOf: (s: DashboardSession) => string,
+): OrderSnapshot {
+	const incoming = fresh.filter((session) => !snapshot.hosts[orderHostId(session)]);
+	if (incoming.length === 0) return snapshot;
+	const following = new Map<string | null, string[]>();
+	let anchor: string | null = null;
+	for (const session of fresh) {
+		const key = keyOf(session);
+		if (snapshot.hosts[orderHostId(session)]) {
+			if (key in snapshot.rank) anchor = key;
+			continue;
+		}
+		following.set(anchor, [...(following.get(anchor) ?? []), key]);
+	}
+	const shown = Object.keys(snapshot.rank).sort((left, right) => snapshot.rank[left] - snapshot.rank[right]);
+	const merged = [...(following.get(null) ?? []), ...shown.flatMap((key) => [key, ...(following.get(key) ?? [])])];
+	const eventAt = { ...snapshot.eventAt };
+	const pinned = { ...snapshot.pinned };
+	const hosts = { ...snapshot.hosts };
+	for (const session of incoming) {
+		eventAt[keyOf(session)] = eventAtOf(session);
+		if (session.isPinned) pinned[keyOf(session)] = true;
+		hosts[orderHostId(session)] = true;
+	}
+	return { rank: Object.fromEntries(merged.map((key, index) => [key, index])), eventAt, pinned, hosts };
+}
+
+/**
  * One section's sessions in a snapshot's order. Sessions the snapshot has not
  * seen go first, where a new one belongs anyway; Array.sort is stable, so they
  * keep their fresh order among themselves.
@@ -340,7 +377,6 @@ export function updatedSince(
  * Whether the board should take a new snapshot from the fresh order.
  *
  * - No snapshot yet, or one taken before anything loaded.
- * - Another host's first workers arrived: establish its initial baseline.
  * - The user pinned or unpinned a worker. It is their own action, so it applies
  *   at once, even while the pill is holding other news back.
  * - The held order differs from the fresh one with no news behind it.
@@ -350,6 +386,7 @@ export function updatedSince(
  *
  * Only a reorder with news behind it is held, behind the "N updated" pill. A
  * snapshot taken from `fresh` never asks for another, so this cannot loop.
+ * Another machine's first workers are absorbed first (see absorbNewHosts).
  */
 export function shouldResnapshot(
 	snapshot: OrderSnapshot | null,
@@ -358,7 +395,6 @@ export function shouldResnapshot(
 	keyOf: (s: DashboardSession) => string,
 ): boolean {
 	if (snapshot === null || Object.keys(snapshot.rank).length === 0) return true;
-	if (hasNewHost(snapshot, fresh)) return true;
 	if (fresh.some((s) => !!s.isPinned !== (snapshot.pinned[keyOf(s)] === true))) return true;
 	const news = updatedSince(snapshot, fresh, keyOf) > 0;
 	return stale !== news;

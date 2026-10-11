@@ -21,6 +21,7 @@ import { haptics } from "../../lib/haptics";
 import { activeHost, activeHostMetadata, loadHosts, renameHost, saveHost, updateHostAppearance, type Host as PairedHost } from "../../lib/hosts";
 import { Feather } from "../../lib/icons";
 import { DifferentMachineError, persistManualHostEdit } from "../../lib/manualConnect";
+import { machineAppearance } from "../../lib/machineAppearance";
 import { NativeHeaderButton } from "../../lib/native-header-button";
 import { IncompatibleHostVersionError } from "../../lib/race";
 import { useApp } from "../../lib/store";
@@ -102,8 +103,7 @@ export default function EnvironmentsScreen() {
 
 	async function saveEnvironment(host: PairedHost, draft: EnvironmentMachineSave) {
 		const before = host.endpoints[draft.endpointIndex];
-		const appearanceChanged = host.appearance?.symbol !== draft.appearance.symbol ||
-			host.appearance?.tone !== draft.appearance.tone;
+		const appearanceChanged = machineAppearance(host).symbol !== draft.appearance.symbol;
 		try {
 			await persistManualHostEdit(host, draft.config, draft.machineName, draft.endpointIndex, {
 				probe: (endpoint) => probeEndpoint(endpoint, new AbortController().signal),

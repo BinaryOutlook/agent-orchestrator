@@ -115,10 +115,10 @@ it("keeps both machines ignored when Forget is confirmed consecutively", async (
 it("retains the chosen host appearance when an account tunnel changes", async () => {
 	const item = host("h_00000000-0000-0000-0000-000000000008");
 	saved.hosts = [{ id: item.hostId, name: item.label, platform: "darwin", token, lastConnected: 42, accountUserId: account.id,
-		appearance: { symbol: "mac-mini", tone: "purple" }, endpoints: [{ kind: "tunnel", host: "old.trycloudflare.com", port: 443, secure: true }] }];
+		appearance: { symbol: "mac-mini" }, endpoints: [{ kind: "tunnel", host: "old.trycloudflare.com", port: 443, secure: true }] }];
 	vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ hosts: [item] }) }));
 	await syncAccountHosts(account);
-	expect(saved.hosts[0]?.appearance).toEqual({ symbol: "mac-mini", tone: "purple" });
+	expect(saved.hosts[0]?.appearance).toEqual({ symbol: "mac-mini" });
 	expect(saved.hosts[0]?.lastConnected).toBe(42);
 });
 

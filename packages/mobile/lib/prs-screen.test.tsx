@@ -61,7 +61,7 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixture.allSessions = [session("mac"), session("windows")];
 	fixture.hostStates = fixture.allSessions.map(s => ({
-		hostId: s.hostId, name: s.hostName, appearance: { symbol: "desktop", tone: "blue" }, endpoints: [], config: null,
+		hostId: s.hostId, name: s.hostName, appearance: { symbol: "desktop" }, endpoints: [], config: null,
 		sessions: [s], connection: "open", notificationsUnread: 0, loading: false, error: null, errorStatus: null,
 		projects: [], projectsKnown: true, orchestrators: [], orchestratorId: null, stats: {}, lastSyncAt: 0,
 	}));

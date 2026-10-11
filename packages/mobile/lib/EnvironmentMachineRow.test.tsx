@@ -1,4 +1,5 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { MachineAvatar } from "./MachineIdentity";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "./config";
@@ -441,6 +442,20 @@ describe("EnvironmentMachineRow", () => {
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			appearance: expect.objectContaining({ symbol: "server" }),
 		}));
+	});
+
+	it("restores the saved symbol in the summary when editing is cancelled", () => {
+		const { renderer } = render();
+		const summaryAvatar = () => renderer.root.findByProps({ testID: "environment-summary-host-1" }).findByType(MachineAvatar);
+		const saved = summaryAvatar().props.appearance.symbol;
+		const other = saved === "cloud" ? "server" : "cloud";
+		act(() => renderer.root.findByProps({ testID: "environment-edit-host-1" }).props.onPress());
+		act(() => renderer.root.findByProps({ testID: "environment-appearance-toggle-host-1" }).props.onPress());
+		act(() => renderer.root.findByProps({ testID: `environment-symbol-host-1-${other}` }).props.onPress());
+		expect(summaryAvatar().props.appearance.symbol).toBe(other);
+
+		act(() => renderer.root.findByProps({ accessibilityLabel: "Cancel editing machine" }).props.onPress());
+		expect(summaryAvatar().props.appearance.symbol).toBe(saved);
 	});
 
 	it("keeps the appearance picker symbol-only", () => {

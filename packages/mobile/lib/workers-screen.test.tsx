@@ -87,7 +87,7 @@ function session(id: string): DashboardSession {
 }
 function snapshot(patch: Partial<HostSnapshot>): HostSnapshot {
 	return {
-		hostId: "windows", name: "Windows", appearance: { symbol: "desktop", tone: "blue" },
+		hostId: "windows", name: "Windows", appearance: { symbol: "desktop" },
 		endpoints: [], config: null, connection: "closed", loading: false, error: "Host is unreachable", errorStatus: null,
 		projects: [], projectsKnown: false, sessions: [], orchestrators: [], orchestratorId: null,
 		stats: {}, notificationsUnread: 0, lastSyncAt: 0, ...patch,
@@ -154,7 +154,7 @@ describe("Workers selected-machine reachability", () => {
 	});
 	it("opens an environment-only sheet on Android and applies a choice immediately", () => {
 		fixtures.platform = "android";
-		fixtures.hostStates[1].appearance = { symbol: "laptop", tone: "blue" };
+		fixtures.hostStates[1].appearance = { symbol: "laptop" };
 		selectWindows();
 		act(() => renderer.root.findByProps({ accessibilityLabel: "Switch environment" }).props.onPress());
 		const sheet = renderer.root.findByType("BottomSheet" as never);
@@ -178,7 +178,7 @@ describe("Workers selected-machine reachability", () => {
 		expect(renderer.root.findByType("WorkerDock" as never).props.selectedEnvironmentId).toBe("windows");
 	});
 	it("keeps the small connecting indicator beside its status and away from the picker", () => {
-		Object.assign(fixtures.hostStates[1], { connection: "connecting", loading: true, error: null, appearance: { symbol: "laptop", tone: "blue" } });
+		Object.assign(fixtures.hostStates[1], { connection: "connecting", loading: true, error: null, appearance: { symbol: "laptop" } });
 		selectWindows();
 		const status = renderer.root.findByProps({ testID: "worker-machine-status" });
 		expect(status.findByType("ActivityIndicator" as never).props.size).toBe("small");

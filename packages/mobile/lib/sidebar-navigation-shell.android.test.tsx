@@ -5,7 +5,7 @@ import { useSidebarNavigation } from "./sidebar-navigation-context";
 const motion = vi.hoisted(() => ({ completions: [] as ((result: { finished: boolean }) => void)[], replace: vi.fn(), navigate: vi.fn(), push: vi.fn() }));
 const fixture = vi.hoisted(() => ({
 	logoRenders: 0,
-	allSessions: [{ id: "worker-1", displayName: null as string | null, projectId: "project-1", status: "working", mode: "chat", harness: "codex", isPinned: true, hostId: "host-1", hostName: "Build Laptop", hostAppearance: { symbol: "laptop", tone: "blue" } }],
+	allSessions: [{ id: "worker-1", displayName: null as string | null, projectId: "project-1", status: "working", mode: "chat", harness: "codex", isPinned: true, hostId: "host-1", hostName: "Build Laptop", hostAppearance: { symbol: "laptop" } }],
 	allProjects: [{ id: "project-1", name: "AO Mobile", hostId: "host-1", hostName: "Build Laptop" }],
 	hostStates: [{ hostId: "host-1", connection: "open" }],
 }));
@@ -214,7 +214,7 @@ describe("Android sidebar recent workers", () => {
 
 		const identity = renderer.root.findByType(MachineIdentity);
 		expect(identity.props.name).toBe("Build Laptop");
-		expect(identity.props.appearance).toEqual({ symbol: "laptop", tone: "blue" });
+		expect(identity.props.appearance).toEqual({ symbol: "laptop" });
 	});
 
 	it("anchors a tilted pin to the harness logo instead of the machine metadata", () => {

@@ -168,7 +168,7 @@ describe("WorkerListRow", () => {
 				<WorkerListRow
 					session={session}
 					projectName="Agent Orchestrator"
-					machine={{ name: "A very long development machine name", appearance: { symbol: "server", tone: "purple" } }}
+					machine={{ name: "A very long development machine name", appearance: { symbol: "server" } }}
 					isRenaming={false}
 					nowBucket={1}
 					onSwipeOpen={vi.fn()}
@@ -186,6 +186,6 @@ describe("WorkerListRow", () => {
 
 		expect(renderer.root.findByProps({ testID: "worker-machine-identity" })).toBeTruthy();
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
-		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server", tone: "purple" });
+		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
 	});
 });

@@ -87,7 +87,7 @@ describe("iOS worker environment filter menu", () => {
 				query="" onQueryChange={vi.fn()} onSpawn={vi.fn()}
 				searchOpen={false} onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
 				projectFiltered={false}
-				environments={[{ id: "mac", name: "Studio Mac", appearance: { symbol: "laptop", tone: "blue" } }, { id: "dev", name: "Dev", appearance: { symbol: "server", tone: "green" } }]}
+				environments={[{ id: "mac", name: "Studio Mac", appearance: { symbol: "laptop" } }, { id: "dev", name: "Dev", appearance: { symbol: "server" } }]}
 				selectedEnvironmentId="mac" onSelectEnvironment={selectEnvironment}
 				projects={[{ id: "app", name: "AO", hostId: "mac", hostName: "Studio Mac" }]}
 				selectedProjectId="all" onSelectProject={vi.fn()}

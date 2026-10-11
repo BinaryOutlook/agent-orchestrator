@@ -241,7 +241,6 @@ export const WorkerListRow = memo(
 		prev.hostId === next.hostId &&
 		prev.machine?.name === next.machine?.name &&
 		prev.machine?.appearance.symbol === next.machine?.appearance.symbol &&
-		prev.machine?.appearance.tone === next.machine?.appearance.tone &&
 		prev.isRenaming === next.isRenaming &&
 		prev.activeSwipeId === next.activeSwipeId &&
 		prev.session === next.session &&

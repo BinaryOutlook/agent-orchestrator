@@ -123,12 +123,12 @@ describe("notificationsAcrossHosts", () => {
 		const middle = { id: "middle", status: "read", createdAt: "2026-10-08T09:00:00Z" };
 
 		expect(notificationsAcrossHosts([
-			{ hostId: "host-a", hostName: "Laptop", hostAppearance: { symbol: "laptop", tone: "blue" }, items: [oldest, newest] },
-			{ hostId: "host-b", hostName: "Desktop", hostAppearance: { symbol: "desktop", tone: "green" }, items: [middle] },
+			{ hostId: "host-a", hostName: "Laptop", hostAppearance: { symbol: "laptop" }, items: [oldest, newest] },
+			{ hostId: "host-b", hostName: "Desktop", hostAppearance: { symbol: "desktop" }, items: [middle] },
 		])).toEqual([
-			{ ...newest, hostId: "host-a", hostName: "Laptop", hostAppearance: { symbol: "laptop", tone: "blue" } },
-			{ ...middle, hostId: "host-b", hostName: "Desktop", hostAppearance: { symbol: "desktop", tone: "green" } },
-			{ ...oldest, hostId: "host-a", hostName: "Laptop", hostAppearance: { symbol: "laptop", tone: "blue" } },
+			{ ...newest, hostId: "host-a", hostName: "Laptop", hostAppearance: { symbol: "laptop" } },
+			{ ...middle, hostId: "host-b", hostName: "Desktop", hostAppearance: { symbol: "desktop" } },
+			{ ...oldest, hostId: "host-a", hostName: "Laptop", hostAppearance: { symbol: "laptop" } },
 		]);
 	});
 });

@@ -263,7 +263,8 @@ export function EnvironmentMachineRow({ host, activeConfig, isDefault, expanded,
 				onPress={toggleExpanded}
 				style={({ pressed }) => [styles.header, pressed && styles.pressed]}
 			>
-				<MachineAvatar appearance={appearance} size={touchTarget} />
+				{/* The draft only previews inside the editor; Cancel must leave the saved icon. */}
+				<MachineAvatar appearance={editing ? appearance : machineAppearance(host)} size={touchTarget} />
 				<View style={styles.machineCopy}>
 					<View style={styles.machineNameRow}>
 						<Text style={styles.machineName} numberOfLines={1}>{host.name}</Text>

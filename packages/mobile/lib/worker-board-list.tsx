@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import {
+	absorbNewHosts,
 	groupSessions,
 	hasNewHost,
 	holdOrder,
@@ -153,16 +154,22 @@ export function WorkerBoardList({
 	freshLiveRef.current = freshLive;
 	const scrollAfterResort = useRef(false);
 	const held = useMemo(() => {
-		if (hasNewHost(snapshot, freshLive)) return { pinned: fresh.pinned, sections: fresh.sections, stale: false, updated: 0 };
-		const pinned = holdOrder(snapshot, fresh.pinned, hostedSessionKey);
-		const sections = fresh.sections.map((section) => ({ ...section, data: holdOrder(snapshot, section.data, hostedSessionKey) }));
+		// Another machine's first load joins the held order rather than replacing
+		// it, so news already waiting behind the pill neither jumps nor vanishes.
+		const order = absorbNewHosts(snapshot, freshLive, hostedSessionKey);
+		const pinned = holdOrder(order, fresh.pinned, hostedSessionKey);
+		const sections = fresh.sections.map((section) => ({ ...section, data: holdOrder(order, section.data, hostedSessionKey) }));
 		const shown = [...pinned, ...sections.flatMap((section) => section.data)];
 		const stale = shown.some((session, i) => session !== freshLive[i]);
-		return { pinned, sections, stale, updated: stale ? updatedSince(snapshot, freshLive, hostedSessionKey) : 0 };
+		return { pinned, sections, stale, updated: stale ? updatedSince(order, freshLive, hostedSessionKey) : 0 };
 	}, [snapshot, fresh, freshLive]);
 	const { pinned, sections } = held;
 	useEffect(() => {
 		if (freshLive.length === 0) return;
+		if (hasNewHost(snapshot, freshLive)) {
+			setSnapshot((previous) => absorbNewHosts(previous, freshLive, hostedSessionKey));
+			return;
+		}
 		if (shouldResnapshot(snapshot, freshLive, held.stale, hostedSessionKey)) {
 			setSnapshot(previous => snapshotOrder(freshLive, hostedSessionKey, previous));
 		}

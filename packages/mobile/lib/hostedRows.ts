@@ -19,7 +19,6 @@ export function createHostedRowsCache<T extends { id: string }>() {
 			const old = cache.get(key);
 			const row = old?.source === source && old.row.hostName === host.name
 				&& old.row.hostAppearance?.symbol === host.appearance?.symbol
-				&& old.row.hostAppearance?.tone === host.appearance?.tone
 				? old.row
 				: { ...source, hostId: host.hostId, hostName: host.name, hostAppearance: host.appearance };
 			nextCache.set(key, { source, row });

@@ -96,7 +96,7 @@ describe("other host ownership handoff", () => {
 		const { connectToHost } = await import("./connectRuntime");
 		const renderer = await renderHarness();
 		try {
-			const renamed = { ...hostB, name: "Studio", appearance: { symbol: "laptop" as const, tone: "blue" as const }, lastConnected: 100 };
+			const renamed = { ...hostB, name: "Studio", appearance: { symbol: "laptop" as const }, lastConnected: 100 };
 			await act(async () => { renderer.update(<Harness selectedHostId="a" appActive hosts={[hostA, renamed, hostC]} />); });
 			expect(current.snapshots.b.name).toBe("Studio");
 			expect(current.configForHost("b")).toBe(configB);

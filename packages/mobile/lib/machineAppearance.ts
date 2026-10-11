@@ -1,14 +1,13 @@
 export const machineAppearancePalette = {
 	symbols: ["server", "cloud", "linux", "desktop", "laptop", "mac-mini", "mac-studio"] as const,
-	tones: ["blue", "green", "purple", "orange", "amber"] as const,
 };
 
 export type MachineSymbol = (typeof machineAppearancePalette.symbols)[number];
-export type MachineTone = (typeof machineAppearancePalette.tones)[number];
 
+/** Phone-local visual identity. Earlier builds also stored a `tone`, which
+ * nothing renders; it is ignored when read back. */
 export type MachineAppearance = {
 	symbol: MachineSymbol;
-	tone: MachineTone;
 };
 
 export const machineSymbolLabels: Record<MachineSymbol, string> = {
@@ -33,7 +32,7 @@ const legacySymbols: Record<string, MachineSymbol> = {
 type MachineIdentity = {
 	id: string;
 	name: string;
-	appearance?: MachineAppearance | { symbol: string; tone: MachineTone };
+	appearance?: { symbol: string };
 };
 
 function identityHash(value: string): number {
@@ -48,13 +47,8 @@ function identityHash(value: string): number {
 export function machineAppearance(machine: MachineIdentity): MachineAppearance {
 	if (machine.appearance) {
 		const symbol = machineAppearancePalette.symbols.find((candidate) => candidate === machine.appearance?.symbol) ?? legacySymbols[machine.appearance.symbol] ?? "server";
-		return { symbol, tone: machine.appearance.tone };
+		return { symbol };
 	}
-	const hash = identityHash(machine.id || machine.name);
 	const symbols = machineAppearancePalette.symbols;
-	const tones = machineAppearancePalette.tones;
-	return {
-		symbol: symbols[hash % symbols.length],
-		tone: tones[Math.floor(hash / symbols.length) % tones.length],
-	};
+	return { symbol: symbols[identityHash(machine.id || machine.name) % symbols.length] };
 }

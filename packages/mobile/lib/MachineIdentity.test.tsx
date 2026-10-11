@@ -28,7 +28,7 @@ describe("MachineIdentity", () => {
 	it("keeps the symbol after a truncating machine name on one line", () => {
 		let renderer!: ReactTestRenderer;
 		act(() => {
-			renderer = create(<MachineIdentity name="A very long development machine name" appearance={{ symbol: "server", tone: "purple" }} />);
+			renderer = create(<MachineIdentity name="A very long development machine name" appearance={{ symbol: "server" }} />);
 		});
 		const identity = renderer.root.findByProps({ testID: "machine-identity" });
 		const name = renderer.root.findByProps({ testID: "machine-identity-name" });
@@ -39,7 +39,7 @@ describe("MachineIdentity", () => {
 		expect(name.props.style.flexShrink).toBe(1);
 		expect(identity.children[0]).toBe(name);
 		expect(identity.children[1]).toBe(symbol);
-		expect(symbol.props.appearance).toEqual({ symbol: "server", tone: "purple" });
+		expect(symbol.props.appearance).toEqual({ symbol: "server" });
 		const glyph = renderer.root.find((node) => (node.type as unknown) === "Feather");
 		const glyphSurface = renderer.root.find((node) => (node.type as unknown) === "View" && Array.isArray(node.props.style) && node.props.style.some((value: { width?: number }) => value?.width === 22));
 		const surfaceStyle = Object.assign({}, ...glyphSurface.props.style);
@@ -51,7 +51,7 @@ describe("MachineIdentity", () => {
 	it("draws the Mini PC with its dedicated machine silhouette", () => {
 		let renderer!: ReactTestRenderer;
 		act(() => {
-			renderer = create(<MachineIdentity name="Mini" appearance={{ symbol: "mac-mini" as never, tone: "blue" }} />);
+			renderer = create(<MachineIdentity name="Mini" appearance={{ symbol: "mac-mini" as never }} />);
 		});
 
 		const slab = renderer.root.find((node) => (node.type as unknown) === "Rect");

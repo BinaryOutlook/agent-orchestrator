@@ -73,8 +73,8 @@ describe.each([
 ])("%s worker controls", (_platform, Controls) => {
 	it("shows each saved host symbol instead of a generic monitor", async () => {
 		await act(async () => { renderer = create(<Controls {...props} environments={[
-			{ id: "mac", name: "Mac", appearance: { symbol: "laptop", tone: "blue" } },
-			{ id: "dev", name: "Dev", appearance: { symbol: "linux", tone: "blue" } },
+			{ id: "mac", name: "Mac", appearance: { symbol: "laptop" } },
+			{ id: "dev", name: "Dev", appearance: { symbol: "linux" } },
 		]} />); });
 		const option = (label: string) => renderer!.root.findAllByType("Pressable" as never).find(node => node.findAllByType("Text" as never).some(text => text.props.children === label))!;
 		expect(option("Mac").findAll(node => String(node.type) === "Feather")[0].props.name).toBe("laptop");

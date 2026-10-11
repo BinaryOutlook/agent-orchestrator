@@ -65,7 +65,7 @@ describe("pairFromCode", () => {
 
 	it("preserves the local appearance when repairing the expected machine", async () => {
 		const d = deps();
-		const appearance = { symbol: "laptop" as const, tone: "blue" as const };
+		const appearance = { symbol: "laptop" as const };
 		await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_paired", name: "Prod", appearance } });
 		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ appearance }));
 	});
