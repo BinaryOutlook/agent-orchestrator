@@ -2590,40 +2590,40 @@ func TestSessionRenameMissingSessionReturnsNotFound(t *testing.T) {
 // fakeCommander records Kill/Spawn calls so a test can assert the
 // clean-orchestrator ordering without wiring a real session engine.
 type fakeCommander struct {
-	killed           []domain.SessionID
-	retired          []domain.SessionID
-	exited           []domain.SessionID
-	resumed          []domain.SessionID
-	ready            []domain.SessionID
-	sent             []domain.SessionID
-	sentMessages     []string
-	cleanupProjects  []domain.ProjectID
-	killErr          error
-	retireErr        error
-	retireFunc       func(context.Context, domain.SessionID) error
-	sendErr          error
-	sendFunc         func(domain.SessionID, string) error
-	cleanupErr       error
-	spawnErr         error
-	spawnRecord      domain.SessionRecord
+	killed             []domain.SessionID
+	retired            []domain.SessionID
+	exited             []domain.SessionID
+	resumed            []domain.SessionID
+	ready              []domain.SessionID
+	sent               []domain.SessionID
+	sentMessages       []string
+	cleanupProjects    []domain.ProjectID
+	killErr            error
+	retireErr          error
+	retireFunc         func(context.Context, domain.SessionID) error
+	sendErr            error
+	sendFunc           func(domain.SessionID, string) error
+	cleanupErr         error
+	spawnErr           error
+	spawnRecord        domain.SessionRecord
 	switchErr          error
 	switchRecord       domain.AgentSwitch
 	beforeSwitchReturn func(context.Context, domain.SessionID)
-	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
-	spawnCalls       int
-	spawned          bool
-	spawnedCfg       ports.SpawnConfig
-	spawnCtx         context.Context
-	killsAtSpawn     int
-	restoreErr       error
-	restoreResult    sessionmanager.RestoreResult
-	readyErr         error
-	backgroundResult string
-	backgroundErr    error
-	backgroundFunc   func(backgroundTaskCall) (string, error)
-	backgroundCalls  []backgroundTaskCall
-	killFunc         func(domain.SessionID)
-	killMu           sync.Mutex
+	spawnFunc          func(ports.SpawnConfig) domain.SessionRecord
+	spawnCalls         int
+	spawned            bool
+	spawnedCfg         ports.SpawnConfig
+	spawnCtx           context.Context
+	killsAtSpawn       int
+	restoreErr         error
+	restoreResult      sessionmanager.RestoreResult
+	readyErr           error
+	backgroundResult   string
+	backgroundErr      error
+	backgroundFunc     func(backgroundTaskCall) (string, error)
+	backgroundCalls    []backgroundTaskCall
+	killFunc           func(domain.SessionID)
+	killMu             sync.Mutex
 }
 
 type backgroundTaskCall struct {
