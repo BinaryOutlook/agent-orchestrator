@@ -184,6 +184,64 @@ func TestTerminateRenameRestoreSwitchAndClaim(t *testing.T) {
 	}
 }
 
+func TestRenameCycleKeepsEachMutation(t *testing.T) {
+	svc, st, _ := actionFixture(t)
+	ctx := context.Background()
+	for _, name := range []string{"Ship", "Reviewer", "Ship"} {
+		if err := svc.Rename(ctx, "mer-1", name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	renames := actionsNamed(st.activities, actionSessionRenamed)
+	if len(renames) != 3 {
+		t.Fatalf("renames = %d, want 3", len(renames))
+	}
+	last := decodeAction(t, renames[2])
+	if last.PreviousDisplayName != "Reviewer" || last.DisplayName != "Ship" {
+		t.Fatalf("last rename = %+v", last)
+	}
+	if err := svc.Rename(ctx, "mer-1", "Ship"); err != nil {
+		t.Fatal(err)
+	}
+	if len(actionsNamed(st.activities, actionSessionRenamed)) != 3 {
+		t.Fatal("unchanged rename created another activity")
+	}
+}
+
+func TestSwitchActivitySettlesWhenDurableSwitchFinishes(t *testing.T) {
+	svc, st, fc := actionFixture(t)
+	ctx := context.Background()
+	fc.switchRecord = domain.AgentSwitch{
+		ID: "switch-1", SessionID: "mer-1", State: domain.AgentSwitchPreparingHandoff,
+		FromHarness: "codex", TargetHarness: "claude",
+	}
+	if _, err := svc.SwitchAgent(ctx, "mer-1", SwitchAgentInput{TargetHarness: "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	switches := actionsNamed(st.activities, actionSessionAgentSwitched)
+	if len(switches) != 1 || switches[0].Status != domain.ActivityStatusRunning {
+		t.Fatalf("admitted activity = %+v", switches)
+	}
+
+	svc.observeSettledAgentSwitch(ctx, domain.AgentSwitch{
+		ID: "switch-1", SessionID: "mer-1", State: domain.AgentSwitchFailed, ErrorCode: domain.AgentSwitchErrorTargetBinaryMissing,
+		FromHarness: "codex", TargetHarness: "claude",
+	})
+	switches = actionsNamed(st.activities, actionSessionAgentSwitched)
+	if len(switches) != 1 || switches[0].Status != domain.ActivityStatusFailed || switches[0].Revision != 2 {
+		t.Fatalf("failed settlement = %+v", switches)
+	}
+
+	svc.observeSettledAgentSwitch(ctx, domain.AgentSwitch{
+		ID: "switch-1", SessionID: "mer-1", State: domain.AgentSwitchCompleted,
+		FromHarness: "codex", TargetHarness: "claude",
+	})
+	switches = actionsNamed(st.activities, actionSessionAgentSwitched)
+	if len(switches) != 1 || switches[0].Status != domain.ActivityStatusCompleted || switches[0].Revision != 3 {
+		t.Fatalf("recovered settlement = %+v", switches)
+	}
+}
+
 func decodeAction(t *testing.T, activity domain.ConversationActivity) actionDetail {
 	t.Helper()
 	var detail actionDetail

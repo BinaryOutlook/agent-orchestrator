@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -193,6 +194,7 @@ type Service struct {
 	scm                 scmProvider
 	tracker             ports.Tracker
 	clock               func() time.Time
+	renameMutations     atomic.Uint64
 	dataDir             string
 	telemetry           ports.EventSink
 	logger              *slog.Logger
@@ -298,6 +300,9 @@ func NewWithDeps(d Deps) *Service {
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
 	s.workspaceManifests = newWorkspaceManifestIndex()
 	s.workspaceManifests.now = s.clock
+	if manager, ok := d.Manager.(*sessionmanager.Manager); ok && manager != nil {
+		manager.SetAgentSwitchSettled(s.observeSettledAgentSwitch)
+	}
 	return s
 }
 

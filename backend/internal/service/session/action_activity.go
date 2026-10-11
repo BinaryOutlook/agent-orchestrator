@@ -191,7 +191,7 @@ func (s *Service) recordRenamed(ctx context.Context, id domain.SessionID, previo
 		return
 	}
 	rec := s.lookupActionSession(ctx, id)
-	operationID := string(id) + ":" + previous + "->" + next
+	operationID := string(id) + ":" + previous + "->" + next + ":" + strconv.FormatUint(s.renameMutations.Add(1), 10)
 	if status != domain.ActivityStatusCompleted {
 		failed := failureOperationID(ctx, "rename")
 		if failed == "" {
