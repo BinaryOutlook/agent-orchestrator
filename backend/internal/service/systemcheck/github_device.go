@@ -15,6 +15,7 @@ import (
 // GitHubDeviceLoginState is where a GitHub CLI device sign-in stands.
 type GitHubDeviceLoginState string
 
+// The states a device sign-in moves through.
 const (
 	GitHubDeviceLoginIdle             GitHubDeviceLoginState = "idle"
 	GitHubDeviceLoginStarting         GitHubDeviceLoginState = "starting"
