@@ -1731,7 +1731,6 @@ const ProjectItem = memo(function ProjectItem({
 									})}
 									aria-expanded={expanded}
 									className="absolute inset-y-0 left-0 z-10 w-9 cursor-pointer bg-transparent group-data-[collapsible=icon]:hidden"
-									aria-hidden="true"
 									data-project-folder=""
 									tabIndex={-1}
 									onClick={onFolderClick}

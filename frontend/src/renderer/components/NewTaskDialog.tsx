@@ -1,7 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueries } from "@tanstack/react-query";
 import { StickyNote } from "lucide-react";
-import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useEffect, useMemo } from "react";
 import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
@@ -118,7 +117,6 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
 		...projects.map((project) => ({ value: project.id, label: project.name })),
 	];
-	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	useEffect(() => {
 		if (!open) return;
 		for (const avatars of projectAvatars.values()) {
@@ -132,7 +130,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 		<Dialog.Root open={open && !settingsOpen} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
 				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in data-[state=closed]:animate-overlay-out" />
-				<Dialog.Content onCloseAutoFocus={restoreFocusOnClose} className="fixed left-1/2 top-1/2 z-overlay w-dialog-xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none">
+				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay w-dialog-xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none">
 					{/* The selected project is the dialog title; the composer remains the main surface. */}
 					<Dialog.Title className="settings-dialog-title flex flex-wrap items-center gap-x-1.5 px-3 pt-3">
 						<SettingsOptionMenu

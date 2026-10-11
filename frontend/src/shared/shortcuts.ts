@@ -289,6 +289,29 @@ export function shortcutBindingValidationError(binding: ShortcutBinding, isMac: 
 	return null;
 }
 
+// Plain Ctrl+letter chords on Windows/Linux are live terminal keystrokes
+// (readline: Ctrl+K kill-line, Ctrl+P previous history). While a terminal has
+// focus these commands yield to it; Cmd chords on macOS never reach the shell.
+// Alt+←/→ (history) is readline/TUI word-jump, so it yields the same way.
+// Only the bare Ctrl or bare Alt form yields: Shift variants (Ctrl+Shift+P/W/E,
+// Ctrl+Shift+`) and AltGr (reported as Ctrl+Alt) are never readline input, so
+// they stay live as the terminal-safe way to run the same command.
+const YIELDS_TO_FOCUSED_TERMINAL: ReadonlySet<AppShortcutId> = new Set<AppShortcutId>([
+	"command-palette", // Ctrl+K kill-line
+	"quick-open-file", // Ctrl+P previous history
+	"history-back", // Alt+Left word jump
+	"history-forward", // Alt+Right word jump
+	"new-shell-terminal", // Ctrl+T transpose-chars / fzf file picker
+	"close-shell-terminal", // Ctrl+W unix-word-rubout
+	"toggle-sidebar", // Ctrl+B backward-char / tmux prefix
+	"keyboard-shortcuts", // Ctrl+/ readline undo
+]);
+
+/** True when `chord` for `id` must reach a focused terminal instead (Windows/Linux only). */
+export function shortcutYieldsToTerminal(id: AppShortcutId, chord: ShortcutChord): boolean {
+	return YIELDS_TO_FOCUSED_TERMINAL.has(id) && !chord.shift && !chord.meta && chord.ctrl !== chord.alt;
+}
+
 export function matchesAppShortcut(
 	id: AppShortcutId,
 	chord: ShortcutChord,

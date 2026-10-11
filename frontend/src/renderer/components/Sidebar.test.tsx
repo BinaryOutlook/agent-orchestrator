@@ -1182,7 +1182,6 @@ describe("Sidebar", () => {
 		expect(disclosure.tagName).toBe("BUTTON");
 		// The overlay folder button duplicates the project row's tab stop.
 		expect(disclosure).toHaveProperty("tabIndex", -1);
-		expect(disclosure).toHaveAttribute("aria-hidden", "true");
 		expect(screen.getByLabelText("Spawn Project One orchestrator")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Project actions for Project One")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Pin session")).toHaveProperty("tabIndex", 0);

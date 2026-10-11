@@ -4,6 +4,7 @@ import {
 	CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL,
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	matchesAppShortcut,
+	shortcutYieldsToTerminal,
 	NEXT_SESSION_SHORTCUT_CHANNEL,
 	NEXT_TAB_SHORTCUT_CHANNEL,
 	NEW_SESSION_SHORTCUT_CHANNEL,
@@ -63,27 +64,6 @@ const legacyShortcutChannels: Partial<Record<AppShortcutId, string>> = {
 
 // Handled in main itself rather than forwarded to the shell.
 const mainHandledShortcuts: ReadonlySet<AppShortcutId> = new Set(["toggle-browser-devtools"]);
-
-// Plain Ctrl+letter chords on Windows/Linux are live terminal keystrokes
-// (readline: Ctrl+K kill-line, Ctrl+P previous history). While a terminal has
-// focus these commands yield to it; Cmd chords on macOS never reach the shell.
-// Alt+←/→ (history) is readline/TUI word-jump, so it yields the same way.
-// Only the bare Ctrl or bare Alt form yields: Shift variants (Ctrl+Shift+P/W/E,
-// Ctrl+Shift+`) and AltGr (reported as Ctrl+Alt) are never readline input, so
-// they stay live as the terminal-safe way to run the same command.
-const yieldsToFocusedTerminal: ReadonlySet<AppShortcutId> = new Set([
-	"command-palette", // Ctrl+K kill-line
-	"quick-open-file", // Ctrl+P previous history
-	"history-back", // Alt+Left word jump
-	"history-forward", // Alt+Right word jump
-	"new-shell-terminal", // Ctrl+T transpose-chars / fzf file picker
-	"close-shell-terminal", // Ctrl+W unix-word-rubout
-	"toggle-sidebar", // Ctrl+B backward-char / tmux prefix
-	"keyboard-shortcuts", // Ctrl+/ readline undo
-]);
-
-const isBareTerminalChord = (chord: ShortcutChord): boolean =>
-	!chord.shift && !chord.meta && chord.ctrl !== chord.alt;
 
 const appShortcutMatch = (
 	chord: ShortcutChord,
@@ -148,7 +128,7 @@ export function attachAppShortcuts(
 		const match = appShortcutMatch(chord, isMac, getOverrides());
 		if (!match) return;
 		const { id, channel, payload } = match;
-		if (!isMac && yieldsToFocusedTerminal.has(id) && isBareTerminalChord(chord) && isTerminalFocused()) return;
+		if (!isMac && shortcutYieldsToTerminal(id, chord) && isTerminalFocused()) return;
 		if (!shouldHandle(id, chord)) {
 			// Browser context owns these chords. Consume them so a racing shell
 			// listener cannot open/close a terminal from the same keypress, and so
