@@ -33,12 +33,12 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		await user.click(screen.getByRole("button", { name: "Change New session" }));
 		await waitFor(() => expect(setRecording).toHaveBeenCalledWith(true));
 
-		fireEvent.keyDown(window, { key: "j", code: "KeyJ", ctrlKey: true });
+		fireEvent.keyDown(window, { key: "y", code: "KeyY", ctrlKey: true });
 
 		const toast = await screen.findByRole("status");
 		expect(toast).toHaveTextContent("Shortcut updated");
 		expect(useKeybindingsStore.getState().overrides["new-session"]).toEqual([
-			{ key: "j", ctrl: true, meta: false, shift: false, alt: false },
+			{ key: "y", ctrl: true, meta: false, shift: false, alt: false },
 		]);
 		expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
 
