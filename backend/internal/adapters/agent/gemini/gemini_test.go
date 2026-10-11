@@ -86,6 +86,52 @@ func TestAuthStatusUsesSelectedAPIKeyAuth(t *testing.T) {
 	}
 }
 
+func TestAuthStatusAcceptsCommentedSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name, settings string
+		oauth          bool
+	}{
+		{
+			name: "selected API key",
+			settings: `{
+				// Gemini allows comments in settings.json
+				"security": {"auth": {"selectedType": "gemini-api-key"}} /* selected auth */
+			}`,
+		},
+		{
+			name: "OAuth fallback",
+			settings: `{
+				"security": {"auth": {"selectedType": "oauth-personal"}},
+				"url": "https://example.com/*literal*/" // comment, not part of the URL
+			}`,
+			oauth: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GEMINI_API_KEY", "")
+			t.Setenv("GOOGLE_API_KEY", "")
+			cliHome := t.TempDir()
+			t.Setenv("GEMINI_CLI_HOME", cliHome)
+			configDir := filepath.Join(cliHome, ".gemini")
+			if err := os.Mkdir(configDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(configDir, "settings.json"), []byte(tc.settings), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.oauth {
+				if err := os.WriteFile(filepath.Join(configDir, "oauth_creds.json"), []byte(`{"refresh_token":"cached"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+			if err != nil || status != ports.AgentAuthStatusConfigured {
+				t.Fatalf("AuthStatus = (%q, %v), want configured", status, err)
+			}
+		})
+	}
+}
+
 func TestAuthStatusPropagatesInvalidSettings(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("GOOGLE_API_KEY", "")
