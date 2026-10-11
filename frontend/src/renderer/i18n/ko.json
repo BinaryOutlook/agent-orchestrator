@@ -1502,6 +1502,8 @@
 	"shell.kanban": "칸반",
 	"shell.kill": "강제 종료",
 	"shell.archiveSession": "세션 보관",
+	"shell.openArtifactNamed": "아티팩트 {{name}} 열기",
+	"shell.moreArtifacts": "+{{count}}개 더",
 	"shell.archiving": "보관하는 중...",
 	"shell.workspaceCleanupPending": "Cleanup pending: {{title}}",
 	"shell.workspaceCleanupFailed": "Workspace cleanup failed. Retry cleanup in project Scripts settings.",

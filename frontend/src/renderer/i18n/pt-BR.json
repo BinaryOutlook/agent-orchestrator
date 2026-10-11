@@ -1530,6 +1530,8 @@
 	"shell.kanban": "Kanban",
 	"shell.kill": "Encerrar",
 	"shell.archiveSession": "Arquivar sessão",
+	"shell.openArtifactNamed": "Abrir artefato {{name}}",
+	"shell.moreArtifacts": "+{{count}} a mais",
 	"shell.archiving": "Arquivando...",
 	"shell.workspaceCleanupPending": "Cleanup pending: {{title}}",
 	"shell.workspaceCleanupFailed": "Workspace cleanup failed. Retry cleanup in project Scripts settings.",

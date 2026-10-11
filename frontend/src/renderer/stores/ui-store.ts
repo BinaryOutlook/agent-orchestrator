@@ -103,6 +103,8 @@ export type WorkspaceFileOpenRequest = {
 	sessionId: string;
 	hostId?: string;
 	path: string;
+	/** "artifact" resolves `path` against the session's artifact files instead of its workspace. */
+	source?: "artifact";
 	nonce: number;
 };
 
@@ -217,7 +219,7 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
-	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string) => void;
+	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact") => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestCreateProject: () => void;
 	requestCreateProjectFromPath: (path: string) => void;
@@ -613,12 +615,13 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
-	requestWorkspaceFileOpen: (sessionId, path, hostId) =>
+	requestWorkspaceFileOpen: (sessionId, path, hostId, source) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {
 				sessionId,
 				path,
 				...(hostId ? { hostId } : {}),
+				...(source ? { source } : {}),
 				nonce: (state.workspaceFileOpenRequest?.nonce ?? 0) + 1,
 			},
 		})),

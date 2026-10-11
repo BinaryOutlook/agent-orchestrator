@@ -1486,6 +1486,8 @@
 	"shell.kanban": "看板",
 	"shell.kill": "结束",
 	"shell.archiveSession": "归档会话",
+	"shell.openArtifactNamed": "打开产物 {{name}}",
+	"shell.moreArtifacts": "另外 {{count}} 个",
 	"shell.archiving": "正在归档...",
 	"shell.workspaceCleanupPending": "Cleanup pending: {{title}}",
 	"shell.workspaceCleanupFailed": "Workspace cleanup failed. Retry cleanup in project Scripts settings.",
