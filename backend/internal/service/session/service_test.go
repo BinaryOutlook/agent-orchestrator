@@ -117,6 +117,15 @@ func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionI
 	return conversation, nil
 }
 
+func (f *fakeStore) ActivityStatusByProviderItem(_ context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {
+	for _, existing := range f.activities {
+		if existing.ConversationID == conversationID && existing.ProviderItemID == providerItemID {
+			return existing.Status, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, activity domain.ConversationActivity, now time.Time) error {
 	if activity.ProviderItemID != "" {
 		for i, existing := range f.activities {
@@ -2597,8 +2606,9 @@ type fakeCommander struct {
 	cleanupErr       error
 	spawnErr         error
 	spawnRecord      domain.SessionRecord
-	switchErr        error
-	switchRecord     domain.AgentSwitch
+	switchErr          error
+	switchRecord       domain.AgentSwitch
+	beforeSwitchReturn func(context.Context, domain.SessionID)
 	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
 	spawnCalls       int
 	spawned          bool
@@ -2646,7 +2656,10 @@ func (*fakeCommander) PrepareTaskWorkspace(context.Context, domain.ProjectRecord
 func (*fakeCommander) CancelTaskPreparation(context.Context, domain.TaskPreparationToken) error {
 	return nil
 }
-func (f *fakeCommander) SwitchAgent(_ context.Context, _ domain.SessionID, cfg sessionmanager.SwitchAgentConfig) (domain.AgentSwitch, error) {
+func (f *fakeCommander) SwitchAgent(ctx context.Context, id domain.SessionID, cfg sessionmanager.SwitchAgentConfig) (domain.AgentSwitch, error) {
+	if f.beforeSwitchReturn != nil {
+		f.beforeSwitchReturn(ctx, id)
+	}
 	if f.switchErr != nil {
 		return domain.AgentSwitch{}, f.switchErr
 	}

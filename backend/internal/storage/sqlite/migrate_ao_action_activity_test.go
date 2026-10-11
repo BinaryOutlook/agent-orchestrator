@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestMigration0195AllowsAOActionAndKeepsActivitySchema(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 194)
+func TestMigration0196AllowsAOActionAndKeepsActivitySchema(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 195)
 
 	var beforeTable string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_activities'`).Scan(&beforeTable); err != nil {
@@ -22,7 +22,7 @@ func TestMigration0195AllowsAOActionAndKeepsActivitySchema(t *testing.T) {
 		t.Fatalf("indexes=%q triggers=%q, want both preserved", beforeIndexes, beforeTriggers)
 	}
 
-	upTo(t, db, 195)
+	upTo(t, db, 196)
 
 	var afterTable string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_activities'`).Scan(&afterTable); err != nil {
@@ -38,7 +38,7 @@ func TestMigration0195AllowsAOActionAndKeepsActivitySchema(t *testing.T) {
 		t.Fatalf("triggers changed:\n%s\n%s", beforeTriggers, got)
 	}
 
-	downTo(t, db, 194)
+	downTo(t, db, 195)
 	var restored string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_activities'`).Scan(&restored); err != nil || restored != beforeTable {
 		t.Fatalf("down migration schema = %q err=%v, want original", restored, err)

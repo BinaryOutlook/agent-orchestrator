@@ -40,6 +40,11 @@ type conversationActionWriter interface {
 	UpsertActivity(ctx context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
 }
 
+type actionStatusReader interface {
+	ConversationForSession(ctx context.Context, id domain.SessionID) (domain.ConversationRecord, error)
+	ActivityStatusByProviderItem(ctx context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error)
+}
+
 type actionDetail struct {
 	Action              string `json:"action"`
 	OperationID         string `json:"operationId"`
@@ -246,6 +251,9 @@ func (s *Service) recordAgentSwitched(ctx context.Context, id domain.SessionID, 
 		return
 	}
 	rec := s.lookupActionSession(ctx, id)
+	if status == domain.ActivityStatusRunning && s.actionAlreadyTerminal(ctx, id, "ao-action:"+actionSessionAgentSwitched+":"+operationID) {
+		return
+	}
 	s.recordAction(ctx, id, actionDetail{
 		Action:          actionSessionAgentSwitched,
 		OperationID:     operationID,
@@ -277,6 +285,22 @@ func (s *Service) recordClaimed(ctx context.Context, id domain.SessionID, pr dom
 		PRTitle:         pr.Title,
 		Error:           actionErrorText(err),
 	}, status)
+}
+
+func (s *Service) actionAlreadyTerminal(ctx context.Context, id domain.SessionID, providerItemID string) bool {
+	reader, ok := s.store.(actionStatusReader)
+	if !ok || providerItemID == "" {
+		return false
+	}
+	conversation, err := reader.ConversationForSession(ctx, id)
+	if err != nil {
+		return false
+	}
+	status, found, err := reader.ActivityStatusByProviderItem(ctx, conversation.ID, providerItemID)
+	if err != nil || !found {
+		return false
+	}
+	return status == domain.ActivityStatusCompleted || status == domain.ActivityStatusFailed || status == domain.ActivityStatusCancelled
 }
 
 func (s *Service) lookupActionSession(ctx context.Context, id domain.SessionID) domain.SessionRecord {
