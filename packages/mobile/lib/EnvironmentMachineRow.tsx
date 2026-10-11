@@ -112,6 +112,7 @@ export function EnvironmentMachineRow({ host, activeConfig, isDefault, expanded,
 	const [error, setError] = useState<string>();
 	const [showPassword, setShowPassword] = useState(false);
 
+	const accountManaged = Boolean(host.accountUserId);
 	const canForget = !editing && !saving && !forgetDisabled && !forgetting;
 	const swipeEnabled = !expanded && canForget;
 	useEffect(() => {
@@ -392,25 +393,33 @@ export function EnvironmentMachineRow({ host, activeConfig, isDefault, expanded,
 							</View>
 						) : null}
 					</View>
-					<EditField label="Host" testID={`environment-host-${host.id}`} value={config.host} onChangeText={set("host")} autoCapitalize="none" autoCorrect={false} keyboardType="url" editable={!saving} />
-					<View style={styles.editorPair}>
-						<View style={styles.portField}>
-							<EditField label="API port" testID={`environment-port-${host.id}`} value={config.httpPort} onChangeText={set("httpPort")} keyboardType="number-pad" editable={!saving} />
+					{accountManaged ? (
+						// Account sync rewrites the route and credential from AO Cloud, so an
+						// edit here would silently revert. Name and icon stay phone-local.
+						<Text testID={`environment-account-managed-${host.id}`} style={styles.accountManagedNote}>
+							This machine's address and password come from your AO Cloud account and update automatically. To connect another way, use Reconnect to scan a new code.
+						</Text>
+					) : <>
+						<EditField label="Host" testID={`environment-host-${host.id}`} value={config.host} onChangeText={set("host")} autoCapitalize="none" autoCorrect={false} keyboardType="url" editable={!saving} />
+						<View style={styles.editorPair}>
+							<View style={styles.portField}>
+								<EditField label="API port" testID={`environment-port-${host.id}`} value={config.httpPort} onChangeText={set("httpPort")} keyboardType="number-pad" editable={!saving} />
+							</View>
+							<View style={styles.tlsField}>
+								<Text style={styles.fieldLabel}>Use TLS</Text>
+								<Switch accessibilityLabel="Use TLS" value={Boolean(config.secure)} disabled={saving} onValueChange={(secure) => { setConfig((current) => ({ ...current, secure })); setError(undefined); }} trackColor={{ true: t.green, false: t.borderStrong }} />
+							</View>
 						</View>
-						<View style={styles.tlsField}>
-							<Text style={styles.fieldLabel}>Use TLS</Text>
-							<Switch accessibilityLabel="Use TLS" value={Boolean(config.secure)} disabled={saving} onValueChange={(secure) => { setConfig((current) => ({ ...current, secure })); setError(undefined); }} trackColor={{ true: t.green, false: t.borderStrong }} />
+						<View>
+							<Text style={styles.fieldLabel}>Password</Text>
+							<View style={styles.passwordRow}>
+								<TextInput accessibilityLabel="Password" value={config.password} onChangeText={set("password")} autoCapitalize="none" autoCorrect={false} secureTextEntry={!showPassword} textContentType="password" editable={!saving} placeholder="Connection password" placeholderTextColor={t.textFaint} selectionColor={t.accent} style={[styles.input, styles.passwordInput]} />
+								<Pressable accessibilityRole="button" accessibilityLabel={showPassword ? "Hide password" : "Show password"} disabled={saving} onPress={() => { haptics.tap(); setShowPassword((visible) => !visible); }} style={({ pressed }) => [styles.passwordToggle, pressed && styles.pressed]}>
+									<Feather name={showPassword ? "eye-off" : "eye"} size={iconSize.lg} color={t.textSecondary} />
+								</Pressable>
+							</View>
 						</View>
-					</View>
-					<View>
-						<Text style={styles.fieldLabel}>Password</Text>
-						<View style={styles.passwordRow}>
-							<TextInput accessibilityLabel="Password" value={config.password} onChangeText={set("password")} autoCapitalize="none" autoCorrect={false} secureTextEntry={!showPassword} textContentType="password" editable={!saving} placeholder="Connection password" placeholderTextColor={t.textFaint} selectionColor={t.accent} style={[styles.input, styles.passwordInput]} />
-							<Pressable accessibilityRole="button" accessibilityLabel={showPassword ? "Hide password" : "Show password"} disabled={saving} onPress={() => { haptics.tap(); setShowPassword((visible) => !visible); }} style={({ pressed }) => [styles.passwordToggle, pressed && styles.pressed]}>
-								<Feather name={showPassword ? "eye-off" : "eye"} size={iconSize.lg} color={t.textSecondary} />
-							</Pressable>
-						</View>
-					</View>
+					</>}
 					{!onEditorStateChange ? <EnvironmentEditorActions editor={{ hostId: host.id, canSave, saving, error, onSave: () => void save(), onCancel: cancelEditing }} /> : null}
 				</View>
 			) : null}
@@ -487,6 +496,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	activeRouteTitle: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
 	activeAddressSurface: { minHeight: 36, justifyContent: "center", paddingHorizontal: space.sm, backgroundColor: t.bgSubtle, borderRadius: radius.sm, borderCurve: "continuous" },
 	activeAddress: { fontFamily: t.fontMono, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
+	accountManagedNote: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	noRoutes: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, padding: space.md, borderTopWidth: rowDividerWidth, borderTopColor: t.borderDefault },
 	otherRoutesSection: { borderTopWidth: rowDividerWidth, borderTopColor: t.borderDefault },
 	otherRoutesToggle: { minHeight: 62, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, paddingVertical: space.sm },

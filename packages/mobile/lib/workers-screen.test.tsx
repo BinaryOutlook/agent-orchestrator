@@ -108,6 +108,22 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); });
 
+describe("Workers dock stability", () => {
+	it("keeps the dock's environments across polls that change only machine state", () => {
+		act(() => { renderer = create(<FleetScreen />); });
+		const before = renderer.root.findByType("WorkerDock" as never).props.environments;
+		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, lastSyncAt: host.lastSyncAt + 8_000, sessions: [...host.sessions] }));
+		act(() => renderer.update(<FleetScreen />));
+		expect(renderer.root.findByType("WorkerDock" as never).props.environments).toBe(before);
+
+		fixtures.hostStates = fixtures.hostStates.map((host) => host.hostId === "windows" ? { ...host, name: "Gaming PC" } : host);
+		act(() => renderer.update(<FleetScreen />));
+		const renamed = renderer.root.findByType("WorkerDock" as never).props.environments;
+		expect(renamed).not.toBe(before);
+		expect(renamed.map((environment: { name: string }) => environment.name)).toEqual(["Mac", "Gaming PC"]);
+	});
+});
+
 describe("Workers selected-machine reachability", () => {
 	it.each(["open", "closed"] as const)("targets the selected environment when creating work, even when %s", (connection) => {
 		fixtures.hostStates[1].connection = connection;

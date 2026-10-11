@@ -52,9 +52,14 @@ export default function FleetScreen() {
 	const [controlsOpen, setControlsOpen] = useState(false);
 	const [workerEnvironmentId, setWorkerEnvironmentId] = useState(ALL_WORKER_ENVIRONMENTS);
 	const [workerProjectId, setWorkerProjectId] = useState(ALL_WORKER_PROJECTS);
+	// hostStates is replaced on every poll (each machine stamps lastSyncAt), but
+	// the memoised dock only needs who the machines are. Rebuilding this on every
+	// tick re-rendered the dock mid-tap, the bug the stable handlers below avoid.
+	const environmentsKey = JSON.stringify(hostStates.map((host) => [host.hostId, host.name, host.appearance.symbol]));
 	const environments = useMemo(
 		() => hostStates.map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance })),
-		[hostStates],
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- environmentsKey covers every field read here
+		[environmentsKey],
 	);
 	const projectOptions = useMemo(
 		() => workerProjectOptions(allProjects, workerEnvironmentId),
