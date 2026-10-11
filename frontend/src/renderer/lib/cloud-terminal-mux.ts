@@ -30,6 +30,8 @@ import { publishCloudNotificationHint } from "./cloud-notification-hints";
 export interface CloudTerminalMuxOptions {
 	/** WebSocket base including the API mount, e.g. "wss://host/api/cloud/v1". */
 	wsBaseUrl: string;
+	/** Original Cloud servers send binary PTY bytes and no readiness frame. */
+	protocol?: 1 | 2;
 	/** "agent" attaches the running coding agent; "workspace" opens a shell. */
 	kind: "agent" | "workspace";
 	/** Dedicated agent terminal to attach, rather than the session's primary agent terminal. */
@@ -109,6 +111,13 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	};
 
 	const handleMessage = (event: MessageEvent) => {
+		if (options.protocol === 1) {
+			if (event.data instanceof ArrayBuffer) {
+				const bytes = new Uint8Array(event.data);
+				dataListeners.forEach((listener) => listener(bytes));
+			}
+			return;
+		}
 		if (typeof event.data !== "string") return;
 		let message: { type?: string; data?: string; sequence?: number; eventId?: string; eventType?: string; occurredAt?: string; payload?: unknown };
 		try {
@@ -159,17 +168,19 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 			ticket,
 			kind,
 			after: String(after),
-			protocol: "2",
+			protocol: String(options.protocol ?? 2),
 	});
 	if (options.terminalId) query.set("terminalId", options.terminalId);
 		const url = `${options.wsBaseUrl.replace(/\/+$/, "")}/terminal?${query.toString()}`;
 		const ws = new WS(url);
+		if (options.protocol === 1) ws.binaryType = "arraybuffer";
 		socket = ws;
 		ws.addEventListener("open", () => {
 			if (disposed || socket !== ws) return;
 			if (pendingResize) sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows });
 			for (const input of pendingInput.splice(0)) sendJSON({ type: "input", data: input });
 			setConnectionState("open");
+			if (options.protocol === 1) openedListeners.forEach((listener) => listener());
 		});
 		ws.addEventListener("message", (event) => {
 			if (socket === ws) handleMessage(event);

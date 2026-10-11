@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { appI18n } from "../i18n";
 import type { WorkspaceSummary } from "../types/workspace";
+import type { CloudCpSession } from "../lib/cloud-cp";
 
 const { captureRendererEventMock, cloudState, getMock, hasTrustedApiBaseUrlMock, listProjectsMock, listSessionsMock, remoteGetMock, setQueryHealthyMock } = vi.hoisted(
 	() => ({
@@ -39,7 +40,31 @@ vi.mock("./useCloudOrg", () => ({
 	useCloudOrg: () => ({ org: cloudState.org, isLoading: false, error: undefined, ready: cloudState.ready }),
 }));
 
-import { useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { toCloudWorkspaceSession, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+
+it("selects the binary terminal protocol only when Cloud omits interface mode", () => {
+	const session = {
+		id: "session-1", orgId: "org-1", projectId: "project-1",
+		kind: "worker", harness: "codex", displayName: "Review",
+		branch: "", mode: "standard", deniedCommands: [],
+		activityState: "active", status: "working", runtimeConnected: true,
+		isTerminated: false, prs: [],
+		createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z",
+	} satisfies Omit<CloudCpSession, "interfaceMode">;
+	const project = { id: "project-1", displayName: "Project" };
+
+	expect(toCloudWorkspaceSession(session, project, "org-1")).toMatchObject({
+		mode: "tui", cloud: { legacyTerminalProtocol: true },
+	});
+	expect(toCloudWorkspaceSession({ ...session, interfaceMode: "tui" }, project, "org-1")).toMatchObject({
+		mode: "tui", cloud: { legacyTerminalProtocol: false },
+	});
+	expect(toCloudWorkspaceSession({
+		...session, interfaceMode: "chat", terminalProtocol: 1, model: "gpt-5.6-terra",
+	}, project, "org-1")).toMatchObject({
+		mode: "chat", cloud: { legacyTerminalProtocol: true, model: "gpt-5.6-terra" },
+	});
+});
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);

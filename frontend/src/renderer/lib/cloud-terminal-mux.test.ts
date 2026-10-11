@@ -7,6 +7,7 @@ import { subscribeCloudNotificationHints } from "./cloud-notification-hints";
 class FakeWebSocket {
 	static OPEN = 1;
 	readyState = FakeWebSocket.OPEN;
+	binaryType: BinaryType = "blob";
 	url: string;
 	sent: string[] = [];
 	private listeners = new Map<string, Set<(event: unknown) => void>>();
@@ -55,6 +56,30 @@ async function settle() {
 }
 
 describe("createCloudTerminalMux direct open", () => {
+	it("opens legacy binary terminals without waiting for a protocol 2 ready frame", async () => {
+		FakeWebSocket.instances = [];
+		const mux = createCloudTerminalMux({
+			wsBaseUrl: "wss://cp.example.com/api/cloud/v1",
+			kind: "agent",
+			protocol: 1,
+			mintTicket: async () => "ticket-1",
+			WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+		});
+		await settle();
+		const ws = FakeWebSocket.instances[0];
+		expect(paramOf(ws, "protocol")).toBe("1");
+		expect(ws.binaryType).toBe("arraybuffer");
+		let opened = 0;
+		const output: number[] = [];
+		mux.onOpened("agent", () => { opened++; });
+		mux.onData("agent", (bytes) => { output.push(...bytes); });
+		ws.emit("open", {});
+		ws.emit("message", { data: Uint8Array.of(65, 66).buffer });
+		expect(opened).toBe(1);
+		expect(output).toEqual([65, 66]);
+		mux.dispose();
+	});
+
 	it("opens its socket directly at construction with no agent-ready wait", async () => {
 		FakeWebSocket.instances = [];
 		const mux = makeMux();

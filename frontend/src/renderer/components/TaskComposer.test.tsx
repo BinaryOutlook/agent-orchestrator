@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
+	legacyCloud: false,
 	cloudProviders: ["docker"] as string[],
 }));
 
@@ -95,6 +96,10 @@ vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: { createSession: h.cloudCreateSession } }),
 }));
 
+vi.mock("../hooks/useProviderConnections", () => ({
+	useProviderConnections: () => ({ data: undefined, chatSessionModels: h.legacyCloud ? ["gpt-5.6-terra"] : [] }),
+}));
+
 vi.mock("../hooks/useCloudSandboxProviders", () => ({
 	useCloudSandboxProviders: () => ({ available: h.cloudProviders }),
 }));
@@ -153,6 +158,7 @@ afterEach(() => {
 	h.agentCatalog = undefined;
 	h.cloudProjects.length = 0;
 	h.cloudCreateSession.mockReset();
+	h.legacyCloud = false;
 	h.cloudProviders = ["docker"];
 	window.localStorage.removeItem("ao.cloud.sandboxProvider");
 	useSandboxProviderStore.setState({ selectedProvider: null });
@@ -1092,6 +1098,48 @@ describe("TaskComposer", () => {
 		fireEvent.change(task(), { target: { value: "Another task" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" })));
+	});
+
+	it("creates a Cloud Codex chat only after Terra is selected", async () => {
+		h.legacyCloud = true;
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "codex" } } });
+		h.get.mockImplementation(async () => ({ data: { agent: "codex", selectionMode: "catalog", models: [
+			{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol", isDefault: true, efforts: ["medium"] },
+			{ id: "gpt-5.6-terra", label: "GPT-5.6 Terra", efforts: ["medium"] },
+		], allowCustom: true } }));
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "terra-chat" } });
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT-5.6 Sol"));
+		expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
+		fireEvent.change(task(), { target: { value: "Hello Terra" } });
+		fireEvent.click(startTask());
+		expect(await screen.findByText("Choose GPT-5.6 Terra for this Cloud chat session.")).toBeInTheDocument();
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		await userEvent.click(model);
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.6 Terra" }));
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({
+			interfaceMode: "chat", model: "gpt-5.6-terra", harness: "codex",
+		})));
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
+	});
+
+	it("leaves modern Cloud Codex task creation unchanged", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "codex" } } });
+		h.get.mockImplementation(async () => ({ data: { agent: "codex", selectionMode: "catalog", models: [
+			{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol", isDefault: true, efforts: ["medium"] },
+		], allowCustom: true } }));
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "modern-cloud" } });
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.6 Sol"));
+		expect(screen.getByRole("button", { name: "Effort" })).toBeInTheDocument();
+		fireEvent.change(task(), { target: { value: "Modern task" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ reasoningEffort: "medium" });
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("model");
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("interfaceMode");
 	});
 
 	it("uses the control plane default when a saved sandbox provider is unavailable", async () => {

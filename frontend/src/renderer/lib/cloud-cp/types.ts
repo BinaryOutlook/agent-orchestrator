@@ -249,6 +249,8 @@ export type CloudCpInterfaceMode = "tui" | "chat";
 export interface CloudCpCreateSessionRequest {
 	projectId: string;
 	kind: CloudCpSessionKind;
+	/** An explicit chat session uses headless agent turns, not the interactive PTY. */
+	interfaceMode?: CloudCpInterfaceMode;
 	/** Coding-agent harness identifier (e.g. "claude-code"), 1-120 characters. */
 	harness: string;
 	/** 1-80 characters. */
@@ -363,7 +365,12 @@ export interface CloudCpSession {
 	displayName: string;
 	branch: string;
 	mode: string;
-	interfaceMode: CloudCpInterfaceMode;
+	/** Absent on control planes with the original binary terminal protocol. */
+	interfaceMode?: CloudCpInterfaceMode;
+	/** Fixed launch model for chat-only Cloud workers. */
+	model?: string;
+	/** Original Cloud workers send binary PTY frames, even when interfaceMode is present. */
+	terminalProtocol?: 1 | 2;
 	deniedCommands: string[];
 	activityState: string;
 	status: string;
@@ -1001,6 +1008,8 @@ export interface CloudCpProviderConnection {
 /** GET /me/providers */
 export interface CloudCpProviderConnectionsResponse {
 	providerConnections: CloudCpProviderConnection[];
+	/** Explicit creation capability; absent on servers that only support terminal sessions. */
+	chatSessionModels?: string[];
 }
 
 /** PUT /me/providers/{agent}, PUT /me/github-pat */

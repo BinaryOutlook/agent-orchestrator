@@ -167,6 +167,7 @@ export function TaskComposer({
 	// project keeps the existing daemon flow untouched.
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
+	const cloudConnectionsQuery = useProviderConnections();
 	// The user's client-side sandbox-provider preference (when the control plane
 	// offers more than one); omitted lets the control plane use its default.
 	const selectedProvider = useSandboxProviderStore((s) => s.selectedProvider);
@@ -187,6 +188,11 @@ export function TaskComposer({
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
+			if (cloudConnectionsQuery.isPending) throw new Error("Cloud agent connections are still loading.");
+			const codexChat = cloudConnectionsQuery.chatSessionModels.includes("gpt-5.6-terra") && input.agent === "codex";
+			if (codexChat && input.model !== "gpt-5.6-terra") {
+				throw new Error("Choose GPT-5.6 Terra for this Cloud chat session.");
+			}
 			void captureRendererEvent("ao.renderer.task_create_requested", { project_id: input.projectId });
 			if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 			try {
@@ -194,10 +200,11 @@ export function TaskComposer({
 					projectId: input.projectId,
 					kind: "worker",
 					harness: input.agent ?? "claude-code",
+					...(codexChat ? { interfaceMode: "chat" as const } : {}),
 					displayName: input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code"),
 					prompt: input.brief,
 					...(input.model ? { model: input.model } : {}),
-					...(input.effort ? { reasoningEffort: input.effort } : {}),
+					...(!codexChat && input.effort ? { reasoningEffort: input.effort } : {}),
 					...(provider ? { provider } : {}),
 				});
 				// The control plane provisions the sandbox asynchronously; surface the
@@ -210,7 +217,7 @@ export function TaskComposer({
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudClient, cloudOrg, provider, queryClient, t],
+		[cloudClient, cloudConnectionsQuery.isPending, cloudConnectionsQuery.chatSessionModels, cloudOrg, provider, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(
@@ -365,7 +372,6 @@ export function TaskComposer({
 	const agentCatalog = agentsQuery.data;
 	// Cloud projects support the control-plane agents listed in CLOUD_AGENT_PROVIDERS
 	// (the single source), with readiness derived from the user's provider connections.
-	const cloudConnectionsQuery = useProviderConnections();
 	const cloudAgents = useMemo(() => cloudAgentInfos(cloudConnectionsQuery.data), [cloudConnectionsQuery.data]);
 	const standaloneDefaultAgent = useMemo(() => {
 		if (!isStandalone || !agentCatalog) return "";
@@ -794,7 +800,8 @@ export function TaskComposer({
 			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
-			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
+			showEffort={!requiresTuiFallback && !(isCloudProject && cloudConnectionsQuery.chatSessionModels.includes("gpt-5.6-terra") && selectedAgent === "codex") &&
+				(effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
 		/>
 	);
 }

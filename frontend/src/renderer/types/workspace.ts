@@ -239,6 +239,10 @@ export type WorkspaceSession = {
 	 */
 	cloud?: {
 		orgId: string;
+		/** The control plane streams raw terminal bytes instead of protocol 2 frames. */
+		legacyTerminalProtocol?: boolean;
+		/** The fixed model selected when this Cloud worker was created. */
+		model?: string;
 		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;

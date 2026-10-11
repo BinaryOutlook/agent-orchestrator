@@ -93,7 +93,11 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		currentOwnerRef.current = owner;
 		return () => { currentOwnerRef.current = ""; };
 	}, [owner]);
-	const interfaceSwitch = useSessionInterfaceTransition(isCloud ? sessionId : session?.id, context);
+	const legacyCloud = Boolean(session?.cloud?.legacyTerminalProtocol);
+	const interfaceSwitch = useSessionInterfaceTransition(
+		isCloud ? (session && !legacyCloud ? sessionId : undefined) : session?.id,
+		context,
+	);
 	const [dialogScope, setDialogScope] = useState<DialogScope>();
 	const [conversationWork, setConversationWork] = useState<ConversationWorkState & { owner?: string }>({
 		controllerBusy: false,
@@ -424,7 +428,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		})
 		: undefined;
 	const showAction = Boolean(!unsupported && (isCloud
-		? cloudEnabled && sessionId
+		? cloudEnabled && sessionId && !legacyCloud
 		: interfaceSwitch.status || interfaceSwitch.isLoading || interfaceSwitch.statusError));
 	const disabledReason = interfaceSwitch.isLoading
 		? "Checking whether this agent can switch interfaces…"

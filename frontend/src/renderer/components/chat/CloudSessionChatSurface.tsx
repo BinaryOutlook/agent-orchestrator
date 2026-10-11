@@ -346,6 +346,7 @@ export function CloudSessionChatSurface({
 	}) => void;
 }) {
 	const cloud = session.cloud;
+	const legacyChat = cloud?.legacyTerminalProtocol === true;
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const { client, ready } = useCloudCp();
 	const queryClient = useQueryClient();
@@ -376,7 +377,7 @@ export function CloudSessionChatSurface({
 	};
 	const modelsQuery = useQuery({
 		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id],
-		enabled: Boolean(cloud && ready && (session.provider === "codex" || session.provider === "claude-code")),
+		enabled: Boolean(cloud && ready && !legacyChat && (session.provider === "codex" || session.provider === "claude-code")),
 		// The TUI may change its native model while Chat is unmounted.
 		staleTime: 0,
 		refetchOnMount: "always",
@@ -433,6 +434,10 @@ export function CloudSessionChatSurface({
 	const send = useMutation({
 		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			if (legacyChat) {
+				return client.sendSessionMessage(cloud.orgId, session.id, { text },
+					{ idempotencyKey: clientMessageId });
+			}
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			const approvalMode = selectedSettings.approvalMode && approvalModes.includes(selectedSettings.approvalMode)
 				? selectedSettings.approvalMode : approvalModes[0];
@@ -449,8 +454,9 @@ export function CloudSessionChatSurface({
 		onSuccess: () => void invalidate(),
 	});
 	const snapshot = useMemo(() => ({
-		...toSnapshot(session, eventsQuery.data ?? []), settings,
-	}), [eventsQuery.data, session, settings]);
+		...toSnapshot(session, eventsQuery.data ?? []),
+		settings: legacyChat ? { model: cloud?.model } : settings,
+	}), [eventsQuery.data, session, settings, legacyChat, cloud?.model]);
 	const activeTurn = snapshot.turns.find((turn) => turn.state === "running");
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
@@ -516,10 +522,10 @@ export function CloudSessionChatSurface({
 				if (id !== "mode" || !("value" in choice) || !planOptions[0].choices.some((option) => option.value === choice.value)) return;
 				updateSettings({ ...settingsRef.current.settings, executionMode: choice.value === "plan" ? "plan" : "agent" });
 			} : undefined}
-			onChooseSettings={(next) => updateSettings({ ...settingsRef.current.settings, ...next })}
-			showApprovalMode={approvalModes.length > 0}
+			onChooseSettings={legacyChat ? undefined : (next) => updateSettings({ ...settingsRef.current.settings, ...next })}
+			showApprovalMode={!legacyChat && approvalModes.length > 0}
 			approvalModes={approvalModes}
-			onRememberPermissions={approvalModes.length > 0 ? (mode) => {
+			onRememberPermissions={!legacyChat && approvalModes.length > 0 ? (mode) => {
 				try { localStorage.setItem(projectKey, JSON.stringify({ approvalMode: mode })); } catch { /* keep this session's choice */ }
 				updateSettings({ ...settingsRef.current.settings, approvalMode: mode });
 			} : undefined}
@@ -551,8 +557,11 @@ export function CloudSessionChatSurface({
 				return steer.mutateAsync({ text, clientMessageId });
 			} : undefined}
 			steerPending={steer.isPending}
-			showSteerButton
-			onSend={(text, _attachments, clientMessageId) => send.mutateAsync({ text, clientMessageId })}
+			showSteerButton={!legacyChat}
+			onSend={(text, attachments, clientMessageId) => {
+				if (legacyChat && attachments?.length) return Promise.reject(new Error("Cloud chat accepts text only on this server."));
+				return send.mutateAsync({ text, clientMessageId });
+			}}
 			session={session}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}

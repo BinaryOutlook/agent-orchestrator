@@ -6,21 +6,39 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import type { CloudCpProviderConnection } from "../lib/cloud-cp";
+import type { CloudCpClient, CloudCpProviderConnection } from "../lib/cloud-cp";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
 import { useCloudCp } from "./useCloudCp";
+import { useCloudOrg } from "./useCloudOrg";
 
 export const providerConnectionsQueryKey = ["cloud-provider-connections"] as const;
+const noChatModels: string[] = [];
 
 export function useProviderConnections() {
 	const { client, ready } = useCloudCp();
-	return useQuery({
-		queryKey: providerConnectionsQueryKey,
+	const { org } = useCloudOrg();
+	const query = useQuery({
+		queryKey: [...providerConnectionsQueryKey, org?.id ?? ""],
 		enabled: ready,
 		staleTime: 60_000,
-		queryFn: async (): Promise<CloudCpProviderConnection[]> =>
-			(await client.listUserProviderConnections()).providerConnections,
+		queryFn: () => loadProviderConnections(client, org?.id),
 	});
+	return { ...query, data: query.data?.connections, chatSessionModels: query.data?.chatSessionModels ?? noChatModels };
+}
+
+export async function loadProviderConnections(client: CloudCpClient, orgId?: string): Promise<{
+	connections: CloudCpProviderConnection[];
+	chatSessionModels: string[];
+}> {
+	try {
+		const response = await client.listUserProviderConnections();
+		return { connections: response.providerConnections, chatSessionModels: response.chatSessionModels ?? [] };
+	} catch (error) {
+		if (!(error instanceof CloudCpError) || error.status !== 404 || !orgId) throw error;
+		const response = await client.listOrgProviderConnections(orgId);
+		return { connections: response.providerConnections, chatSessionModels: response.chatSessionModels ?? [] };
+	}
 }
 
 /**

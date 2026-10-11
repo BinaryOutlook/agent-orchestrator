@@ -354,6 +354,7 @@ export interface CloudCpClient {
 	): Promise<CloudCpTerminalTicketResponse>;
 
 	listUserProviderConnections(options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionsResponse>;
+	listOrgProviderConnections(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionsResponse>;
 	putUserAgentConnection(
 		agent: CloudCpAgentProvider,
 		body: CloudCpPutAgentConnectionRequest,
@@ -799,6 +800,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 
 		listUserProviderConnections: (o) => requestJson("GET", "/me/providers", { signal: o?.signal }),
+		listOrgProviderConnections: (orgId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/provider-connections`, { signal: o?.signal }),
 		putUserAgentConnection: (agent, body, o) =>
 			requestJson("PUT", `/me/providers/${seg(agent)}`, { body, signal: o?.signal }),
 		putGitHubPAT: (body, o) => requestJson("PUT", "/me/github-pat", { body, signal: o?.signal }),

@@ -57,6 +57,7 @@ const {
 		}>,
 		cloudMuxOptions: [] as Array<{
 			kind: "agent" | "workspace";
+			protocol?: 1 | 2;
 			mintTicket: (kind: "agent" | "workspace") => Promise<string>;
 		}>,
 		cloudTicketMock: vi.fn(async () => ({ ticket: "ticket" })),
@@ -77,7 +78,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 }));
 
 vi.mock("../lib/cloud-terminal-mux", () => ({
-	createCloudTerminalMux: (options: { kind: "agent" | "workspace"; mintTicket: () => Promise<string> }) => {
+	createCloudTerminalMux: (options: { kind: "agent" | "workspace"; protocol?: 1 | 2; mintTicket: () => Promise<string> }) => {
 		cloudMuxOptions.push(options);
 		return {};
 	},
@@ -207,6 +208,24 @@ beforeEach(() => {
 });
 
 describe("cloud terminal routing", () => {
+	it("uses binary terminal frames for control planes without interface modes", async () => {
+		const cloudSession = {
+			...worker, cloud: { orgId: "cloud-org", legacyTerminalProtocol: true },
+		} satisfies WorkspaceSession;
+		const view = renderCachedPane({
+			session: cloudSession,
+			sessions: [cloudSession],
+			terminalTarget: { kind: "reviewer", handleId: "reviewer-1", harness: "codex", sessionId: cloudSession.id },
+		});
+		try {
+			await waitFor(() => expect(terminalSessionOptions.at(-1)?.createMux).toBeTypeOf("function"));
+			terminalSessionOptions.at(-1)?.createMux?.();
+			expect(cloudMuxOptions.at(-1)?.protocol).toBe(1);
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("uses an agent stream for the session terminal and a workspace stream for shell tabs", () => {
 		expect(cloudTerminalKind({ kind: "worker" })).toBe("agent");
 		expect(

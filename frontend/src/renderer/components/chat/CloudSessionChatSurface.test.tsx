@@ -190,6 +190,32 @@ describe("CloudSessionChatSurface", () => {
 		}, { idempotencyKey: "message-2" });
 	});
 
+	it("uses a fixed Terra model on legacy Cloud chat without unsupported model or turn options", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockClear();
+		cloudMocks.sendSessionMessage.mockClear().mockResolvedValue({ event: {} });
+		localStorage.setItem("cloud-chat-settings:org-1:session-1:codex", JSON.stringify({
+			model: "gpt-5.6-sol", reasoningEffort: "high",
+		}));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, cloud: {
+				orgId: "org-1", legacyTerminalProtocol: true, model: "gpt-5.6-terra",
+			} }} />
+		</QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({
+			model: "gpt-5.6-terra",
+		}));
+		expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings).toBeUndefined();
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].showSteerButton).toBe(false);
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("hello Terra", [], "legacy-message");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id,
+			{ text: "hello Terra" }, { idempotencyKey: "legacy-message" });
+		await expect(cloudMocks.chatProps.mock.lastCall?.[0].onSend("file", [{ name: "file" }], "file-message")).rejects.toThrow("text only");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledTimes(1);
+	});
+
 	it("uses the Codex model and effort last selected in the TUI", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({

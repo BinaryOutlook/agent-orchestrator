@@ -374,6 +374,7 @@ export function TerminalCacheProvider({
 				createCloudTerminalMux({
 					wsBaseUrl: `${cloudCpRef.current.baseUrl.replace(/^http/i, "ws").replace(/\/+$/, "")}/api/cloud/v1`,
 					kind,
+					protocol: cloud.legacyTerminalProtocol ? 1 : 2,
 					terminalId: reviewerTerminalID,
 					cursor,
 					// Both kinds open their socket directly; the CP's find-or-create
