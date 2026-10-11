@@ -331,13 +331,20 @@ const desktopQuit = createDesktopQuitController({
 	platform: process.platform,
 	hasTray: () => trayController !== null && !browserQuitRequested,
 	isUpdateRestartRequested,
+	hasWindow: () => mainWindow !== null || createWindowPromise !== null,
 	closeWindow: () => {
 		if (mainWindow) mainWindow.close();
 		else if (createWindowPromise) {
-			void createWindowPromise.then(() => mainWindow?.close())
-				.catch((error) => console.error("failed to close pending main window:", error));
+			void createWindowPromise
+				.catch((error) => console.error("failed to close pending main window:", error))
+				.then(() => {
+					// No window came of it: nothing will emit "closed", so settle now.
+					if (mainWindow) mainWindow.close();
+					else desktopQuit.windowClosed();
+				});
 		}
 	},
+	hideDock: () => app.dock?.hide(),
 	quit: () => app.quit(),
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
@@ -784,16 +791,20 @@ async function createWindowInternal(): Promise<void> {
 	});
 
 	shellWebContents.on("will-prevent-unload", (event) => {
-		if (chatDraftRisks.length === 0) return;
 		if (
-			chatDraftQuitConfirmed ||
-			chatDraftWindowCloseConfirmed ||
-			confirmUnsafeChatDraftLeave(chatDraftRisks, (options) => dialog.showMessageBoxSync(options), chatDraftDialog)
+			chatDraftRisks.length > 0 &&
+			(chatDraftQuitConfirmed ||
+				chatDraftWindowCloseConfirmed ||
+				confirmUnsafeChatDraftLeave(chatDraftRisks, (options) => dialog.showMessageBoxSync(options), chatDraftDialog))
 		) {
 			// Electron uses preventDefault here to ignore beforeunload and continue
-			// leaving. Doing nothing honors the renderer's request to stay.
+			// leaving.
 			event.preventDefault();
+			return;
 		}
+		// Doing nothing honors the renderer's request to stay, so a quit's close
+		// did not happen and AO keeps its Dock icon.
+		desktopQuit.windowCloseCanceled();
 	});
 
 	mainWindow.on("close", (event) => {
@@ -804,6 +815,7 @@ async function createWindowInternal(): Promise<void> {
 			chatDraftDialog,
 		);
 		if (preventClose) {
+			desktopQuit.windowCloseCanceled();
 			event.preventDefault();
 			return;
 		}
@@ -962,11 +974,14 @@ async function createWindowInternal(): Promise<void> {
 		// the next bounce skip attaching one to the replacement window.
 		cancelDockBounce();
 		trayLifecycle.clearPendingTarget();
+		desktopQuit.windowClosed();
 	});
 }
 
 function createWindow(): Promise<void> {
 	if (createWindowPromise) return createWindowPromise;
+	// A background quit hid the Dock icon; bring it back with the window.
+	void app.dock?.show();
 	const pending = createWindowInternal();
 	createWindowPromise = pending;
 	void pending.then(
@@ -3074,8 +3089,9 @@ app.whenReady().then(async () => {
 
 // Daemon teardown is now handled via the OS-native supervisor socket: the daemon
 // self-stops ~5s after the last client (this process) drops its connection.
-// Ordinary macOS Quit closes only the window. Full exit drops the supervisor
-// socket, stopping the app-owned daemon after its grace period. Sessions survive.
+// Ordinary macOS Quit closes the window and leaves the Dock; the tray stays.
+// Full exit drops the supervisor socket, stopping the app-owned daemon after
+// its grace period. Sessions survive.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
