@@ -6080,6 +6080,44 @@ func TestSystemPrompt_ArtifactOutputKind(t *testing.T) {
 	}
 }
 
+func TestSystemPrompt_ArtifactOutputKindWithoutArtifactDir(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	// No DataDir: artifactPrompt has no directory to name.
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", domain.SpawnOutputArtifact, false)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if strings.Contains(sp, "## Session Artifacts") {
+		t.Fatalf("expected no artifact dir section without a data dir:\n%s", sp)
+	}
+	if !strings.Contains(sp, "## Artifact Output") {
+		t.Fatalf("artifact output section dropped without an artifact dir:\n%s", sp)
+	}
+}
+
+func TestSpawnWorker_ArtifactOutputRequiresArtifactDir(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, OutputKind: domain.SpawnOutputArtifact})
+	if !errors.Is(err, ErrArtifactOutputUnavailable) {
+		t.Fatalf("Spawn err = %v, want ErrArtifactOutputUnavailable", err)
+	}
+	if len(st.sessions) != 0 {
+		t.Fatalf("rejected spawn created sessions: %v", st.sessions)
+	}
+	if agent.lastLaunch.SystemPrompt != "" {
+		t.Fatal("rejected spawn launched an agent")
+	}
+}
+
 func TestSpawnWorker_ArtifactOutputKindPersistsAndReachesPrompt(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}

@@ -53,6 +53,9 @@ var (
 	// ErrMissingHarness means neither the spawn request nor the project's role
 	// config selected an agent. Worker/orchestrator spawns must be explicit.
 	ErrMissingHarness = errors.New("session: agent harness required")
+	// ErrArtifactOutputUnavailable rejects an artifact-output spawn when the
+	// daemon has no data dir to hold the session's artifact directory.
+	ErrArtifactOutputUnavailable = errors.New("session: artifact output requires an artifact directory")
 	// ErrHarnessInstallActive prevents launch while the harness executable is replaced.
 	ErrHarnessInstallActive = errors.New("session: harness install active")
 	// ErrUnsupportedModel means the requested model is not supported by the
@@ -914,6 +917,9 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	if cfg.OutputKind == domain.SpawnOutputArtifact && m.artifactDir("") == "" {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
+	}
 	if cfg.ClientRequestID != "" {
 		existing, found, err := m.store.GetSessionByClientRequestID(ctx, cfg.ClientRequestID)
 		if err != nil {
@@ -5456,9 +5462,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
-		if kind == domain.KindWorker && outputKind == domain.SpawnOutputArtifact {
-			cfg.AdditionalSections = append(cfg.AdditionalSections, artifactOutputPrompt)
-		}
+	}
+	if kind == domain.KindWorker && outputKind == domain.SpawnOutputArtifact {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactOutputPrompt)
 	}
 	return buildSystemPromptText(cfg), nil
 }
@@ -5630,7 +5636,7 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 // artifactOutputPrompt is added for a session spawned with the artifact output
 // kind.
 const artifactOutputPrompt = "## Artifact Output\n\n" +
-	"The user's request in this session is for an artifact. Write the finished deliverable as a file in the session artifact directory named above: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
+	"The user's request in this session is for an artifact. Write the finished deliverable as a file in the session artifact directory: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
 	"Do not open a pull request, and do not commit the deliverable to the git workspace. If the request is unclear, ask the user what the artifact should contain before writing it."
 
 func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
