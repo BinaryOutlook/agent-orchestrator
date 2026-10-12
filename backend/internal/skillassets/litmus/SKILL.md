@@ -14,7 +14,7 @@ The loop:
 
 1. `ao testing intake <pr-url>`, then read `context-pack.md`. It holds the PR text, the diff by area, and a few suggested checks. The suggestions are a starting point, not a script.
 2. Decide what to check. The first check is the PR's headline claim, in the author's words. Then the things most likely to have broken around it. Two to four checks is usual; more is fine when the PR deserves it. Each check names one observable thing: `ao testing check add <name> --expect "<what a user would see>"`.
-3. `ao testing prepare`, then `ao testing launch head` (the PR build).
+3. `ao testing prepare` (it returns when both builds are ready; a cold build takes minutes), then `ao testing launch head` (the PR build).
 4. Run each check: `check start <id>`, then `snapshot` to see the page, and `click <ref>`, `fill <ref> <text>`, `type`, `press <key>`, `wait` to act. Every action leaves an after-screenshot and the verb reply names it. Finish with `check end <id> --result pass|fail|partial|skipped --note "<what you saw>"`.
 5. Repeat on main: `ao testing launch base`, re-add each check by name with `--leg base`, and run them with `--leg base` on every verb. Main is where the proof comes from: a check that passes on the PR build and fails on main is what makes a verdict. Skip main only if it will not build or launch, or under 4 minutes remain, and say why with `submit --skip-base --reason`. Every check gets a main result; one you cannot repeat there is `skipped` with a one-line reason.
 6. `ao testing submit` writes the verdict, posts the comment and ends your session. Never post to GitHub yourself.

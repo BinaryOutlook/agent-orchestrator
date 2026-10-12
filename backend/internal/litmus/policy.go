@@ -193,8 +193,8 @@ func (s *Service) gaveUp(ctx context.Context, sessionID string, sp spawned) bool
 func (s *Service) inFlight(runID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for key, on := range s.busy {
-		if on && strings.HasPrefix(key, runID+" ") {
+	for key := range s.busy {
+		if strings.HasPrefix(key, runID+" ") {
 			return true
 		}
 	}

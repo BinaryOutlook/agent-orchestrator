@@ -327,12 +327,28 @@ func findDonor(reposDir, self, hash, installDir string) string {
 	return ""
 }
 
-// Prepare clones and builds the head, then the base, sequentially.
+// Prepare clones and builds the head, then the base, sequentially. A second call
+// while one is building (a retry after a client timeout) waits for that build and
+// then runs itself, which is quick once the clones are warm.
 func (s *Service) Prepare(ctx context.Context, sessionID string) (Run, error) {
-	run, done, err := s.begin(sessionID, "prepare")
-	if err != nil {
-		return Run{}, err
+	for {
+		run, done, err := s.begin(sessionID, "prepare")
+		if err == nil {
+			return s.prepare(ctx, run, done)
+		}
+		ch, on := s.running(sessionID, "prepare")
+		if !on {
+			return Run{}, err
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return Run{}, ctx.Err()
+		}
 	}
+}
+
+func (s *Service) prepare(ctx context.Context, run Run, done func()) (Run, error) {
 	defer done()
 	if run.HeadSHA == "" || run.BaseSHA == "" || (run.State != RunIntake && run.State != RunPrepared) {
 		return Run{}, conflict("TESTING_RUN_STATE", fmt.Sprintf("run %s is %s with head %q; prepare needs a pinned run that is not launched yet", run.ID, run.State, run.HeadSHA))

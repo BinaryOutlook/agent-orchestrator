@@ -6010,6 +6010,11 @@ export interface components {
             session: string;
             socketDir: string;
         };
+        TestingInFlight: {
+            /** @description How long the verb has been running. */
+            seconds: number;
+            verb: string;
+        };
         TestingLeg: {
             buildManifest?: string;
             daemonPort?: number;
@@ -6187,6 +6192,8 @@ export interface components {
         };
         TestingRunStatus: {
             checks: components["schemas"]["TestingCheck"][];
+            /** @description Long verbs still running for the run (prepare, launch, submit, cleanup) and for how long, so a poller can tell a long build from a stuck one. */
+            inFlight?: components["schemas"]["TestingInFlight"][];
             run: components["schemas"]["TestingRun"];
         };
         TestingRunSummary: {

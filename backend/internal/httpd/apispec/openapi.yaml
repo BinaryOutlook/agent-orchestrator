@@ -17179,6 +17179,17 @@ components:
       - endpoint
       - socketDir
       type: object
+    TestingInFlight:
+      properties:
+        seconds:
+          description: How long the verb has been running.
+          type: number
+        verb:
+          type: string
+      required:
+      - verb
+      - seconds
+      type: object
     TestingLeg:
       properties:
         buildManifest:
@@ -17586,6 +17597,11 @@ components:
         checks:
           items:
             $ref: '#/components/schemas/TestingCheck'
+          type: array
+        inFlight:
+          description: Long verbs still running for the run (prepare, launch, submit, cleanup) and for how long, so a poller can tell a long build from a stuck one.
+          items:
+            $ref: '#/components/schemas/TestingInFlight'
           type: array
         run:
           $ref: '#/components/schemas/TestingRun'

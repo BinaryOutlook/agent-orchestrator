@@ -111,7 +111,7 @@ func TestSweepWaitsForInFlightVerbBeforeReaping(t *testing.T) {
 	is(t, "")(svc.Intake(ctx, "s1", prURL))
 	now = now.Add(RunBudget + time.Second)
 
-	svc.busy["run_s1 launch"] = true // a launch is still building when the deadline passes
+	svc.busy["run_s1 launch"] = busyVerb{since: now, done: make(chan struct{})} // a launch is still building when the deadline passes
 	if got := sweep(svc, nil); !slices.Equal(got, []string{"s1"}) {
 		t.Fatalf("the session of an expired run is stopped at once, killed %v", got)
 	}

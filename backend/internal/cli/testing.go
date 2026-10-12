@@ -41,7 +41,7 @@ func newTestingCommand(ctx *commandContext) *cobra.Command {
 		return testingCall(t, cmd, "testing/intake", map[string]any{"prUrl": a[0]}, runLine)
 	}))
 	cmd.AddCommand(verb("prepare", "Prepare the base and head clones and builds", noArgs, func(cmd *cobra.Command, _ []string) error {
-		return testingCall(t, cmd, "testing/prepare", map[string]any{}, runLine)
+		return testingCallTimeout(t, cmd, "testing/prepare", map[string]any{}, runLine, prepareCallTimeout)
 	}))
 	cmd.AddCommand(verb("launch <base|head>", "Launch a private copy of the base or head build", exactArgs(1), func(cmd *cobra.Command, a []string) error {
 		return testingCall(t, cmd, "testing/launch", map[string]any{"leg": a[0]}, runLine)
@@ -50,6 +50,9 @@ func newTestingCommand(ctx *commandContext) *cobra.Command {
 		return testingCall(t, cmd, "testing/status", nil, func(out litmus.RunStatus) string {
 			lines := make([]string, 0, 1+len(out.Run.Legs)+len(out.Checks))
 			lines = append(lines, runLine(out.Run))
+			for _, f := range out.InFlight {
+				lines = append(lines, fmt.Sprintf("%s in flight for %s", f.Verb, (time.Duration(f.Seconds)*time.Second).String()))
+			}
 			for _, l := range out.Run.Legs {
 				lines = append(lines, legLine(l))
 			}
@@ -296,6 +299,11 @@ func (t *testingCLI) testCommand() *cobra.Command {
 // testCallTimeout outlasts the daemon's 3 minute cap on one test run.
 const testCallTimeout = 4 * time.Minute
 
+// prepareCallTimeout outlasts the daemon's 10 minute cap on one prepare: a cold
+// build of both legs runs for minutes, and a call cut short by the client would
+// only come back as a retry that waits for the same build.
+const prepareCallTimeout = 11 * time.Minute
+
 func testLine(r litmus.TestResult) string {
 	head := fmt.Sprintf("%s: exit %d in %.1fs", strings.Join(r.Args, " "), r.Exit, r.Seconds)
 	if len(r.CopiedFiles) > 0 {
@@ -323,6 +331,11 @@ func (t *testingCLI) recordCommand() *cobra.Command {
 // testingCall sends one request for the current session (a POST of body, or a
 // GET when body is nil), decodes the daemon's answer as T and prints it with text.
 func testingCall[T any](t *testingCLI, cmd *cobra.Command, path string, body map[string]any, text func(T) string) error {
+	return testingCallTimeout(t, cmd, path, body, text, commandTimeout)
+}
+
+// testingCallTimeout is testingCall with its own bound on the daemon call, for a verb that outlasts commandTimeout.
+func testingCallTimeout[T any](t *testingCLI, cmd *cobra.Command, path string, body map[string]any, text func(T) string, timeout time.Duration) error {
 	sessionID, err := testingSessionID()
 	if err != nil {
 		return err
@@ -332,7 +345,7 @@ func testingCall[T any](t *testingCLI, cmd *cobra.Command, path string, body map
 		err = t.c.getJSON(cmd.Context(), path+"?sessionId="+url.QueryEscape(sessionID), &out)
 	} else {
 		body["sessionId"] = sessionID
-		err = t.c.postJSON(cmd.Context(), path, body, &out)
+		err = t.c.doJSONPathWithHeadersAndTimeout(cmd.Context(), http.MethodPost, "/api/v1/"+path, body, &out, nil, timeout)
 	}
 	if err != nil {
 		return err

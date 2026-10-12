@@ -34,10 +34,10 @@ type Service struct {
 	runner        Runner
 	sys           sysOps
 	nodeDirs      func(major string) []string
-	closeEngine   func(runID string) // cleanup calls it before killing anything
-	busy          map[string]bool    // long verbs in flight, by run and verb
-	engines       map[string]*Engine // by run/leg
-	seqs          map[string]int     // receipts handed out, by run
+	closeEngine   func(runID string)  // cleanup calls it before killing anything
+	busy          map[string]busyVerb // long verbs in flight, by run and verb
+	engines       map[string]*Engine  // by run/leg
+	seqs          map[string]int      // receipts handed out, by run
 	engExec       execFn
 	media         Media           // ffmpeg, behind an interface so tests never run it
 	spawn         Spawner         // launches testing workers; nil until the daemon wires it
@@ -61,7 +61,7 @@ func New(store *Store, clock func() time.Time) *Service {
 	if clock == nil {
 		clock = time.Now
 	}
-	s := &Service{store: store, clock: clock, gh: execGH{}, runner: execRunner{}, sys: realSys(), nodeDirs: defaultNodeDirs, busy: map[string]bool{},
+	s := &Service{store: store, clock: clock, gh: execGH{}, runner: execRunner{}, sys: realSys(), nodeDirs: defaultNodeDirs, busy: map[string]busyVerb{},
 		engines: map[string]*Engine{}, seqs: map[string]int{}, engExec: realExec,
 		media: execMedia{}, testCap: testCap, keepRuns: DefaultKeepRuns, keepCheckouts: DefaultKeepCheckouts}
 	s.closeEngine = s.closeEngines
@@ -174,7 +174,14 @@ func (s *Service) Status(_ context.Context, sessionID string) (RunStatus, error)
 		return RunStatus{}, err
 	}
 	checks, err := s.store.Checks(run.ID)
-	return RunStatus{Run: run, Checks: append([]Check{}, checks...)}, err
+	var flying []InFlight // what is still running for the run, so a poller can tell a long build from a stuck one
+	for k, fl := range s.busy {
+		if verb, ours := strings.CutPrefix(k, run.ID+" "); ours {
+			flying = append(flying, InFlight{Verb: verb, Seconds: s.clock().Sub(fl.since).Round(time.Second).Seconds()})
+		}
+	}
+	slices.SortFunc(flying, func(a, b InFlight) int { return strings.Compare(a.Verb, b.Verb) })
+	return RunStatus{Run: run, Checks: append([]Check{}, checks...), InFlight: flying}, err
 }
 
 // maxChecks bounds a plan; minChecks must exist before the PR build is launched.
@@ -249,6 +256,26 @@ func (s *Service) CheckEnd(_ context.Context, sessionID, id string, result Check
 	})
 }
 
+// busyVerb is a long verb running for a run: when it began, and a channel that
+// closes when it ends so a retry can wait for it instead of failing.
+type busyVerb struct {
+	since time.Time
+	done  chan struct{}
+}
+
+// running returns the channel that closes when verb finishes for the session's
+// run, and false when nothing is in flight.
+func (s *Service) running(sessionID, verb string) (<-chan struct{}, bool) {
+	id, err := runID(sessionID)
+	if err != nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fl, on := s.busy[id+" "+verb]
+	return fl.done, on
+}
+
 // begin loads the session's open run and marks verb in flight, so a second call
 // (a retry after a CLI timeout) gets a conflict instead of racing the first.
 func (s *Service) begin(sessionID, verb string) (Run, func(), error) {
@@ -267,18 +294,19 @@ func (s *Service) begin(sessionID, verb string) (Run, func(), error) {
 // stored yet), and a launch refuses while a submit or cleanup runs. Callers hold s.mu.
 func (s *Service) markBusy(runID, verb string) (func(), error) {
 	key := runID + " " + verb
-	if s.busy[key] {
+	if _, on := s.busy[key]; on {
 		return nil, conflict("TESTING_BUSY", verb+" is already in progress for "+runID+"; poll `ao testing status`")
 	}
 	closing, launching := verb == "submit" || verb == "cleanup", strings.HasPrefix(verb, "launch ")
-	for k, on := range s.busy {
+	for k := range s.busy {
 		other, ours := strings.CutPrefix(k, runID+" ")
-		if on && ours && ((closing && strings.HasPrefix(other, "launch ")) || (launching && (other == "submit" || other == "cleanup"))) {
+		if ours && ((closing && strings.HasPrefix(other, "launch ")) || (launching && (other == "submit" || other == "cleanup"))) {
 			return nil, conflict("TESTING_RUN_BUSY", fmt.Sprintf("%s is refused while %s is in progress for %s; wait for it to finish", verb, other, runID))
 		}
 	}
-	s.busy[key] = true
-	return func() { s.mu.Lock(); delete(s.busy, key); s.mu.Unlock() }, nil
+	fl := busyVerb{since: s.clock(), done: make(chan struct{})}
+	s.busy[key] = fl
+	return func() { s.mu.Lock(); delete(s.busy, key); s.mu.Unlock(); close(fl.done) }, nil
 }
 
 // update re-reads the run, applies fn and saves it: long verbs run unlocked and merge their result here.

@@ -187,6 +187,14 @@ type Verdict struct {
 
 // RunStatus is a run with its checks.
 type RunStatus struct {
-	Run    Run     `json:"run"`
-	Checks []Check `json:"checks"`
+	Run      Run        `json:"run"`
+	Checks   []Check    `json:"checks"`
+	InFlight []InFlight `json:"inFlight,omitempty"` // long verbs still running for the run, oldest first by verb
+}
+
+// InFlight is a long verb (prepare, launch, submit, cleanup) still running for a
+// run, and for how long: a prepare that has been building for minutes is not stuck.
+type InFlight struct {
+	Verb    string  `json:"verb"`
+	Seconds float64 `json:"seconds"`
 }
