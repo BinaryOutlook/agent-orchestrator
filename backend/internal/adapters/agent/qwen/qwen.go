@@ -361,13 +361,28 @@ func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 }
 
 // appendToolRestrictionFlags maps AO's tool allow/deny lists onto Qwen Code's
-// repeatable `--allowed-tools` / `--exclude-tools` options. These lists are the
-// enforced read-only guarantee a restricted launch relies on, so they are
-// translated rather than dropped.
+// repeatable restriction options.
+//
+// AllowedTools maps to `--core-tools`, Qwen's allowlist over its core tool set
+// (file, shell, search and related built-ins): a core tool the list omits is
+// disabled, not merely left unmentioned. It deliberately does not map to
+// `--allowed-tools`, which is pure auto-approval and leaves every other tool
+// registered, so an allowlist forwarded there would keep write_file, edit and
+// run_shell_command callable in a session meant to be read-only.
+//
+// DisallowedTools maps to `--exclude-tools`, which drops the named tool from the
+// registry. Qwen deliberately lets tools outside the core set (MCP and skill
+// tools, and synthetic built-ins such as task_stop, send_message, tool_search
+// and tool_call) bypass `--core-tools`, so a denylist is the only restriction
+// that still reaches them; callers that need those blocked must name them.
+//
+// Both options are repeatable in Qwen Code, so each entry becomes its own flag
+// and blank entries are dropped. Entries are still trimmed, because Qwen
+// matches tool names exactly.
 func appendToolRestrictionFlags(cmd *[]string, allowed, disallowed []string) {
 	for _, tool := range allowed {
 		if tool = strings.TrimSpace(tool); tool != "" {
-			*cmd = append(*cmd, "--allowed-tools", tool)
+			*cmd = append(*cmd, "--core-tools", tool)
 		}
 	}
 	for _, tool := range disallowed {
