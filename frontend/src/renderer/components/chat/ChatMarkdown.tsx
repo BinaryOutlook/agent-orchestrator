@@ -463,7 +463,7 @@ function InlineCode({ children }: { children?: ReactNode }) {
 		</code>
 	);
 	if (insideLink) return code;
-	if (!filePath || !onFileOpen) return text && openSession && /^\S+\/\S+$/.test(text.trim()) ? <ArtifactPathCode text={text}>{code}</ArtifactPathCode> : code;
+	if (!filePath || !onFileOpen) return text?.includes("/") && openSession ? <ArtifactPathCode text={text}>{code}</ArtifactPathCode> : code;
 	return (
 		<button
 			type="button"

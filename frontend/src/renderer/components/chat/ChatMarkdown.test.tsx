@@ -389,8 +389,10 @@ describe("ChatMarkdown", () => {
 	it.each([
 		["`worker-1/plan.md`", "ao://sessions/project/worker-1/artifacts/plan.md"],
 		["`/tmp/ao/artifacts/worker-1/plans/q3.md`", "ao://sessions/project/worker-1/artifacts/plans/q3.md"],
+		["`worker-1/plans/my plan.md`", "ao://sessions/project/worker-1/artifacts/plans/my%20plan.md"],
+		["`/tmp/ao data/artifacts/worker-1/plans/my plan.md`", "ao://sessions/project/worker-1/artifacts/plans/my%20plan.md"],
 	])("links inline code naming a listed session artifact: %s", async (text, href) => {
-		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }, { path: "plans/q3.md" }] }] }];
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }, { path: "plans/q3.md" }, { path: "plans/my plan.md" }] }] }];
 		const onSessionLinkOpen = vi.fn();
 		renderWithSessionLinkHandler(text, onSessionLinkOpen);
 		const link = screen.getByRole("link");

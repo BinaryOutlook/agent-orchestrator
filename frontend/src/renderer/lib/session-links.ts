@@ -60,7 +60,6 @@ type ArtifactPathWorkspace = { id: string; sessions: Array<{ id: string; artifac
  */
 export function artifactLinkForPath(value: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
 	const normalized = value.trim().replace(/\\/g, "/");
-	if (/\s/.test(normalized)) return undefined;
 	const candidates = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) ? [] : [normalized];
 	const marker = `/${ARTIFACT_SEGMENT}/`;
 	for (let index = normalized.indexOf(marker); index >= 0; index = normalized.indexOf(marker, index + 1)) {

@@ -69,6 +69,9 @@ describe("session links", () => {
 	it("links paths naming a listed artifact, by session-relative or artifact-directory path", () => {
 		const workspaces = [{ id: "p 1", sessions: [{ id: "w", artifactFiles: [{ path: "plan.md" }, { path: "plans/my plan.md" }] }] }];
 		expect(artifactLinkForPath("w/plan.md", workspaces)).toBe("ao://sessions/p%201/w/artifacts/plan.md");
+		expect(artifactLinkForPath("w/plans/my plan.md", workspaces)).toBe("ao://sessions/p%201/w/artifacts/plans/my%20plan.md");
+		expect(artifactLinkForPath(" /tmp/ao data/artifacts/w/plans/my plan.md ", workspaces)).toBe("ao://sessions/p%201/w/artifacts/plans/my%20plan.md");
+		expect(artifactLinkForPath("w/plans/my  plan.md", workspaces)).toBeUndefined();
 		expect(artifactLinkForPath("/tmp/ao/artifacts/w/plan.md", workspaces)).toBe("ao://sessions/p%201/w/artifacts/plan.md");
 		expect(artifactLinkForPath("C:\\ao\\artifacts\\w\\plan.md", workspaces)).toBe("ao://sessions/p%201/w/artifacts/plan.md");
 		expect(artifactLinkForPath("w/missing.md", workspaces)).toBeUndefined();
