@@ -65,6 +65,17 @@ struct WakePolicy {
 struct WakeOwnership {
     var journal: WakeJournal
 
+    mutating func latch(_ leases: [WakeLease], reason: String?,
+                        persist: (WakeJournal) throws -> Void) throws {
+        guard let reason else { return }
+        var changed = false
+        for lease in leases where journal.blocked[lease.id] == nil {
+            journal.blocked[lease.id] = reason
+            changed = true
+        }
+        if changed { try persist(journal) }
+    }
+
     mutating func acquire(persist: (WakeJournal) throws -> Void,
                           disable: () -> Bool) throws -> Bool {
         journal.owned = true

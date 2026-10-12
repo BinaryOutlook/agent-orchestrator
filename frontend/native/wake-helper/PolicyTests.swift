@@ -54,6 +54,22 @@ import Foundation
         assert(owner.journal.owned)
         var unowned = WakeOwnership(journal: WakeJournal())
         assert(unowned.release(persist: { _ in fatalError() }, restore: { fatalError("must not clear another owner's control") }))
+        // Persist a startup safety latch before restoration can suspend the Mac.
+        var safetyOwner = WakeOwnership(journal: WakeJournal(owned: true))
+        var safetyEvents: [String] = []
+        var safetySaved = Data()
+        try safetyOwner.latch([lease(a)], reason: "critical_heat", persist: {
+            safetySaved = try JSONEncoder().encode($0)
+            safetyEvents.append("latch")
+        })
+        assert(safetyOwner.release(persist: { _ in }, restore: {
+            safetyEvents.append("restore"); return true
+        }))
+        assert(safetyEvents == ["latch", "restore"])
+        var safetyRestart = WakeOwnership(journal: try JSONDecoder().decode(WakeJournal.self, from: safetySaved))
+        try safetyRestart.latch([lease(a, sequence: 2)], reason: nil, persist: { _ in fatalError("cooling must not clear latch") })
+        try safetyRestart.latch([lease(a, sequence: 3)], reason: "low_battery", persist: { _ in fatalError("existing latch remains") })
+        assert(safetyRestart.journal.blocked[a] == "critical_heat")
         print("Wake policy and recovery tests passed")
     }
 }

@@ -156,16 +156,19 @@ func serve() throws {
         return files.filter { $0.pathExtension == "json" }.compactMap { try? read(WakeLease.self, $0) }
     }
     let (initialBattery, initialPercent) = power()
-    let initialSafe = platformSupported && WakePolicy.safety(
+    let initialReason = !platformSupported ? "unsupported" : WakePolicy.safety(
         thermalCritical: ProcessInfo.processInfo.thermalState == .critical,
-        onBattery: initialBattery, percent: initialPercent) == nil
+        onBattery: initialBattery, percent: initialPercent)
     let initialLeases = try policy.live(requests(), now: ProcessInfo.processInfo.systemUptime,
                                         wall: Date().timeIntervalSince1970, identity: processStart)
         .filter { ownership.journal.blocked[$0.id] == nil }
+    // Persist a safety stop before restoring: restoration may immediately sleep
+    // the Mac, and a quick wake must not silently clear that stop.
+    try ownership.latch(initialLeases, reason: initialReason, persist: { try write($0, journalURL) })
     // Reconcile before serving. A helper restart must not clear a valid live
     // owner's bit with the lid shut: clearing it can immediately sleep the Mac.
     // Abandoned, unsafe, expired and reused-PID requests still restore first.
-    if ownership.journal.owned && (!initialSafe || initialLeases.isEmpty) && !restore() {
+    if ownership.journal.owned && (initialReason != nil || initialLeases.isEmpty) && !restore() {
         try write(WakeStatus(version: protocolVersion, updatedAt: Date().timeIntervalSince1970,
                              active: false, reason: "recovery_failed", leases: [], blocked: ownership.journal.blocked), statusURL)
         throw NSError(domain: "recovery", code: 1)
@@ -178,15 +181,10 @@ func serve() throws {
         let existing = Set(requests.map(\.id))
         ownership.journal.blocked = ownership.journal.blocked.filter { existing.contains($0.key) }
         let (onBattery, percent) = power()
-        if let reason = !platformSupported ? "unsupported" : WakePolicy.safety(thermalCritical: ProcessInfo.processInfo.thermalState == .critical,
-                                          onBattery: onBattery, percent: percent) {
-            var changed = false
-            for lease in live where ownership.journal.blocked[lease.id] == nil {
-                ownership.journal.blocked[lease.id] = reason
-                changed = true
-            }
-            if changed { try write(ownership.journal, journalURL) }
-        }
+        let safetyReason = !platformSupported ? "unsupported" : WakePolicy.safety(
+            thermalCritical: ProcessInfo.processInfo.thermalState == .critical,
+            onBattery: onBattery, percent: percent)
+        try ownership.latch(live, reason: safetyReason, persist: { try write($0, journalURL) })
         let accepted = live.filter { ownership.journal.blocked[$0.id] == nil }
         var reason = ""
         var active = false
