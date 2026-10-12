@@ -2,7 +2,9 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -134,5 +136,173 @@ func TestMobileKeepAwakeRoute(t *testing.T) {
 	c.KeepAwake(w, httptest.NewRequest(http.MethodPost, "/api/v1/mobile/keep-awake", bytes.NewBufferString(`not json`)))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("invalid body: got %d", w.Code)
+	}
+}
+
+type fakeLidController struct {
+	fakeKeepAwake
+	supported bool
+	lidActive bool
+	setups    int
+}
+
+func (f *fakeLidController) ConfigureLid(on, setup bool) error {
+	if setup {
+		f.setups++
+	}
+	f.lidActive = on
+	return nil
+}
+func (f *fakeLidController) LidStatus() (bool, bool, string) { return f.supported, f.lidActive, "" }
+func (f *fakeLidController) Stop()                           { f.fakeKeepAwake.Stop(); f.lidActive = false }
+
+func TestLidAwakeFollowsServingBridgeAndSurvivesLegacyRequests(t *testing.T) {
+	ka := &fakeLidController{supported: true}
+	b, _ := newKeepAwakeBridge(t, ka)
+	res, err := b.SetKeepAwakeLid(true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ka.lidActive || ka.active || !res.KeepAwake.LidClosed || ka.setups != 1 {
+		t.Fatalf("bridge off: %+v %+v", res.KeepAwake, ka)
+	}
+	if _, err := b.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	if !ka.active || !ka.lidActive {
+		t.Fatal("bridge did not activate both wake controls")
+	}
+	// A legacy client's boolean-only request must retain the new preference.
+	if _, err := b.SetKeepAwake(false); err != nil {
+		t.Fatal(err)
+	}
+	if ka.active || ka.lidActive {
+		t.Fatal("off should release both controls")
+	}
+	if !b.Status().KeepAwake.LidClosed {
+		t.Fatal("legacy toggle erased lid preference")
+	}
+	if _, err := b.SetKeepAwake(true); err != nil {
+		t.Fatal(err)
+	}
+	if !ka.lidActive {
+		t.Fatal("legacy re-enable did not restore lid preference")
+	}
+	if err := b.Disable(); err != nil {
+		t.Fatal(err)
+	}
+	if ka.lidActive {
+		t.Fatal("mobile disable did not release lid control")
+	}
+	if !b.Status().KeepAwake.LidClosed {
+		t.Fatal("disable erased preference")
+	}
+}
+
+func TestLidAwakeUnsupportedDoesNotPersistChoice(t *testing.T) {
+	for _, ka := range []KeepAwakeController{&fakeKeepAwake{}, &fakeLidController{supported: false}} {
+		b, _ := newKeepAwakeBridge(t, ka)
+		if _, err := b.SetKeepAwakeLid(true, true); err == nil {
+			t.Fatal("unsupported opt-in accepted")
+		}
+		if b.Status().KeepAwake.LidClosed {
+			t.Fatal("persisted unsupported choice")
+		}
+	}
+}
+
+func TestLidOffPreservesOrdinaryWake(t *testing.T) {
+	ka := &fakeLidController{supported: true}
+	b, _ := newKeepAwakeBridge(t, ka)
+	if _, err := b.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.SetKeepAwakeLid(true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.SetKeepAwakeLid(true, false); err != nil {
+		t.Fatal(err)
+	}
+	if !ka.active || ka.lidActive {
+		t.Fatal("lid off must retain ordinary idle assertion")
+	}
+	b.ShutdownKeepAwake()
+	if ka.active || ka.lidActive {
+		t.Fatal("shutdown must release both")
+	}
+}
+
+func TestLidRequestRejectsUnavailableBridge(t *testing.T) {
+	c := &MobileController{Bridge: &fakeBridge{}}
+	w := httptest.NewRecorder()
+	c.KeepAwake(w, httptest.NewRequest(http.MethodPost, "/api/v1/mobile/keep-awake", bytes.NewBufferString(`{"enabled":true,"lidClosed":true}`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d", w.Code)
+	}
+}
+
+func TestLidAwakeRestoredFromBootStateWithoutSetup(t *testing.T) {
+	ka := &fakeLidController{supported: true}
+	b, _ := newKeepAwakeBridge(t, ka)
+	if err := b.RestoreOnBoot(mobilebridge.State{Enabled: true, Password: "pw", KeepAwake: true, KeepAwakeLid: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !ka.lidActive || !ka.active || ka.setups != 0 {
+		t.Fatalf("boot restoration: %+v", ka)
+	}
+	b.ShutdownKeepAwake()
+	if ka.lidActive || ka.active {
+		t.Fatal("shutdown left boot-restored controls active")
+	}
+}
+
+func TestLidOptInWhileIdleWakeOffOnlyRegistersRecovery(t *testing.T) {
+	ka := &fakeLidController{supported: true}
+	b, _ := newKeepAwakeBridge(t, ka)
+	if _, err := b.SetKeepAwakeLid(false, true); err != nil {
+		t.Fatal(err)
+	}
+	if ka.setups != 1 || ka.lidActive || ka.active {
+		t.Fatalf("saved opt-in must not acquire: %+v", ka)
+	}
+	if _, err := b.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	if ka.lidActive {
+		t.Fatal("mobile access alone must not override ordinary Keep awake preference")
+	}
+	if _, err := b.SetKeepAwake(true); err != nil {
+		t.Fatal(err)
+	}
+	if !ka.lidActive {
+		t.Fatal("saved lid preference did not take effect with idle wake on")
+	}
+}
+
+type failedStopLAN struct{ *fakeLAN }
+
+func (f *failedStopLAN) Stop(context.Context) error { return errors.New("listener stop failed") }
+
+func TestLidAwakeReleasesOnFailedMobileDisable(t *testing.T) {
+	ka := &fakeLidController{supported: true}
+	b, lan := newKeepAwakeBridge(t, ka)
+	b.LAN = &failedStopLAN{lan}
+	if _, err := b.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.SetKeepAwakeLid(true, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Disable(); err == nil {
+		t.Fatal("expected stop failure")
+	}
+	if !lan.Running() {
+		t.Fatal("test must leave listener running")
+	}
+	if ka.lidActive || ka.active {
+		t.Fatal("failed mobile shutdown must still release both wake controls")
+	}
+	if !b.Status().KeepAwake.LidClosed {
+		t.Fatal("failed stop must retain the saved lid preference")
 	}
 }

@@ -88,3 +88,37 @@ This walkthrough was checked against the desktop pairing UI, daemon mobile bridg
 <Callout type="info">
 	Chat and Terminal UI are two controllers for the same Orchestrator session. Switching does not create a new worktree, but a first switch from Terminal UI to Chat does not reconstruct old terminal screen output as structured messages.
 </Callout>
+
+## Keeping a MacBook reachable with its lid closed
+
+Ordinary **Keep this Mac awake** prevents idle sleep; normal lid sleep remains
+allowed. Eligible Apple Silicon MacBooks (macOS 13–26) with the bundled desktop
+helper can separately opt into **Keep awake with lid closed**. It starts while
+Keep awake and Connect Mobile are both on and the listener is serving. Your
+phone does not need to maintain an active socket. Turning off mobile access,
+Keep awake or the lid option releases the request.
+
+Explicit opt-in registers a local recovery helper without an administrator
+password. Short daemon leases and launchd restart recovery handle abandoned
+requests. The UI distinguishes saved intent, an armed native control, and
+safety/recovery stops. macOS authentication stays in effect; an external display
+is not required by the implementation.
+
+Keep the Mac on a ventilated surface, not in a closed bag. Lid wakefulness stops
+below 10% battery, on unknown battery state or at critical thermal pressure.
+After charging/cooling, turn the lid option off and on to restart. Do not run
+another lid utility concurrently; macOS's lid control is global.
+
+Physical compatibility validation is pending. A successful probe or "armed"
+status is not a connectivity guarantee on every OS/hardware combination. Test a
+short lid-closed session on your machine before relying on it unattended.
+[ADR 0005](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/adr/0005-mobile-closed-lid-wake.md)
+records current evidence and the release gate.
+
+Helper versions, plist, leases and recovery journal live under `~/.ao/wake`,
+shared by AO instances of the same login even with different data directories.
+Turning the feature off retains recovery registration but ends requests. To
+remove registration, open the lid, turn the option off in every AO instance and
+wait for recovery to finish, then run
+`launchctl bootout gui/$(id -u)/com.aoagents.mobile-wake`. Do not delete an
+unfinished recovery journal. Re-enabling the option registers the helper again.

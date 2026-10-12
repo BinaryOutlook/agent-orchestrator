@@ -226,6 +226,10 @@ interface MobileStatus {
 		enabled: boolean;
 		active: boolean;
 		hasBattery: boolean;
+		lidClosed?: boolean;
+		lidSupported?: boolean;
+		lidActive?: boolean;
+		lidReason?: string;
 	};
 }
 
@@ -407,13 +411,25 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// caveat to state rather than a failure to block on.
 	const remoteAccessUnavailable = status?.tunnel ? status.tunnel.supported === false : false;
 	const secureBlocked = mode === "tailscale" && (status?.securePairing?.enabled ?? false) && !secureActive;
+	const setLidAwake = useMutation({
+		mutationFn: async (lidClosed: boolean) => {
+			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", {
+				body: { enabled: status?.keepAwake?.enabled ?? false, lidClosed },
+			});
+			if (error) throw new Error(apiErrorMessage(error));
+			return data;
+		},
+		onSettled: invalidate,
+	});
+
 	const busy =
 		enable.isPending ||
 		startRemoteAccess.isPending ||
 		regenerate.isPending ||
 		disable.isPending ||
 		setSecure.isPending ||
-		setKeepAwake.isPending;
+		setKeepAwake.isPending ||
+		setLidAwake.isPending;
 
 	const clearActionErrors = () => {
 		enable.reset();
@@ -422,6 +438,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.reset();
 		setSecure.reset();
 		setKeepAwake.reset();
+		setLidAwake.reset();
 	};
 
 	const copyPassword = async () => {
@@ -457,6 +474,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setKeepAwake.error instanceof Error && setKeepAwake.error.message) ||
+		(setLidAwake.error instanceof Error && setLidAwake.error.message) ||
 		null;
 
 	if (query.isLoading) {
@@ -729,15 +747,50 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					<div className="min-w-0 flex-1">
 						<div className="text-sm leading-5 text-settings-label">{t("mobile.keepAwake.label")}</div>
 						<p className="mt-0.5 text-pretty text-xs leading-4 text-settings-muted">{t("mobile.keepAwake.help")}</p>
-						{status.keepAwake.hasBattery && (
+						{status.keepAwake.hasBattery && (!status.keepAwake.lidClosed || !status.keepAwake.lidSupported) && (
 							<p className="mt-1 text-pretty text-xs leading-4 text-settings-muted" data-testid="mobile-keep-awake-laptop">
 								{t("mobile.keepAwake.laptopNote")}
 							</p>
+						)}
+						{(status.keepAwake.lidSupported || status.keepAwake.lidClosed) && (
+							<div className="mt-3" data-testid="mobile-lid-awake">
+								<div className="flex items-center justify-between gap-3">
+									<span>{t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}</span>
+									<Switch
+										aria-label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
+										disabled={busy}
+										checked={status.keepAwake.lidClosed ?? false}
+										onCheckedChange={(next) => {
+											clearActionErrors();
+											setLidAwake.mutate(next);
+										}}
+									/>
+								</div>
+								<p className="mt-1 text-xs leading-4 text-settings-muted">
+									{t(
+										"mobile.keepAwake.lidHelp",
+										"Works while Keep awake and mobile access are on, even when your phone disconnects. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
+									)}
+								</p>
+								{(status.keepAwake.lidClosed || status.keepAwake.lidReason === "recovery_failed" || status.keepAwake.lidReason === "lease_failed") && (
+									<p className="mt-1 text-xs leading-4 text-settings-muted" role="status">
+										{status.keepAwake.lidActive
+											? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
+											: status.keepAwake.lidReason
+												? t(
+														`mobile.keepAwake.lidReason.${status.keepAwake.lidReason}`,
+														"Closed-lid keep awake is unavailable. Turn the option off and on to retry.",
+													)
+												: t("mobile.keepAwake.lidIdle", "Starts when Keep awake and mobile access are both on.")}
+									</p>
+								)}
+							</div>
 						)}
 					</div>
 					<Switch
 						className="mt-0.5"
 						aria-label={t("mobile.keepAwake.label")}
+						disabled={busy}
 						checked={status.keepAwake.enabled}
 						onCheckedChange={(next) => {
 							clearActionErrors();

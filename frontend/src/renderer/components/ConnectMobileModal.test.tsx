@@ -41,7 +41,7 @@ const { mobileStatus } = vi.hoisted(() => ({
 		},
 		keepAwake: undefined as
 			| undefined
-			| { supported: boolean; enabled: boolean; active: boolean; hasBattery: boolean },
+			| { supported: boolean; enabled: boolean; active: boolean; hasBattery: boolean; lidClosed?: boolean; lidSupported?: boolean; lidActive?: boolean; lidReason?: string },
 	},
 }));
 
@@ -776,4 +776,37 @@ test("warns laptops that closing the lid still sleeps them", async () => {
 
 	expect(await screen.findByRole("switch", { name: "Keep this Mac awake" })).toBeChecked();
 	expect(screen.getByTestId("mobile-keep-awake-laptop")).toBeInTheDocument();
+});
+
+test("opts into closed-lid operation without changing the idle-wake choice", async () => {
+	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: true, lidSupported: true, lidClosed: false };
+	renderMobileSettings();
+	const toggle = await screen.findByRole("switch", { name: "Keep awake with lid closed" });
+	expect(toggle).not.toBeChecked();
+	await userEvent.click(toggle);
+	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: true } });
+});
+
+test("shows a latched low-battery stop without claiming native activation", async () => {
+	mobileStatus.keepAwake = {
+		supported: true,
+		enabled: true,
+		active: true,
+		hasBattery: true,
+		lidSupported: true,
+		lidClosed: true,
+		lidActive: false,
+		lidReason: "low_battery",
+	};
+	renderMobileSettings();
+	expect(await screen.findByRole("switch", { name: "Keep awake with lid closed" })).toBeChecked();
+	expect(screen.getByText(/Stopped below 10% battery/)).toBeInTheDocument();
+	expect(screen.queryByText("Closed-lid keep awake is armed.")).not.toBeInTheDocument();
+});
+
+test("keeps lid controls hidden for older daemons", async () => {
+	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: true };
+	renderMobileSettings();
+	await screen.findByRole("switch", { name: "Keep this Mac awake" });
+	expect(screen.queryByRole("switch", { name: "Keep awake with lid closed" })).not.toBeInTheDocument();
 });
