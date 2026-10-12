@@ -39,7 +39,7 @@ func TestPromptSuggestionUsesIsolatedBoundedContextWithoutChangingHistory(t *tes
 			prompt != systemPrompt+"\n\nRecent transcript:\nuser: Fix the error\n\nassistant: reply to Fix the error\n\n" {
 			t.Fatalf("runner context: id=%s system=%q prompt=%q", id, systemPrompt, prompt)
 		}
-		return "\nAdd a regression test.\n", nil
+		return `{"prompt":"\nAdd a regression test.\n"}`, nil
 	})
 	prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID)
 	if err != nil || prompt != "Add a regression test." {
@@ -154,7 +154,7 @@ func TestPromptSuggestionDiscardsResultWhenConversationChanges(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				return "Run the tests.", nil
+				return `{"prompt":"Run the tests."}`, nil
 			})
 			if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); prompt != "" || !errors.Is(err, chatsvc.ErrPromptSuggestionStale) {
 				t.Fatalf("stale suggestion = %q, %v", prompt, err)
@@ -173,17 +173,23 @@ func TestPromptSuggestionSurvivesActivityOnlyUpdates(t *testing.T) {
 		}, h.now()); err != nil {
 			t.Fatal(err)
 		}
-		return "Add a regression test.", nil
+		return `{"prompt":"Add a regression test."}`, nil
 	})
 	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); err != nil || prompt != "Add a regression test." {
 		t.Fatalf("activity update discarded suggestion: %q, %v", prompt, err)
 	}
 }
 
-func TestPromptSuggestionReturnsEmptyForNoUsefulOrOversizedAnswer(t *testing.T) {
+func TestPromptSuggestionReturnsEmptyForNoUsefulMalformedOrOversizedAnswer(t *testing.T) {
 	h := newHarness(t)
 	turnID := settledSuggestionTurn(t, h)
-	for _, raw := range []string{"NONE", " none\n", "", strings.Repeat("界", 241)} {
+	for _, raw := range []string{
+		`{"prompt":""}`, `{"prompt":"NONE"}`, `{"prompt":" none\n"}`, "",
+		`{"prompt":"` + strings.Repeat("界", 241) + `"}`,
+		"getaddrinfo ENOTFOUND llm.substrate.dev",
+		"{invalid json}", `{"prompt":42}`, `{"error":"provider unavailable"}`,
+		"```json\n{\"prompt\":\"Run the tests.\"}\n```",
+	} {
 		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) { return raw, nil })
 		if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); err != nil || prompt != "" {
 			t.Fatalf("answer %q: prompt=%q err=%v", raw, prompt, err)
