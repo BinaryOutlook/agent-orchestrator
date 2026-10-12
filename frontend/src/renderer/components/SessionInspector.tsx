@@ -55,6 +55,7 @@ import { AgentAvatar } from "./AgentAvatar";
 import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
+import { TopbarButton } from "./TopbarButton";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
@@ -309,30 +310,6 @@ export const SessionInspector = memo(function SessionInspector({
 						<SessionArtifactsView hostId={hostId} key={sessionUiKey(session.id, hostId)} onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} session={session} />
 					) : undefined
 				}
-				overflowMenu={session && !onlyBrowser ? (
-					<DropdownMenu>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<DropdownMenuTrigger asChild>
-									<button
-										aria-label={t("inspector.more")}
-										className="inline-flex size-control-md items-center justify-center rounded-md text-passive transition-colors duration-fast hover:bg-interactive-hover hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground"
-										type="button"
-									>
-										<MoreVertical aria-hidden="true" className="size-icon-md" />
-									</button>
-								</DropdownMenuTrigger>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("inspector.more")}</TooltipContent>
-						</Tooltip>
-						<DropdownMenuContent align="end">
-							<DropdownMenuItem onSelect={() => setView("artifacts")}>
-								<Shapes aria-hidden="true" />
-								{t("artifacts.title")}
-							</DropdownMenuItem>
-						</DropdownMenuContent>
-					</DropdownMenu>
-				) : undefined}
 				browserPoppedOut={browserPoppedOut}
 				browserView={
 					session && (!hostId || browserView) ? (
@@ -355,19 +332,39 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 						headerActions={
-							view === "browser" && !browserPoppedOut ? (
-								<>
+							<>
+								{view === "browser" && !browserPoppedOut ? (
 									<div className="browser-panel__topbar-host min-w-0 flex-1" ref={setBrowserTopbarHost} />
-									<span aria-hidden="true" className="session-inspector-actions-spacer" />
-								</>
-							) : view === "files" && filesView ? (
-								<>
+								) : view === "files" && filesView ? (
 									<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
+								) : null}
+								{/* The ⋮ sits just left of the pinned inspector toggle in every view. */}
+								<div className="session-inspector__trailing flex shrink-0 items-center">
+									{session && !onlyBrowser ? (
+										<DropdownMenu>
+											<DropdownMenuTrigger asChild>
+												<TopbarButton
+													aria-label={t("inspector.more")}
+													// -mr-2 pulls it into the spacer's lead so it sits the same 4px from the toggle as the toggle from the bell.
+													className="-mr-2 data-[active]:bg-interactive-active data-[active]:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground"
+													data-active={view === "artifacts" ? "" : undefined}
+													title={t("inspector.more")}
+													variant="icon"
+												>
+													<MoreVertical aria-hidden="true" className="size-icon-md" />
+												</TopbarButton>
+											</DropdownMenuTrigger>
+											<DropdownMenuContent align="end" className="min-w-44" data-browser-native-overlay="true">
+												<DropdownMenuItem onSelect={() => setView("artifacts")}>
+													<Shapes aria-hidden="true" />
+													{t("artifacts.title")}
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									) : null}
 									<span aria-hidden="true" className="session-inspector-actions-spacer" />
-								</>
-							) : (
-								<span aria-hidden="true" className="session-inspector-actions-spacer" />
-							)
+								</div>
+							</>
 						}
 				isVisible={isInspectorVisible}
 				loadingText={session ? undefined : t("inspector.loadingSession")}

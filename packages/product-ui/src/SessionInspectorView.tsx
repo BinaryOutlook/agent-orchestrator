@@ -23,7 +23,7 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-/** "artifacts" has no tab: it opens from the overflow menu ({@link SessionInspectorShellView}'s `overflowMenu`). */
+/** "artifacts" has no tab: the host opens it from a menu it renders in `headerActions`. */
 export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
 
 export type InspectorTab = {
@@ -47,7 +47,6 @@ export function SessionInspectorShellView({
 	artifactsView,
 	browserPoppedOut,
 	browserView,
-	overflowMenu,
 	sideChatView,
 	filesView,
 	headerActions,
@@ -63,8 +62,6 @@ export function SessionInspectorShellView({
 	artifactsView?: ReactNode;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
-	/** Trailing menu (e.g. the three-dot trigger) for views that have no tab; sits at the end of the tab strip. */
-	overflowMenu?: ReactNode;
 	sideChatView?: ReactNode;
 	filesView?: ReactNode;
 	headerActions?: ReactNode;
@@ -186,7 +183,6 @@ export function SessionInspectorShellView({
 								</span>
 							</button>
 						))}
-						{overflowMenu ? <span className="ml-auto inline-flex shrink-0 pr-1" role="presentation">{overflowMenu}</span> : null}
 					</div>
 				) : null}
 				{isVisible ? headerActions : null}
