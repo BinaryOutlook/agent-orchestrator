@@ -3,13 +3,16 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 )
 
 type reportOptions struct {
@@ -111,6 +114,9 @@ func (c *commandContext) report(ctx context.Context, args []string, o reportOpti
 			}
 		}
 	}
+	if err := lintHTMLArtifacts(o.artifacts); err != nil {
+		return err
+	}
 
 	sessionID := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
 	if sessionID == "" {
@@ -122,6 +128,30 @@ func (c *commandContext) report(ctx context.Context, args []string, o reportOpti
 	}
 	var response reportAPIResponse
 	return c.postJSON(ctx, "reports", reportAPIRequest{SessionID: sessionID, State: string(selected), Note: o.note, Message: message, Outputs: apiOutputs}, &response)
+}
+
+// lintHTMLArtifacts refuses an attached HTML file that breaks the AO page
+// design rules, so a saved page meets the bar a shown page does. A reference
+// that is not a local .html file stays opaque and is not read.
+func lintHTMLArtifacts(references []string) error {
+	for _, reference := range references {
+		ext := strings.ToLower(filepath.Ext(reference))
+		if ext != ".html" && ext != ".htm" {
+			continue
+		}
+		info, err := os.Stat(reference)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > maxRenderFileBytes {
+			continue
+		}
+		page, err := os.ReadFile(reference)
+		if err != nil {
+			continue
+		}
+		if findings := renderpage.Lint(string(page)); len(findings) > 0 {
+			return fmt.Errorf("%s: %s\nFix the page, then report again.", reference, renderpage.FindingsError(findings))
+		}
+	}
+	return nil
 }
 
 func legacyReportStatus(value string) bool {

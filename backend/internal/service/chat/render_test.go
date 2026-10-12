@@ -41,12 +41,31 @@ func renderRows(s store.ConversationSnapshot) []domain.ConversationActivity {
 	return rows
 }
 
+// validRenderPage follows the AO page design rules, so PublishRender takes it.
+const validRenderPage = `<!doctype html><main class="ao-page"><header><h1>Turns by day</h1>` +
+	`<p class="ao-lede">Most turns land on Tuesday.</p></header></main>`
+
+func TestPublishRenderRefusesAPageThatBreaksTheDesignRules(t *testing.T) {
+	h, _ := steerHarness(t)
+	_, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{
+		HTML: `<div style="color:#f00">chart</div>`, Title: "Chart",
+	})
+	if !errors.Is(err, chatsvc.ErrRenderInvalid) || !strings.Contains(err.Error(), "AO page design rules") ||
+		!strings.Contains(err.Error(), "(style-attribute)") {
+		t.Fatalf("err = %v, want the design findings", err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(h.rendersDir, "attachments", string(testSession)))
+	if len(entries) != 0 {
+		t.Fatalf("a refused page was stored: %v", entries)
+	}
+}
+
 func TestPublishRenderLandsOnTheRunningTurn(t *testing.T) {
 	h, _ := steerHarness(t)
 	ctx := context.Background()
 
 	result, err := h.svc.PublishRender(ctx, testSession, chatsvc.RenderInput{
-		HTML: "<!doctype html><p>chart</p>", Title: "  Turns by day  ", Height: 5000,
+		HTML: validRenderPage, Title: "  Turns by day  ", Height: 5000,
 	})
 	if err != nil {
 		t.Fatalf("PublishRender: %v", err)
@@ -63,7 +82,7 @@ func TestPublishRenderLandsOnTheRunningTurn(t *testing.T) {
 	page, _ := io.ReadAll(file)
 	_ = file.Close()
 	// The render route adds the bootstrap when it serves the page.
-	if string(page) != "<!doctype html><p>chart</p>" {
+	if string(page) != validRenderPage {
 		t.Errorf("stored page = %.200q, want the agent's raw page", page)
 	}
 
@@ -91,7 +110,7 @@ func TestPublishRenderLandsOnTheRunningTurn(t *testing.T) {
 // An API client may omit the height; the frame opens at the CLI's 400, not the 80 floor.
 func TestPublishRenderWithoutAHeightOpensAt400(t *testing.T) {
 	h, _ := steerHarness(t)
-	if _, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{HTML: "<p>chart</p>", Title: "Chart"}); err != nil {
+	if _, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{HTML: validRenderPage, Title: "Chart"}); err != nil {
 		t.Fatalf("PublishRender: %v", err)
 	}
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(renderRows(s)) == 1 })
@@ -111,7 +130,7 @@ func TestPublishRenderWithoutARunningTurnLeavesNoFile(t *testing.T) {
 	})
 
 	_, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{
-		HTML: "<p>x</p>", Title: "x", Height: 200, BaseURL: "http://127.0.0.1:3001",
+		HTML: validRenderPage, Title: "x", Height: 200, BaseURL: "http://127.0.0.1:3001",
 	})
 	if !errors.Is(err, chatsvc.ErrNoActiveTurn) {
 		t.Fatalf("err = %v, want ErrNoActiveTurn", err)
@@ -146,7 +165,7 @@ func TestRenderAcceptsAPageOf25MiB(t *testing.T) {
 	h.svc.SetRenderCheck(func(context.Context, domain.SessionID, map[string]any) (any, error) {
 		return map[string]any{"data": "iVBORw0KGgo=", "width": 720.0, "height": 200.0, "contentHeight": 200.0}, nil
 	})
-	page := "<p>" + strings.Repeat("A", 25<<20-len("<p>"))
+	page := validRenderPage + strings.Repeat("A", 25<<20-len(validRenderPage))
 
 	if _, err := h.svc.PublishRender(ctx, testSession, chatsvc.RenderInput{HTML: page, Title: "x"}); err != nil {
 		t.Fatalf("publish: %v", err)
@@ -179,7 +198,7 @@ func TestCheckRenderLoadsTheStoredPageAndDeletesIt(t *testing.T) {
 	})
 
 	result, err := h.svc.CheckRender(context.Background(), testSession, chatsvc.RenderCheckInput{
-		HTML: "<p>chart</p>", BaseURL: "http://127.0.0.1:3001",
+		HTML: validRenderPage, BaseURL: "http://127.0.0.1:3001",
 	})
 	if err != nil {
 		t.Fatalf("CheckRender: %v", err)
@@ -189,7 +208,7 @@ func TestCheckRenderLoadsTheStoredPageAndDeletesIt(t *testing.T) {
 		t.Fatalf("args = %v, network = %q", gotArgs, result.Network)
 	}
 	// The desktop app loads it through the render route, which adds the bootstrap.
-	if string(pageDuringCheck) != "<p>chart</p>" {
+	if string(pageDuringCheck) != validRenderPage {
 		t.Fatalf("page during the check = %.200q, want the agent's raw page", pageDuringCheck)
 	}
 	if result.ContentHeight != 412 || result.PNG != "iVBORw0KGgo=" || len(result.ConsoleMessages) != 1 || result.ConsoleMessages[0].Level != "error" {
@@ -273,7 +292,7 @@ func publishMeasured(t *testing.T, h *harness, measure chatsvc.RenderMeasure) (c
 	t.Helper()
 	h.svc.SetRenderMeasure(measure)
 	result, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{
-		HTML: "<p>chart</p>", Title: "Chart", Height: 400, BaseURL: "http://127.0.0.1:3001/",
+		HTML: validRenderPage, Title: "Chart", Height: 400, BaseURL: "http://127.0.0.1:3001/",
 	})
 	if err != nil {
 		t.Fatalf("PublishRender: %v", err)
@@ -297,7 +316,7 @@ func TestPublishRenderReturnsBeforeTheMeasureAndSettlesTheHeightsLater(t *testin
 		return map[string]any{"heights": heights}, nil
 	})
 	if _, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{
-		HTML: "<p>chart</p>", Title: "Chart", Height: 400, BaseURL: "http://127.0.0.1:3001",
+		HTML: validRenderPage, Title: "Chart", Height: 400, BaseURL: "http://127.0.0.1:3001",
 	}); err != nil {
 		t.Fatalf("PublishRender: %v", err)
 	}
@@ -339,7 +358,7 @@ func TestPublishRenderRecordsTheMeasuredHeightsSortedByWidth(t *testing.T) {
 	if want := []int{320, 375, 430, 520, 640, 728, 860, 1000, 1144}; !reflect.DeepEqual(gotArgs["widths"], want) {
 		t.Errorf("widths = %v, want %v", gotArgs["widths"], want)
 	}
-	if string(pageDuringMeasure) != "<p>chart</p>" {
+	if string(pageDuringMeasure) != validRenderPage {
 		t.Errorf("page during the measure = %q, want the stored page", pageDuringMeasure)
 	}
 	var d renderDetail
@@ -411,7 +430,7 @@ func TestSaveRenderAsArtifactWritesTheServedPage(t *testing.T) {
 	ctx := context.Background()
 	// A failed output-type update is only logged; the file is saved.
 	h.reconcileErr = errors.New("store unavailable")
-	if err := h.renders.PutRender(ctx, testSession, "r1", []byte("<!doctype html><p>chart</p>")); err != nil {
+	if err := h.renders.PutRender(ctx, testSession, "r1", []byte(validRenderPage)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -429,7 +448,7 @@ func TestSaveRenderAsArtifactWritesTheServedPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The bootstrap is included, so the file renders on its own.
-	if want := renderpage.Document([]byte("<!doctype html><p>chart</p>")); string(saved) != string(want) {
+	if want := renderpage.Document([]byte(validRenderPage)); string(saved) != string(want) {
 		t.Fatalf("saved = %.200q, want the served document", saved)
 	}
 	if info, _ := os.Stat(file); info.Mode().Perm() != 0o600 {
@@ -503,7 +522,7 @@ func TestSaveRenderAsArtifactRefusesAMissingRender(t *testing.T) {
 func TestPublishRenderWithArtifactKeepsThePage(t *testing.T) {
 	h, _ := steerHarness(t)
 	result, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{
-		HTML: "<p>chart</p>", Title: "Chart", Artifact: true,
+		HTML: validRenderPage, Title: "Chart", Artifact: true,
 	})
 	if err != nil {
 		t.Fatalf("PublishRender: %v", err)
@@ -530,7 +549,7 @@ func TestPublishRenderStaysPublishedWhenTheArtifactSaveFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := h.svc.PublishRender(ctx, testSession, chatsvc.RenderInput{HTML: "<p>chart</p>", Title: "Chart", Artifact: true})
+	result, err := h.svc.PublishRender(ctx, testSession, chatsvc.RenderInput{HTML: validRenderPage, Title: "Chart", Artifact: true})
 	if err != nil {
 		t.Fatalf("PublishRender: %v", err)
 	}

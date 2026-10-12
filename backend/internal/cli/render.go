@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 )
 
 const (
@@ -66,32 +68,44 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 	var artifact bool
 	var width int
 	var out string
+	var lint, guide bool
 	cmd := &cobra.Command{
 		Use:   "render <file.html>",
 		Short: "Show a self-contained HTML page inline in this chat session's thread",
 		Long: "Show a chart, table, diagram, or mockup inline in the current chat session's\n" +
 			"thread, above your final reply. Call it before that reply, and do not announce\n" +
 			"or restate the page in it.\n\n" +
-			"The file must be one self-contained HTML document (inline <style> and <script>,\n" +
-			"at most 1 MiB). Remote https:// resources such as a CDN chart library load\n" +
-			"as-is; relative URLs do not resolve. A local image given by absolute path\n" +
-			"(src=\"/abs/shot.png\", CSS url(/abs/bg.webp), or a JS string) is put into\n" +
-			"the page, up to 10 MiB each. AO stores its own copy, so write the file\n" +
-			"outside the repository.\n\n" +
-			"Style with the theme variables AO injects on :root, which follow light/dark\n" +
-			"live: --background --foreground --muted --muted-foreground --card\n" +
-			"--card-foreground --popover --border --border-strong --primary\n" +
-			"--primary-foreground --accent --accent-foreground --success --warning\n" +
-			"--destructive --code --link --chart-1..--chart-6 --radius --font-sans --font-mono.\n" +
-			"Use a fluid width with no outer padding, card, or border; give charts fixed\n" +
-			"pixel heights; never size html/body with 100vh. Chat sessions only: in a\n" +
-			"terminal session use `ao preview` instead.\n\n" +
+			"The file must be one self-contained HTML document, at most 1 MiB; relative\n" +
+			"URLs do not resolve. A local image given by absolute path (src=\"/abs/shot.png\"\n" +
+			"or a JS string) is put into the page, up to 10 MiB each. AO stores its own\n" +
+			"copy, so write the file outside the repository.\n\n" +
+			"The page must follow the AO page design rules (`ao render --guide` prints\n" +
+			"them): semantic HTML and AO's ao- classes, with no styles, colors, or fonts\n" +
+			"of its own. AO adds its stylesheet and the reader's live theme, and refuses\n" +
+			"a page that breaks a rule. `ao render --lint <file>` checks a page without\n" +
+			"the daemon, in any session; run it on HTML artifacts too. Showing a page is\n" +
+			"for chat sessions only: in a terminal session use `ao preview` instead.\n\n" +
 			"Run `ao render --check <file>` first: the AO desktop app returns a\n" +
-			"screenshot, the page's content height, and its console messages.",
-		Example: `  ao render --check "$TMPDIR/turns-by-day.html" --width 390
+			"screenshot, the page's content height, its console messages, and the\n" +
+			"design findings.",
+		Example: `  ao render --guide
+  ao render --lint "$TMPDIR/turns-by-day.html"
+  ao render --check "$TMPDIR/turns-by-day.html" --width 390
   ao render "$TMPDIR/turns-by-day.html" --title "Turns by day" --height 420`,
-		Args: cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if guide {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if guide {
+				_, err := fmt.Fprint(cmd.OutOrStdout(), renderpage.Guide)
+				return err
+			}
+			if lint {
+				return lintRender(cmd, args[0])
+			}
 			if check {
 				return ctx.checkRender(cmd, args[0], width, out)
 			}
@@ -107,7 +121,24 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().BoolVar(&artifact, "artifact", false, "also keep the page as a session artifact; only when the user asks to keep it")
 	cmd.Flags().IntVar(&width, "width", defaultRenderWidth, "with --check: viewport width in CSS pixels, 240-1600; use 390 for phones")
 	cmd.Flags().StringVar(&out, "out", "", "with --check: PNG path to write (default: a new file in the temp directory)")
+	cmd.Flags().BoolVar(&lint, "lint", false, "check the page against the AO page design rules without publishing it; works in any session")
+	cmd.Flags().BoolVar(&guide, "guide", false, "print the AO page design rules")
+	cmd.MarkFlagsMutuallyExclusive("lint", "check", "guide")
 	return cmd
+}
+
+// lintRender reports every place a page breaks the AO page design rules, and
+// fails when there is one.
+func lintRender(cmd *cobra.Command, file string) error {
+	html, err := readRenderFile(file)
+	if err != nil {
+		return err
+	}
+	if findings := renderpage.Lint(html); len(findings) > 0 {
+		return errors.New(renderpage.FindingsError(findings))
+	}
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), "The page follows the AO page design rules.")
+	return err
 }
 
 func renderSessionID() (string, error) {
@@ -235,6 +266,11 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 	}
 	if resp.Network == "none" {
 		if _, err := fmt.Fprintln(w, renderCheckOfflineNote); err != nil {
+			return err
+		}
+	}
+	if findings := renderpage.Lint(html); len(findings) > 0 {
+		if _, err := fmt.Fprintln(w, renderpage.FindingsError(findings)); err != nil {
 			return err
 		}
 	}

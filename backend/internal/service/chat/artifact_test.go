@@ -174,7 +174,7 @@ func TestRecordReportedArtifactWithoutARunningTurnShowsNothing(t *testing.T) {
 func TestRecordReportedArtifactSkipsARenderKeptInTheSameTurn(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()
-	result, err := h.svc.PublishRender(ctx, testSession, chatsvc.RenderInput{HTML: "<p>q3</p>", Title: "Q3 status", Artifact: true})
+	result, err := h.svc.PublishRender(ctx, testSession, chatsvc.RenderInput{HTML: validRenderPage, Title: "Q3 status", Artifact: true})
 	if err != nil || result.ArtifactPath == "" {
 		t.Fatalf("PublishRender = %+v, %v", result, err)
 	}

@@ -191,7 +191,12 @@ func TestMCPHTMLPreviewReturnsTheScreenshotAndReport(t *testing.T) {
 	}
 	// JSON-encoded, so a Windows path's backslashes are escaped as in the report.
 	goneJSON, _ := json.Marshal(gone)
-	want := `{"width":390,"contentHeight":412,"consoleMessages":[{"level":"error","text":"d3 is not defined"}],"missingImages":[` + string(goneJSON) + `]}`
+	findingsJSON, _ := json.Marshal([]string{
+		`line 1: the page needs exactly one <main class="ao-page">, found 0; start from the skeleton in the AO page design rules (page-root)`,
+		`line 1: the page needs exactly one <h1>, in its header; found 0 (heading)`,
+		`line 1: the header needs a <p class="ao-lede"> that states the conclusion (lede)`,
+	})
+	want := `{"width":390,"contentHeight":412,"consoleMessages":[{"level":"error","text":"d3 is not defined"}],"missingImages":[` + string(goneJSON) + `],"designFindings":` + string(findingsJSON) + `}`
 	if got.Content[1].Type != "text" || got.Content[1].Text != want {
 		t.Fatalf("report = %s, want %s", got.Content[1].Text, want)
 	}

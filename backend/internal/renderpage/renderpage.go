@@ -101,7 +101,7 @@ func Document(stored []byte) []byte {
 func inject(page string) string {
 	var b strings.Builder
 	b.WriteString(themeStyleOpen + defaultThemeCSS + `</style>`)
-	b.WriteString(`<style>` + baseCSS + `</style>`)
+	b.WriteString(`<style>` + baseCSS + kitCSS + `</style>`)
 	b.WriteString(`<script>` + bootstrapJS + `</script>`)
 	if !pageViewport.MatchString(page) {
 		b.WriteString(viewportMeta)

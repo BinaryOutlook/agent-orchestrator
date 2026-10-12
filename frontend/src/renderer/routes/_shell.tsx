@@ -33,6 +33,7 @@ import { TerminalCacheProvider } from "../components/TerminalPane";
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useDaemonStatus } from "../hooks/useDaemonStatus";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
+import { useRenderTheme } from "../hooks/useRenderTheme";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -1046,6 +1047,14 @@ function ShellLayout() {
 	useEffect(() => {
 		void aoBridge.theme?.set(themePreference);
 	}, [themePreference]);
+
+	// An HTML artifact opened in the Browser panel is out of RenderFrame's reach,
+	// so main posts it the theme a framed page gets, and keeps the last one for
+	// pages that load later.
+	const renderTheme = useRenderTheme();
+	useEffect(() => {
+		aoBridge.browser?.setArtifactTheme(renderTheme);
+	}, [renderTheme]);
 
 	// Cursor Agent reads TERM_THEME at spawn from this file. Persist the same
 	// resolved light/dark scheme the terminal uses, not nativeTheme alone.

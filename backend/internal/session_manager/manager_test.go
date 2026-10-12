@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -6031,6 +6032,10 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	}
 	if strings.Contains(sp, "naturally document-shaped") {
 		t.Fatal("system prompt must not require files for ordinary summaries")
+	}
+	// Every session gets the page design rules its HTML artifacts are linted against.
+	if !strings.Contains(sp, strings.TrimSpace(renderpage.Guide)) {
+		t.Fatal("system prompt missing the AO page design rules")
 	}
 	// Only a chat session has a thread to show a page in.
 	const inThread = "it does not belong in the workspace at all. In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory."

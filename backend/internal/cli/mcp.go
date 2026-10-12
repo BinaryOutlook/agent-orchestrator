@@ -12,6 +12,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 )
 
 // `ao mcp` is the stdio MCP server AO passes to every chat session, so the
@@ -186,13 +188,18 @@ func (c *commandContext) callHTMLPreview(ctx context.Context, raw json.RawMessag
 	if resp.Network == "none" {
 		note = renderCheckOfflineNote
 	}
+	var findings []string
+	for _, f := range renderpage.Lint(args.HTML) {
+		findings = append(findings, f.String())
+	}
 	report, err := json.Marshal(struct {
 		Width           int      `json:"width"`
 		ContentHeight   int      `json:"contentHeight"`
 		ConsoleMessages any      `json:"consoleMessages"`
 		MissingImages   []string `json:"missingImages,omitempty"`
+		DesignFindings  []string `json:"designFindings,omitempty"`
 		Note            string   `json:"note,omitempty"`
-	}{args.Width, resp.ContentHeight, resp.ConsoleMessages, missing, note})
+	}{args.Width, resp.ContentHeight, resp.ConsoleMessages, missing, findings, note})
 	if err != nil {
 		return mcpToolError(err)
 	}
@@ -222,23 +229,14 @@ func (c *commandContext) callHTMLRender(ctx context.Context, raw json.RawMessage
 }
 
 // The tool text follows T3's html tools, with AO's own rules from
-// skillassets/using-ao/commands/render.md.
+// skillassets/using-ao/commands/render.md and renderpage.Guide.
 const (
-	mcpPageRules = `Write one self-contained HTML document with inline <style> and <script>. ` +
-		`Remote https:// resources, such as a CDN chart library, load as they are; relative URLs do not resolve. ` +
-		`A local image written as an absolute path (src="/abs/shot.png", CSS url(/abs/bg.webp), or a JS string) ` +
+	mcpPageRules = `Write one self-contained HTML document. ` +
+		`A local image written as an absolute path (src="/abs/shot.png" or a JS string) ` +
 		`is put into the page: PNG, JPEG, GIF, WebP, AVIF, SVG, BMP, or ICO, up to 10 MiB each.`
 	mcpLayoutGuide = `The frame is borderless on the thread background, as wide as the reply column, and its left edge lines up with your text. ` +
-		`Use a fluid width with no outer padding, card, border, or banner title: the page is part of your reply. ` +
-		`An expanded page opens in a dialog up to 1024 px wide that fits its height, and AO centers a top-level block that has a maximum width. ` +
-		`Give charts fixed pixel heights. Do not size html or body with 100vh or height: 100%; the frame grows to fit the page, and viewport heights make it grow again. ` +
+		`An expanded page opens in a dialog up to 1024 px wide that fits its height. ` +
 		`Scripts run in a sandbox with no access to AO, cookies, or storage. Links open in the user's browser.`
-	mcpThemeGuide = `AO injects its active theme as CSS custom properties on :root, and they follow light/dark mode live: ` +
-		`--background (identical to the thread), --foreground, --muted, --muted-foreground, --card, --card-foreground, --popover, ` +
-		`--border, --border-strong, --primary, --primary-foreground, --accent, --accent-foreground, --success, --warning, ` +
-		`--destructive, --code, --link, --chart-1 ... --chart-6 (categorical series), --radius, --font-sans, --font-mono. ` +
-		`The base stylesheet sets the page background, text color, and font from these, sets body margin to 0, and hides the page scrollbar. ` +
-		`Use the variables, not hard-coded colors, so the page reads correctly in both themes.`
 )
 
 var mcpHTMLSchema = map[string]any{
@@ -254,7 +252,8 @@ var mcpTools = []map[string]any{
 			"contentHeight (the height the page needs at this width), and the page's console messages. " +
 			"Call it before html_render. Read the screenshot, and fix every console error. " +
 			"The check needs the AO desktop app; without it, publish without a check. " +
-			mcpPageRules + " The page gets the theme variables and layout described in html_render.",
+			"It also returns designFindings: every place the page breaks the AO page design rules in html_render. " +
+			"Fix them all: html_render refuses such a page. " + mcpPageRules,
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -277,7 +276,7 @@ var mcpTools = []map[string]any{
 			"above your final reply. Preview it with html_preview first, then call this before you write the reply. " +
 			"The reader already sees the page, so the reply must not announce it, say where it is, or restate it: " +
 			"add only what the page does not say. Use this tool, not a built-in visualize skill: AO does not show those. " +
-			mcpPageRules + " " + mcpLayoutGuide + " " + mcpThemeGuide,
+			mcpPageRules + " " + mcpLayoutGuide + "\n\n" + renderpage.Guide,
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{

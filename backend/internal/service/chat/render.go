@@ -103,6 +103,9 @@ func (s *Service) PublishRender(ctx context.Context, id domain.SessionID, in Ren
 	case s.renders == nil:
 		return RenderResult{}, errors.New("render storage is not configured")
 	}
+	if findings := renderpage.Lint(in.HTML); len(findings) > 0 {
+		return RenderResult{}, fmt.Errorf("%w: %s", ErrRenderInvalid, renderpage.FindingsError(findings))
+	}
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return RenderResult{}, err
 	}

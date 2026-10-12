@@ -20,6 +20,9 @@
   function setDisplay(nextMode, nextScrollable) {
     if (nextMode !== undefined) mode = nextMode;
     if (nextScrollable !== undefined) scrollable = nextScrollable === true;
+    // The kit (kit.css) sizes and pads .ao-page for where it shows: inline in
+    // the thread, expanded in the dialog, or on its own as a page.
+    document.documentElement.setAttribute("data-ao-display", !framed ? "page" : mode === "fullscreen" ? "fullscreen" : "inline");
     display.textContent = mode === "fullscreen"
       ? "body>*{margin-inline:auto}" + showScrollbar
       : scrollable ? showScrollbar : "";
@@ -32,6 +35,7 @@
     }
     theme.textContent = css + "}";
   }
+  setDisplay();
   try {
     var m = /[#&]ao-theme=([^&]*)/.exec(location.hash);
     if (m) {
