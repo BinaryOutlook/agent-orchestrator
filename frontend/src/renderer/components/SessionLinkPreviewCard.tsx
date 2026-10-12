@@ -355,6 +355,7 @@ function ArtifactContentPreview({ artifact, session }: { artifact: SessionArtifa
 function ArtifactCardBody({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const Icon = artifact.kind === "html" ? Globe : tabularDelimiter(artifact.path) ? Sheet : FileText;
+	const author = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title;
 	return (
 		<div className="space-y-2" role="status" aria-label={artifact.name}>
 			<div className="flex min-w-0 items-start gap-2">
@@ -362,7 +363,8 @@ function ArtifactCardBody({ artifact, session }: { artifact: SessionArtifact; se
 				<div className="min-w-0 flex-1">
 					<p className="truncate text-sm font-semibold text-foreground">{artifact.name}</p>
 					<p className="mt-0.5 truncate text-xs text-muted-foreground">
-						{session.title} <span className="font-mono">#{session.id.slice(-3)}</span>
+						{author}
+						{author !== session.id ? <span className="font-mono"> · {session.id}</span> : null}
 					</p>
 				</div>
 				<span className="shrink-0 text-xs text-muted-foreground">{relativeTime(artifact.updatedAt, t)}</span>

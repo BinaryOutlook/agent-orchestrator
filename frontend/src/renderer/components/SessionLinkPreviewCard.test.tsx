@@ -219,6 +219,7 @@ describe("ArtifactLinkPreviewCard", () => {
 
 		expect(mocks.source).toHaveBeenCalledWith("box-a", undefined);
 		expect(screen.getByText("plan.md")).toBeInTheDocument();
+		expect(screen.getByText("Implement worker link previews")).toHaveTextContent("Implement worker link previews · worker-367");
 		expect(await screen.findByText(/Ship artifact links\./)).toBeInTheDocument();
 		expect(mocks.artifactFile).toHaveBeenCalledWith("plans/plan.md");
 	});
@@ -286,6 +287,27 @@ describe("ArtifactLinkPreviewCard", () => {
 
 		expect(await screen.findByText("Remote chart")).toBeInTheDocument();
 		expect(container.querySelector("iframe")).toBeNull();
+	});
+
+	it("names an orchestrator's artifacts as the orchestrator's, with the session id once", () => {
+		const orchestrator = session({ id: "skills-1", title: "skills-1", kind: "orchestrator", artifactFiles: [artifact()] });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(orchestrator)] }));
+		mocks.artifactFile.mockResolvedValue({ binary: false, content: "Plan" });
+
+		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/skills-1/artifacts/plans/plan.md" />);
+
+		expect(screen.getByText(/^Orchestrator/)).toHaveTextContent(/^Orchestrator · skills-1$/);
+		expect(screen.queryByText(/#s-1/)).not.toBeInTheDocument();
+	});
+
+	it("shows a worker without a title by its session id alone", () => {
+		const worker = session({ id: "skills-2", title: "skills-2", artifactFiles: [artifact()] });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
+		mocks.artifactFile.mockResolvedValue({ binary: false, content: "Plan" });
+
+		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/skills-2/artifacts/plans/plan.md" />);
+
+		expect(screen.getByText("skills-2")).toHaveTextContent(/^skills-2$/);
 	});
 
 	it("reports an artifact the session no longer lists", () => {
