@@ -786,7 +786,8 @@ describe("HarnessSettingsSection", () => {
 				params: { path: { handleId: "auth-gemini" } },
 			}), { timeout: 8_000 });
 			if (tc.readinessAfterProbes > 1) expect(probeCalls).toBeGreaterThanOrEqual(4);
-			expect(await within(row).findByText("Configured")).toBeInTheDocument();
+			expect(await within(row).findByText("Connected")).toBeInTheDocument();
+			expect(within(row).queryByText("Configured")).not.toBeInTheDocument();
 			expect(within(row).getByRole("button", { name: "Refresh login" })).toBeEnabled();
 			await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 		}, 15_000);

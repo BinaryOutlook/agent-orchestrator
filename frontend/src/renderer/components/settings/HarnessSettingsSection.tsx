@@ -721,12 +721,11 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 							(job.error || job.output || job.method || job.expectedDestination),
 						);
 
+						const connectedStatusLabel = isSetupAction && agentId !== "gemini" ? t("settings.harness.configured") : t("settings.harness.loggedIn");
 						const authSummary = authState?.error
 							? authState.error
-							: authStatus === "configured"
-								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
-								: authStatus === "authorized"
-								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
+							: authStatus === "configured" || authStatus === "authorized"
+								? connectedStatusLabel
 								: authPlan && !authPlan.available
 									? (authPlan.reason ?? t("settings.harness.authFailed"))
 									: authStatus === "unauthorized"
