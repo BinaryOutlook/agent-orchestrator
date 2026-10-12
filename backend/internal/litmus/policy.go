@@ -77,7 +77,7 @@ func (s *Service) SweepExpired(ctx context.Context, kill func(ctx context.Contex
 		}
 	}
 	for _, run := range runs {
-		if run.State == RunSubmitted || run.State == RunCleaned || s.reaped(run.ID) {
+		if run.State == RunSubmitted || run.State == RunCleaned || run.State == RunAwaitingApproval || s.reaped(run.ID) {
 			continue
 		}
 		if run.State != RunExpired && !s.clock().After(run.Deadline) {
@@ -148,7 +148,7 @@ func (s *Service) expireUnstarted(ctx context.Context, log *slog.Logger) (change
 		s.mu.Lock()
 		cur, err := s.store.Get(id)
 		if missing = errors.Is(err, fs.ErrNotExist); missing {
-			cur = Run{ID: id, SessionID: sid, Repo: sp.Repo, PRNumber: sp.PR, CreatedAt: sp.At, Deadline: sp.At.Add(RunBudget)}
+			cur = Run{ID: id, SessionID: sid, ProjectID: s.store.sessionProject(sid), Repo: sp.Repo, PRNumber: sp.PR, CreatedAt: sp.At, Deadline: sp.At.Add(RunBudget)}
 		} else if err != nil || cur.State != RunIntake { // intake got in between
 			s.mu.Unlock()
 			continue

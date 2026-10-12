@@ -28,17 +28,23 @@ const (
 	RunPrepared  RunState = "prepared"
 	RunRunning   RunState = "running"
 	RunSubmitted RunState = "submitted"
-	RunExpired   RunState = "expired"
-	RunCleaned   RunState = "cleaned"
+	// RunAwaitingApproval is a submitted run of a project that asks before posting: the verdict and comment.md are
+	// written, nothing is published, and the run waits for a post or a discard. It has no deadline.
+	RunAwaitingApproval RunState = "awaiting-approval"
+	RunExpired          RunState = "expired"
+	RunCleaned          RunState = "cleaned"
 )
 
 // Closed reports whether the run accepts no further worker verbs.
-func (s RunState) Closed() bool { return s == RunSubmitted || s == RunExpired || s == RunCleaned }
+func (s RunState) Closed() bool {
+	return s == RunSubmitted || s == RunAwaitingApproval || s == RunExpired || s == RunCleaned
+}
 
 // Run is one PR test attempt, owned by one AO session.
 type Run struct {
 	ID            string    `json:"id"`
 	SessionID     string    `json:"sessionId"`
+	ProjectID     string    `json:"projectId,omitempty"`     // the AO project the tester was started in; empty on runs older than the Litmus panel
 	Repo          string    `json:"repo"`                    // as gh resolved the PR (follows renames), lowercase owner/repo
 	RequestedRepo string    `json:"requestedRepo,omitempty"` // owner/repo from the URL the user gave
 	PRNumber      int       `json:"prNumber"`

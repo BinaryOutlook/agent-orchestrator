@@ -619,23 +619,38 @@ func plainCell(note string, n int) string {
 
 // postComment writes comment.md (the exact body) and, when the run asked for it and is not blocked, publishes the
 // evidence images and posts it. It never fails the submit: the outcome is the comment's URL and a state (posted,
-// updated, off or failed:<reason>), plus what became of the evidence. Evidence is published only once the token's
-// login is known, so a gh that cannot post does not push files either.
+// updated, off or failed:<reason>), plus what became of the evidence. A run that asks before posting stops after the
+// first step (see closeRun) and takes the second (publishComment) when its post is approved.
 func (s *Service) postComment(ctx context.Context, run Run, v Verdict, videos []legVideo) (url, state string, ev evidence) {
-	ev = evidence{state: EvidenceOff, videoState: "off"}
-	write := func() (string, error) {
-		body := renderComment(run, v, ev, s.clock())
-		return body, s.store.WriteFile(run.ID, "comment.md", []byte(body))
-	}
-	body, err := write()
+	body, ev, err := s.composeComment(run, v)
 	if err != nil {
 		return "", s.commentFailed(run, err), ev
 	}
 	if run.Comment != CommentPost || v.Overall == CheckBlocked {
 		return "", CommentOff, ev
 	}
+	return s.publishComment(ctx, run, v, videos, body)
+}
+
+// writeComment renders the comment for ev and writes it to comment.md.
+func (s *Service) writeComment(run Run, v Verdict, ev evidence) (string, error) {
+	body := renderComment(run, v, ev, s.clock())
+	return body, s.store.WriteFile(run.ID, "comment.md", []byte(body))
+}
+
+// composeComment is the first step of posting: it writes comment.md with no evidence in it, and touches no network.
+func (s *Service) composeComment(run Run, v Verdict) (string, evidence, error) {
+	ev := evidence{state: EvidenceOff, videoState: "off"}
+	body, err := s.writeComment(run, v, ev)
+	return body, ev, err
+}
+
+// publishComment is the second step: it publishes the evidence images and videos and posts or updates the comment.
+// Evidence is published only once the token's login is known, so a gh that cannot post does not push files either.
+func (s *Service) publishComment(ctx context.Context, run Run, v Verdict, videos []legVideo, body string) (url, state string, ev evidence) {
+	ev = evidence{state: EvidenceOff, videoState: "off"}
 	lctx, cancel := context.WithTimeout(ctx, commentTimeout)
-	_, err = s.ghLogin(lctx)
+	_, err := s.ghLogin(lctx)
 	cancel()
 	if err != nil {
 		return "", s.commentFailed(run, err), ev
@@ -646,7 +661,7 @@ func (s *Service) postComment(ctx context.Context, run Run, v Verdict, videos []
 	ev = s.publishEvidence(ctx, run, v)
 	ev.videos, ev.videoState = s.publishVideos(ctx, run, videos) // after the images, and without them when they failed
 	if len(ev.items) > 0 || len(ev.limits) > 0 || len(ev.videos) > 0 {
-		if body, err = write(); err != nil {
+		if body, err = s.writeComment(run, v, ev); err != nil {
 			return "", s.commentFailed(run, err), ev
 		}
 	}

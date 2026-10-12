@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +65,8 @@ func newTestingCommand(ctx *commandContext) *cobra.Command {
 	}))
 	cmd.AddCommand(t.recipeCommand(), t.waitCommand(), t.recordCommand(), t.testCommand())
 	cmd.AddCommand(t.pruneCommand())
+	cmd.AddCommand(t.runsCommand(), t.rerunCommand(), t.decideCommand("post", "Publish the evidence and post the comment of a run awaiting approval"),
+		t.decideCommand("discard", "Close a run awaiting approval without posting its comment"), t.settingsCommand())
 
 	for _, d := range []struct {
 		use, short string
@@ -429,6 +433,117 @@ func (t *testingCLI) pruneCommand() *cobra.Command {
 	f.IntVar(&keepRuns, "keep-runs", litmus.DefaultKeepRuns, "Finished run dirs to keep besides unfinished runs and the current one; 0 keeps only the current and unfinished runs")
 	f.IntVar(&keepCheckouts, "keep-checkouts", litmus.DefaultKeepCheckouts, "Most recent finished runs whose checkouts are kept besides those of unfinished runs")
 	f.BoolVar(&dryRun, "dry-run", false, "Report what would be deleted and delete nothing")
+	return cmd
+}
+
+// projectFlag is the project a panel verb acts on: --project, else AO_PROJECT_ID, else none.
+func projectFlag(explicit string) string {
+	if id := strings.TrimSpace(explicit); id != "" {
+		return id
+	}
+	return strings.TrimSpace(os.Getenv("AO_PROJECT_ID"))
+}
+
+// runsCommand lists a project's runs. Like prune it needs no session.
+func (t *testingCLI) runsCommand() *cobra.Command {
+	var project string
+	var limit int
+	cmd := verb("runs", "List a project's testing runs, newest first", noArgs, func(cmd *cobra.Command, _ []string) error {
+		q := url.Values{}
+		if id := projectFlag(project); id != "" {
+			q.Set("projectId", id)
+		}
+		if cmd.Flags().Changed("limit") {
+			q.Set("limit", strconv.Itoa(limit))
+		}
+		path := "testing/runs"
+		if len(q) > 0 {
+			path += "?" + q.Encode()
+		}
+		var out litmus.RunList
+		if err := t.c.getJSON(cmd.Context(), path, &out); err != nil {
+			return err
+		}
+		lines := make([]string, 0, len(out.Runs))
+		for _, r := range out.Runs {
+			lines = append(lines, runRowLine(r))
+		}
+		return t.show(cmd, out, cmp.Or(strings.Join(lines, "\n"), "no runs"))
+	})
+	cmd.Flags().StringVar(&project, "project", "", "Project id (default: AO_PROJECT_ID, else every project)")
+	cmd.Flags().IntVar(&limit, "limit", litmus.DefaultRunsLimit, "Most runs to list")
+	return cmd
+}
+
+// runRowLine is one run of the list: id, verdict, state, PR, duration, tokens and what became of the comment.
+func runRowLine(r litmus.RunSummary) string {
+	line := fmt.Sprintf("%s %s %s %s#%d %s", r.ID, r.Verdict, r.State, r.Repo, r.PR.Number, (time.Duration(r.DurationSeconds) * time.Second).String())
+	if r.Tokens > 0 {
+		line += fmt.Sprintf(" %d tokens", r.Tokens)
+	}
+	return strings.Join(append([]string{line}, commentLine(r.CommentState, r.CommentURL)...), " | ")
+}
+
+// rerunCommand starts a new tester on the PR of an earlier run.
+func (t *testingCLI) rerunCommand() *cobra.Command {
+	var project string
+	cmd := verb("rerun <runId>", "Start a new tester on the pull request of an earlier run", exactArgs(1), func(cmd *cobra.Command, a []string) error {
+		body := map[string]any{"runId": a[0]}
+		if id := projectFlag(project); id != "" {
+			body["projectId"] = id
+		}
+		var out litmus.Rerun
+		if err := t.c.postJSON(cmd.Context(), "testing/rerun", body, &out); err != nil {
+			return err
+		}
+		return t.show(cmd, out, fmt.Sprintf("spawned session %s %q, run %s", out.SessionID, out.Name, out.RunID))
+	})
+	cmd.Flags().StringVar(&project, "project", "", "Project id, only for a run that did not record its project (default: AO_PROJECT_ID)")
+	return cmd
+}
+
+// decideCommand is post or discard: the verdict on a run that waits for approval.
+func (t *testingCLI) decideCommand(name, short string) *cobra.Command {
+	return verb(name+" <runId>", short, exactArgs(1), func(cmd *cobra.Command, a []string) error {
+		var out litmus.Run
+		if err := t.c.postJSON(cmd.Context(), "testing/runs/"+url.PathEscape(a[0])+"/"+name, map[string]any{}, &out); err != nil {
+			return err
+		}
+		return t.show(cmd, out, runLine(out))
+	})
+}
+
+// settingsCommand shows or sets a project's Litmus settings.
+func (t *testingCLI) settingsCommand() *cobra.Command {
+	var project, ask string
+	cmd := verb("settings", "Show or set a project's Litmus settings", noArgs, func(cmd *cobra.Command, _ []string) error {
+		id := projectFlag(project)
+		if id == "" {
+			return usageError{errors.New("usage: --project is required")}
+		}
+		path := "testing/projects/" + url.PathEscape(id) + "/settings"
+		var out litmus.ProjectSettings
+		var err error
+		if cmd.Flags().Changed("ask-before-posting") {
+			var on bool
+			switch strings.ToLower(strings.TrimSpace(ask)) {
+			case "on", "true":
+				on = true
+			case "off", "false":
+			default:
+				return usageError{errors.New("usage: --ask-before-posting must be on or off")}
+			}
+			err = t.c.putJSON(cmd.Context(), path, litmus.ProjectSettings{AskBeforePosting: on}, &out)
+		} else {
+			err = t.c.getJSON(cmd.Context(), path, &out)
+		}
+		if err != nil {
+			return err
+		}
+		return t.show(cmd, out, "ask-before-posting "+map[bool]string{true: "on", false: "off"}[out.AskBeforePosting])
+	})
+	cmd.Flags().StringVar(&project, "project", "", "Project id (default: AO_PROJECT_ID)")
+	cmd.Flags().StringVar(&ask, "ask-before-posting", "", "on: a finished run waits for `ao testing post <runId>` instead of commenting on the PR; off: it posts at once")
 	return cmd
 }
 

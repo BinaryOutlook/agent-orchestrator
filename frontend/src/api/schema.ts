@@ -3252,6 +3252,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/testing/projects/{id}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a project's Litmus settings */
+        get: operations["getTestingProjectSettings"];
+        /** Set a project's Litmus settings, such as asking before posting a comment */
+        put: operations["setTestingProjectSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/testing/prune": {
         parameters: {
             query?: never;
@@ -3280,6 +3298,91 @@ export interface paths {
         put?: never;
         /** Validate a per-repo recipe file */
         post: operations["validateTestingRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/testing/rerun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a new tester on the pull request of an earlier run */
+        post: operations["rerunTesting"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/testing/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a project's testing runs, newest first, with verdict, duration and comment state */
+        get: operations["listTestingRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/testing/runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one run with its verdict.md, comment.md and checks */
+        get: operations["getTestingRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/testing/runs/{id}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close a run awaiting approval without posting its comment */
+        post: operations["discardTestingRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/testing/runs/{id}/post": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish the evidence and post the comment of a run awaiting approval */
+        post: operations["postTestingRun"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5922,6 +6025,10 @@ export interface components {
             state: string;
             worktree?: string;
         };
+        TestingProjectSettings: {
+            /** @description When on, a finished run writes its comment and waits for approval instead of posting it. */
+            askBeforePosting: boolean;
+        };
         TestingReady: {
             daemonPath?: string;
             debugPath?: string;
@@ -5982,11 +6089,14 @@ export interface components {
             note?: string;
             path?: string;
             prUrl?: string;
+            /** @description start: the project the worker runs in; rerun: only for a run that did not record its project. */
             projectId?: string;
             /** @description submit with blocked: what failed; required and non-empty. */
             reason?: string;
             /** @enum {string} */
             result?: "pass" | "fail" | "partial" | "skipped";
+            /** @description rerun only: the run whose pull request is tested again. */
+            runId?: string;
             sessionId?: string;
             /** @description submit only: why the base was not run; lets a submit through while a prepared base is unlaunched. */
             skipBase?: string;
@@ -5996,6 +6106,11 @@ export interface components {
              * @enum {string}
              */
             withTestsFrom?: "head";
+        };
+        TestingRerun: {
+            name: string;
+            runId: string;
+            sessionId: string;
         };
         TestingRun: {
             areas?: components["schemas"]["LitmusArea"][];
@@ -6016,6 +6131,7 @@ export interface components {
             id: string;
             legs?: components["schemas"]["TestingLeg"][];
             prNumber: number;
+            projectId?: string;
             repo: string;
             /** Format: int64 */
             repoId?: number;
@@ -6028,9 +6144,61 @@ export interface components {
                 [key: string]: string;
             };
         };
+        TestingRunDetail: {
+            checks: components["schemas"]["TestingCheck"][];
+            commentMd: string;
+            commentState?: string;
+            commentUrl?: string;
+            /** Format: int64 */
+            durationSeconds: number;
+            error?: string;
+            id: string;
+            pr: components["schemas"]["TestingRunPr"];
+            projectId?: string;
+            repo: string;
+            run: components["schemas"]["TestingRun"];
+            sessionId: string;
+            /** Format: date-time */
+            startedAt: string;
+            state: string;
+            /** Format: int64 */
+            tokens: number;
+            /** @enum {string} */
+            verdict: "pass" | "fail" | "partial" | "blocked" | "expired" | "none";
+            verdictMd: string;
+            videoState?: string;
+        };
+        TestingRunList: {
+            runs: components["schemas"]["TestingRunSummary"][];
+        };
+        TestingRunPr: {
+            number: number;
+            title?: string;
+            url: string;
+        };
         TestingRunStatus: {
             checks: components["schemas"]["TestingCheck"][];
             run: components["schemas"]["TestingRun"];
+        };
+        TestingRunSummary: {
+            commentState?: string;
+            commentUrl?: string;
+            /** Format: int64 */
+            durationSeconds: number;
+            error?: string;
+            id: string;
+            pr: components["schemas"]["TestingRunPr"];
+            projectId?: string;
+            repo: string;
+            sessionId: string;
+            /** Format: date-time */
+            startedAt: string;
+            state: string;
+            /** Format: int64 */
+            tokens: number;
+            /** @enum {string} */
+            verdict: "pass" | "fail" | "partial" | "blocked" | "expired" | "none";
+            videoState?: string;
         };
         TestingSeedStep: {
             cmd: string;
@@ -18770,6 +18938,128 @@ export interface operations {
             };
         };
     };
+    getTestingProjectSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AO project id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestingProjectSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setTestingProjectSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AO project id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestingProjectSettings"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestingProjectSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     pruneTesting: {
         parameters: {
             query?: never;
@@ -18850,6 +19140,312 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestingRecipe"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    rerunTesting: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestingRerun"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listTestingRuns: {
+        parameters: {
+            query?: {
+                /** @description Only runs of this AO project (runs started before projects were recorded are listed for every project). Omit for all runs. */
+                projectId?: string;
+                /** @description Maximum runs to return, newest first. Defaults to 50. */
+                limit?: null | number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestingRunList"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getTestingRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Run id, e.g. run_ao-25. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestingRunDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    discardTestingRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Run id, e.g. run_ao-25. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestingRun"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    postTestingRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Run id, e.g. run_ao-25. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestingRun"];
                 };
             };
             /** @description Bad Request */

@@ -3,6 +3,7 @@ package litmus
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -126,7 +127,7 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 	}
 	finished := 0
 	for _, r := range runs {
-		if !finishedRun(r) {
+		if !finishedRun(r) || r.State == RunAwaitingApproval { // an awaiting run still needs its files to be posted
 			keepDir[r.ID] = true
 		} else {
 			finished++
@@ -227,19 +228,34 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 }
 
 // loadForPrune reads every run.json; dirs whose run.json cannot be read are returned by name so they are kept.
+// A dir with no run.json yet that a tester was spawned for less than SpawnBudget ago is a run that is starting, not an
+// unreadable one: it is left out of both lists, so it neither pins a commit nor stops the checkouts from being pruned.
 func (s *Service) loadForPrune() (runs []Run, unreadable []string) {
 	entries, _ := os.ReadDir(s.store.root)
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		if run, err := s.store.Get(e.Name()); err == nil && run.ID == e.Name() {
+		run, err := s.store.Get(e.Name())
+		switch {
+		case err == nil && run.ID == e.Name():
 			runs = append(runs, run)
-		} else {
+		case errors.Is(err, fs.ErrNotExist) && s.starting(e.Name()):
+		default:
 			unreadable = append(unreadable, e.Name())
 		}
 	}
 	return runs, unreadable
+}
+
+// starting reports whether a run dir belongs to a tester spawned less than SpawnBudget ago.
+func (s *Service) starting(dir string) bool {
+	sid, ok := strings.CutPrefix(dir, "run_")
+	if !ok {
+		return false
+	}
+	sp, found := s.store.spawnedSession(sid)
+	return found && s.clock().Sub(sp.At) < SpawnBudget
 }
 
 // finishedRun is a run that will never prepare or drive a checkout again.

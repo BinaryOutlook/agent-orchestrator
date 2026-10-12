@@ -3313,11 +3313,28 @@ type TestingCheckIDParam struct {
 	ID string `path:"id" description:"Check id within the run, e.g. c1."`
 }
 
+// TestingRunsQuery is the query of GET /api/v1/testing/runs.
+type TestingRunsQuery struct {
+	ProjectID string `query:"projectId,omitempty" description:"Only runs of this AO project (runs started before projects were recorded are listed for every project). Omit for all runs."`
+	Limit     *int   `query:"limit,omitempty" minimum:"1" maximum:"200" description:"Maximum runs to return, newest first. Defaults to 50."`
+}
+
+// TestingRunIDParam is the {id} path parameter of the run routes.
+type TestingRunIDParam struct {
+	ID string `path:"id" description:"Run id, e.g. run_ao-25."`
+}
+
+// TestingProjectIDParam is the {id} path parameter of the project settings routes.
+type TestingProjectIDParam struct {
+	ID string `path:"id" description:"AO project id."`
+}
+
 // TestingRequest is the body of every POST /api/v1/testing verb; each verb reads
 // only the fields it needs. SessionID attributes the call to the worker's run; start and recipe validate need none.
 type TestingRequest struct {
 	SessionID     string   `json:"sessionId,omitempty"`
-	ProjectID     string   `json:"projectId,omitempty"`
+	ProjectID     string   `json:"projectId,omitempty" description:"start: the project the worker runs in; rerun: only for a run that did not record its project."`
+	RunID         string   `json:"runId,omitempty" description:"rerun only: the run whose pull request is tested again."`
 	Harness       string   `json:"harness,omitempty"`
 	PRURL         string   `json:"prUrl,omitempty"`
 	Leg           string   `json:"leg,omitempty" enum:"base,head"`

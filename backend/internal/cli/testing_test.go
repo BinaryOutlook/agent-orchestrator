@@ -202,3 +202,49 @@ func TestTestingPruneSendsFlagsAndPrintsLines(t *testing.T) {
 		t.Fatalf("defaults must be left to the daemon: body=%v err=%v", got.body, err)
 	}
 }
+
+func TestTestingPanelVerbs(t *testing.T) {
+	t.Setenv("AO_PROJECT_ID", "")
+	type M = map[string]any
+	for _, tc := range []struct {
+		args, reply   string
+		method, path  string
+		body          M
+		want, wantNot string
+	}{
+		{args: "runs --project p1 --limit 5", reply: `{"runs":[{"id":"run_ao-25","verdict":"pass","state":"submitted","repo":"o/r","pr":{"number":7},"durationSeconds":420,"tokens":120,"commentState":"posted","commentUrl":"https://github.com/o/r/pull/7#issuecomment-9"}]}`,
+			method: "GET", path: "/testing/runs?limit=5&projectId=p1", want: "run_ao-25 pass submitted o/r#7 7m0s 120 tokens | comment posted: https://github.com/o/r/pull/7#issuecomment-9"},
+		{args: "runs", reply: `{"runs":[]}`, method: "GET", path: "/testing/runs", want: "no runs"},
+		{args: "rerun run_ao-25", reply: `{"sessionId":"ao-26","name":"litmus: PR #7","runId":"run_ao-26"}`,
+			method: "POST", path: "/testing/rerun", body: M{"runId": "run_ao-25"}, want: `spawned session ao-26 "litmus: PR #7", run run_ao-26`},
+		{args: "rerun run_ao-25 --project p2", reply: `{}`, method: "POST", path: "/testing/rerun", body: M{"runId": "run_ao-25", "projectId": "p2"}},
+		{args: "post run_ao-25", reply: `{"id":"run_ao-25","state":"submitted","repo":"o/r","prNumber":7,"commentState":"posted","commentUrl":"https://github.com/o/r/pull/7#issuecomment-9"}`,
+			method: "POST", path: "/testing/runs/run_ao-25/post", body: M{}, want: "comment posted: https://github.com/o/r/pull/7#issuecomment-9"},
+		{args: "discard run_ao-25", reply: `{"id":"run_ao-25","state":"cleaned","repo":"o/r","prNumber":7,"commentState":"discarded"}`,
+			method: "POST", path: "/testing/runs/run_ao-25/discard", body: M{}, want: "comment discarded"},
+		{args: "settings --project p1", reply: `{"askBeforePosting":true}`, method: "GET", path: "/testing/projects/p1/settings", want: "ask-before-posting on"},
+		{args: "settings --project p1 --ask-before-posting off", reply: `{"askBeforePosting":false}`, method: "PUT", path: "/testing/projects/p1/settings", body: M{"askBeforePosting": false}, want: "ask-before-posting off"},
+		{args: "settings --project p1 --ask-before-posting on", reply: `{"askBeforePosting":true}`, method: "PUT", path: "/testing/projects/p1/settings", body: M{"askBeforePosting": true}, want: "ask-before-posting on"},
+	} {
+		t.Run(tc.args, func(t *testing.T) {
+			got := testingDaemon(t, http.StatusOK, tc.reply)
+			out, err := runTesting(t, strings.Fields(tc.args)...)
+			if err != nil || got.method != tc.method || got.path != "/api/v1"+tc.path || (tc.body != nil && fmt.Sprint(got.body) != fmt.Sprint(tc.body)) || !strings.Contains(out, tc.want) {
+				t.Fatalf("request %s %s %v, out %q, err %v", got.method, got.path, got.body, out, err)
+			}
+		})
+	}
+	for _, args := range []string{"rerun", "post", "discard", "settings", "settings --project p1 --ask-before-posting maybe", "runs extra"} {
+		t.Run("usage "+args, func(t *testing.T) {
+			testingDaemon(t, http.StatusOK, `{}`)
+			if _, err := runTesting(t, strings.Fields(args)...); ExitCode(err) != 2 {
+				t.Fatalf("err=%v exit=%d", err, ExitCode(err))
+			}
+		})
+	}
+	got := testingDaemon(t, http.StatusOK, `{"runs":[]}`)
+	t.Setenv("AO_PROJECT_ID", "envproj") // the environment names the project when no flag does
+	if _, err := runTesting(t, "runs"); err != nil || got.path != "/api/v1/testing/runs?projectId=envproj" {
+		t.Fatalf("path %s err %v", got.path, err)
+	}
+}

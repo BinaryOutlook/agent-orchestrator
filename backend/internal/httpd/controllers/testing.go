@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -30,6 +31,13 @@ type TestingService interface {
 	RecipeValidate(ctx context.Context, path string) (litmus.Recipe, error)
 	Prune(ctx context.Context, keepRuns, keepCheckouts int) (litmus.PruneReport, error)
 	PruneDryRun(ctx context.Context, keepRuns, keepCheckouts int) (litmus.PruneReport, error)
+	Runs(ctx context.Context, projectID string, limit int) (litmus.RunList, error)
+	RunDetail(ctx context.Context, id string) (litmus.RunDetail, error)
+	Rerun(ctx context.Context, runID, projectID string) (litmus.Rerun, error)
+	Post(ctx context.Context, runID string) (litmus.Run, error)
+	Discard(ctx context.Context, runID string) (litmus.Run, error)
+	ProjectSettings(ctx context.Context, projectID string) (litmus.ProjectSettings, error)
+	SetProjectSettings(ctx context.Context, projectID string, ps litmus.ProjectSettings) (litmus.ProjectSettings, error)
 }
 
 // TestingController owns the /testing routes. The router mounts it only when a
@@ -41,6 +49,45 @@ func (c *TestingController) Register(r chi.Router) {
 	s := c.Svc
 	r.Get("/testing/status", func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.Status(r.Context(), strings.TrimSpace(r.URL.Query().Get("sessionId")))
+		writeTesting(w, r, out, err)
+	})
+	r.Get("/testing/runs", func(w http.ResponseWriter, r *http.Request) {
+		limit := 0
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 1 {
+				envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TESTING_LIMIT_INVALID", "limit must be a positive integer", nil)
+				return
+			}
+			limit = n
+		}
+		out, err := s.Runs(r.Context(), r.URL.Query().Get("projectId"), limit)
+		writeTesting(w, r, out, err)
+	})
+	r.Get("/testing/runs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.RunDetail(r.Context(), chi.URLParam(r, "id"))
+		writeTesting(w, r, out, err)
+	})
+	r.Post("/testing/runs/{id}/post", testingPost(func(r *http.Request, _ TestingRequest) (litmus.Run, error) {
+		return s.Post(r.Context(), chi.URLParam(r, "id"))
+	}))
+	r.Post("/testing/runs/{id}/discard", testingPost(func(r *http.Request, _ TestingRequest) (litmus.Run, error) {
+		return s.Discard(r.Context(), chi.URLParam(r, "id"))
+	}))
+	r.Post("/testing/rerun", testingPost(func(r *http.Request, in TestingRequest) (litmus.Rerun, error) {
+		return s.Rerun(r.Context(), strings.TrimSpace(in.RunID), strings.TrimSpace(in.ProjectID))
+	}))
+	r.Get("/testing/projects/{id}/settings", func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.ProjectSettings(r.Context(), chi.URLParam(r, "id"))
+		writeTesting(w, r, out, err)
+	})
+	r.Put("/testing/projects/{id}/settings", func(w http.ResponseWriter, r *http.Request) {
+		var in litmus.ProjectSettings
+		if err := decodeJSONStrict(r, &in); err != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+			return
+		}
+		out, err := s.SetProjectSettings(r.Context(), chi.URLParam(r, "id"), in)
 		writeTesting(w, r, out, err)
 	})
 	r.Post("/testing/start", testingPost(func(r *http.Request, in TestingRequest) (litmus.Started, error) {

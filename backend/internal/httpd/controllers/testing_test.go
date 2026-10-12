@@ -197,3 +197,92 @@ func TestTestingAPIPrune(t *testing.T) {
 		t.Fatalf("checkout survived: %v", err)
 	}
 }
+
+// postingGH answers the comment endpoints a post needs and replays the recorded PR otherwise.
+type postingGH struct {
+	recordedGH
+	posted *[]string
+}
+
+func (g postingGH) Run(ctx context.Context, args ...string) ([]byte, error) {
+	line := strings.Join(args, " ")
+	switch {
+	case line == "api user --jq .login":
+		return []byte("litmus-bot\n"), nil
+	case strings.HasSuffix(line, "/comments --paginate"):
+		return []byte("[]"), nil
+	case strings.HasPrefix(line, "api --method POST ") && strings.Contains(line, "/comments --input "):
+		*g.posted = append(*g.posted, line)
+		return []byte(`{"html_url":"https://github.com/o/r/pull/6394#issuecomment-1"}`), nil
+	}
+	return g.recordedGH.Run(ctx, args...)
+}
+
+func TestTestingAPIRunsAskBeforePostingAndRerun(t *testing.T) {
+	const pr = "aoagents/agent-orchestrator#6394"
+	store := litmus.NewStore(t.TempDir())
+	var posted []string
+	ids := []string{"ao-7", "ao-8", "ao-9"}
+	svc := litmus.New(store, nil).WithGH(postingGH{recordedGH{t: t}, &posted}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	}).WithTranscripts(t.TempDir())
+	do := testingServer(t, httpd.APIDeps{Testing: svc})
+
+	do("GET", "/projects/p1/settings", "", http.StatusOK, `"askBeforePosting":false`)
+	do("PUT", "/projects/p1/settings", `{"askBeforePosting":true}`, http.StatusOK, `"askBeforePosting":true`)
+	do("PUT", "/projects/p1/settings", `{"ask":true}`, http.StatusBadRequest, "INVALID_JSON")
+	do("GET", "/projects/p1/settings", "", http.StatusOK, `"askBeforePosting":true`)
+	do("GET", "/projects/p2/settings", "", http.StatusOK, `"askBeforePosting":false`)
+
+	finish := func(session string) {
+		t.Helper()
+		do("POST", "/start", `{"projectId":"p1","prUrl":"`+pr+`","noEvidence":true}`, http.StatusOK, `"sessionId":"`+session+`"`)
+		do("POST", "/intake", `{"sessionId":"`+session+`","prUrl":"`+pr+`"}`, http.StatusOK, `"projectId":"p1"`)
+		do("POST", "/checks", `{"sessionId":"`+session+`","name":"model menu","expect":"last model reachable"}`, http.StatusOK)
+		do("POST", "/checks/c1/start", `{"sessionId":"`+session+`"}`, http.StatusOK)
+		id := "run_" + session
+		checks, err := store.Checks(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checks[0].Receipts = []litmus.Receipt{{Seq: 1, Action: "click"}}
+		if err := store.SaveChecks(id, checks); err != nil {
+			t.Fatal(err)
+		}
+		do("POST", "/checks/c1/end", `{"sessionId":"`+session+`","result":"pass"}`, http.StatusOK)
+		do("POST", "/submit", `{"sessionId":"`+session+`"}`, http.StatusOK, `"commentState":"awaiting-approval"`)
+	}
+	finish("ao-7")
+	finish("ao-8")
+	if len(posted) != 0 {
+		t.Fatalf("submit posted %q although the project asks first", posted)
+	}
+
+	do("GET", "/runs?projectId=p1", "", http.StatusOK, `"id":"run_ao-8"`, `"id":"run_ao-7"`, `"state":"awaiting-approval"`, `"verdict":"partial"`, `"number":6394`, `"tokens":0`, `"durationSeconds":`)
+	do("GET", "/runs?projectId=p2", "", http.StatusOK, `"runs":[]`)
+	do("GET", "/runs?limit=1", "", http.StatusOK, `"id":"run_ao-8"`)
+	do("GET", "/runs?limit=0", "", http.StatusBadRequest, "TESTING_LIMIT_INVALID")
+	do("GET", "/runs?limit=x", "", http.StatusBadRequest, "TESTING_LIMIT_INVALID")
+	do("GET", "/runs/run_ao-7", "", http.StatusOK, `"verdictMd":"# Verdict: partial`, `"commentMd":"Litmus tried`, `"checks":[{`, `"run":{`)
+	do("GET", "/runs/run_nope", "", http.StatusNotFound, "TESTING_RUN_NOT_FOUND")
+
+	do("POST", "/runs/run_ao-7/post", `{}`, http.StatusOK, `"state":"submitted"`, `"commentState":"posted"`, `issuecomment-1`)
+	if len(posted) != 1 {
+		t.Fatalf("posted %q", posted)
+	}
+	do("POST", "/runs/run_ao-7/post", `{}`, http.StatusConflict, "TESTING_NOT_AWAITING") // a second post is refused
+	do("POST", "/runs/run_ao-7/discard", `{}`, http.StatusConflict, "TESTING_NOT_AWAITING")
+	do("POST", "/runs/run_nope/post", `{}`, http.StatusNotFound, "TESTING_RUN_NOT_FOUND")
+
+	do("POST", "/runs/run_ao-8/discard", `{}`, http.StatusOK, `"state":"cleaned"`, `"commentState":"discarded"`)
+	do("POST", "/runs/run_ao-8/post", `{}`, http.StatusConflict, "TESTING_NOT_AWAITING")
+	if len(posted) != 1 {
+		t.Fatalf("a discarded run posted: %q", posted)
+	}
+
+	do("POST", "/rerun", `{"runId":"run_ao-7"}`, http.StatusOK, `"sessionId":"ao-9"`, `"runId":"run_ao-9"`)
+	do("POST", "/rerun", `{"runId":"run_nope"}`, http.StatusNotFound, "TESTING_RUN_NOT_FOUND")
+	do("POST", "/rerun", `{}`, http.StatusBadRequest, "TESTING_ID_INVALID")
+}

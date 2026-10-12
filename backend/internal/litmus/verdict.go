@@ -246,8 +246,9 @@ func (s *Service) SubmitBlocked(ctx context.Context, sessionID, reason string) (
 }
 
 // closeRun turns the checks into a verdict (overall blocked when blocked is the reason), writes verdict.md,
-// publishes the evidence, marks the run submitted and reports the session done. skipBase is the reason the tester gave
-// for not running the base, and lands in Limits.
+// publishes the evidence, marks the run submitted and reports the session done. A run of a project that asks before
+// posting stops at awaiting-approval instead, with comment.md written and nothing published or posted. skipBase is
+// the reason the tester gave for not running the base, and lands in Limits.
 func (s *Service) closeRun(ctx context.Context, run Run, checks []Check, summary, blocked, skipBase string) (Verdict, error) {
 	runDir := filepath.Join(s.store.root, run.ID)
 	run = s.stopRecording(ctx, run) // while the engines are still alive; returns the run with its recording state
@@ -276,24 +277,44 @@ func (s *Service) closeRun(ctx context.Context, run Run, checks []Check, summary
 	if err := publishArtifacts(sessionartifacts.Dir(s.store.dataDir(), domain.SessionID(run.SessionID)), runDir, md, renderIndex(run, v, videos)); err != nil {
 		return Verdict{}, fmt.Errorf("copy evidence to the session artifact dir: %w", err)
 	}
-	if _, err := s.update(run.ID, func(cur *Run) {
-		cur.State = RunSubmitted
-		for i := range cur.Legs {
-			if cleanErr == nil {
-				cur.Legs[i].State = "cleaned"
-			}
+	if s.mustAsk(run, v) { // compose the comment and stop: nothing is published or posted until the user approves it
+		if err := s.store.put(run.ID, verdictFile, v); err != nil {
+			return Verdict{}, fmt.Errorf("save the verdict for approval: %w", err)
 		}
-	}); err != nil {
-		return v, err
-	}
-	var ev evidence
-	v.CommentURL, v.CommentState, ev = s.postComment(ctx, run, v, videos) // never fails the submit
-	v.EvidenceState, v.EvidenceCommit = ev.state, ev.commit
-	if _, err := s.update(run.ID, func(cur *Run) {
-		cur.CommentURL, cur.CommentState, cur.EvidenceState, cur.EvidenceCommit = v.CommentURL, v.CommentState, v.EvidenceState, v.EvidenceCommit
-		cur.VideoState, cur.VideoURLs = ev.videoState, ev.videoURLs()
-	}); err != nil {
-		slog.Warn("litmus: could not save the comment state", "run", run.ID, "error", err)
+		if _, _, err := s.composeComment(run, v); err != nil {
+			return Verdict{}, fmt.Errorf("write comment.md: %w", err)
+		}
+		v.CommentState, v.EvidenceState = CommentAwaiting, EvidenceOff
+		if _, err := s.update(run.ID, func(cur *Run) {
+			cur.State, cur.CommentState, cur.EvidenceState = RunAwaitingApproval, v.CommentState, v.EvidenceState
+			for i := range cur.Legs {
+				if cleanErr == nil {
+					cur.Legs[i].State = "cleaned"
+				}
+			}
+		}); err != nil {
+			return v, err
+		}
+	} else {
+		if _, err := s.update(run.ID, func(cur *Run) {
+			cur.State = RunSubmitted
+			for i := range cur.Legs {
+				if cleanErr == nil {
+					cur.Legs[i].State = "cleaned"
+				}
+			}
+		}); err != nil {
+			return v, err
+		}
+		var ev evidence
+		v.CommentURL, v.CommentState, ev = s.postComment(ctx, run, v, videos) // never fails the submit
+		v.EvidenceState, v.EvidenceCommit = ev.state, ev.commit
+		if _, err := s.update(run.ID, func(cur *Run) {
+			cur.CommentURL, cur.CommentState, cur.EvidenceState, cur.EvidenceCommit = v.CommentURL, v.CommentState, v.EvidenceState, v.EvidenceCommit
+			cur.VideoState, cur.VideoURLs = ev.videoState, ev.videoURLs()
+		}); err != nil {
+			slog.Warn("litmus: could not save the comment state", "run", run.ID, "error", err)
+		}
 	}
 	if s.report != nil { // the tester's last act: the session closes itself without `ao report --done`
 		note := fmt.Sprintf("Litmus verdict %s for %s#%d: see verdict.md in the session artifacts.", v.Overall, run.Repo, run.PRNumber)

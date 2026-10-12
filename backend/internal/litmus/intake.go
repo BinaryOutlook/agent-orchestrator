@@ -233,7 +233,7 @@ func (s *Service) claim(id, sessionID, repo string, number int) (Run, error) {
 		return Run{}, conflict("TESTING_RUN_EXISTS", "this session already has run "+id)
 	}
 	now := s.clock()
-	run := Run{ID: id, SessionID: sessionID, Repo: repo, RequestedRepo: repo, PRNumber: number, State: RunIntake, CreatedAt: now, Deadline: now.Add(RunBudget), Comment: s.store.commentMode(sessionID), Evidence: s.store.evidenceMode(sessionID)}
+	run := Run{ID: id, SessionID: sessionID, ProjectID: s.store.sessionProject(sessionID), Repo: repo, RequestedRepo: repo, PRNumber: number, State: RunIntake, CreatedAt: now, Deadline: now.Add(RunBudget), Comment: s.store.commentMode(sessionID), Evidence: s.store.evidenceMode(sessionID)}
 	return run, s.store.Save(run)
 }
 

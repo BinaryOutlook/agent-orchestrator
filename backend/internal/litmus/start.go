@@ -93,6 +93,9 @@ func (s *Service) Start(ctx context.Context, req StartRequest) (Started, error) 
 			}
 		}
 	}
+	if err := s.store.setSessionProject(id, req.ProjectID); err != nil {
+		return Started{}, fmt.Errorf("session %s started but its project was not saved, so its run will not be listed under the project: %w", id, err)
+	}
 	if err := s.store.markSpawned(id, spawned{At: s.clock().UTC(), Repo: repo, PR: number}); err != nil {
 		return Started{}, fmt.Errorf("session %s started but its spawn time was not saved, so it will not be reaped if it never runs intake: %w", id, err)
 	}
@@ -139,6 +142,15 @@ func (s *Store) spawnedSessions() (map[string]spawned, error) {
 		}
 	}
 	return out, nil
+}
+
+// spawnedSession reads one tester's spawn marker.
+func (s *Store) spawnedSession(sessionID string) (sp spawned, found bool) {
+	if sessionID == "" || filepath.Base(sessionID) != sessionID {
+		return sp, false
+	}
+	data, err := os.ReadFile(filepath.Join(s.spawnedDir(), sessionID))
+	return sp, err == nil && json.Unmarshal(data, &sp) == nil
 }
 
 func (s *Store) clearSpawned(sessionID string) {

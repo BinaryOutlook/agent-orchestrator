@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -49,6 +50,8 @@ type Service struct {
 	testCap       time.Duration   // longest a `test` verb may run; tests shorten it
 	keepRuns      int             // retention after every run: finished run dirs kept
 	keepCheckouts int             // retention after every run: finished runs whose checkouts are kept
+	transcripts   string          // where Claude keeps session transcripts, for a run's token count; empty reads none
+	tokenCache    map[tokenKey]int64
 }
 
 // New builds a service over store. A nil clock uses time.Now.
@@ -60,6 +63,10 @@ func New(store *Store, clock func() time.Time) *Service {
 		engines: map[string]*Engine{}, seqs: map[string]int{}, engExec: realExec,
 		media: execMedia{}, testCap: testCap, keepRuns: DefaultKeepRuns, keepCheckouts: DefaultKeepCheckouts}
 	s.closeEngine = s.closeEngines
+	s.tokenCache = map[tokenKey]int64{}
+	if home, err := os.UserHomeDir(); err == nil {
+		s.transcripts = filepath.Join(home, ".claude", "projects")
+	}
 	if exe, err := os.Executable(); err == nil {
 		s.binary, _ = resolveBinary(os.Getenv("AO_AGENT_BROWSER_PATH"), exe)
 	}
