@@ -82,7 +82,9 @@ func expandHomePath(raw string) string {
 	if err != nil || home == "" {
 		return raw
 	}
-	return filepath.Join(home, strings.TrimPrefix(raw, "~"))
+	// Not filepath.Join: it would collapse a ".." lexically, before any
+	// symlink ahead of it has been followed.
+	return home + strings.TrimPrefix(raw, "~")
 }
 
 // foreignAbsolutePath matches Windows drive (C:\x, C:/x) and UNC (\\host\share)
@@ -90,61 +92,47 @@ func expandHomePath(raw string) string {
 var foreignAbsolutePath = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|\\\\)`)
 
 // relativeWithinRoot reports target relative to root when target is strictly
-// inside it. Containment is decided on symlink-resolved paths, so a link inside
-// the root that points out of it is not mistaken for a file the session owns;
-// a target that does not exist yet is resolved through its deepest existing
-// ancestor. The as-written spelling decides only when the root itself cannot
-// be resolved.
+// inside it. Both are resolved the way the filesystem reads them, so a link
+// inside the root that points out of it is not mistaken for a file the session
+// owns, and the returned path names the file the target actually reaches.
 func relativeWithinRoot(root, target string) (string, bool) {
 	root = strings.TrimSpace(root)
 	if root == "" || !filepath.IsAbs(root) {
 		return "", false
 	}
-	cleanRoot, cleanTarget := filepath.Clean(root), filepath.Clean(target)
-	resolvedRoot, err := resolvedFilesystemPath(root)
-	if err != nil {
-		return relativeTo(cleanRoot, cleanTarget)
-	}
-	resolvedTarget, ok := resolveExistingPrefix(target)
-	if !ok || !pathWithin(resolvedRoot, resolvedTarget) {
+	resolvedRoot, resolvedTarget := resolveInFilesystemOrder(root), resolveInFilesystemOrder(target)
+	if !pathWithin(resolvedRoot, resolvedTarget) {
 		return "", false
 	}
-	// Prefer the spelling the caller used: a link inside the root that stays
-	// inside it is addressed by the link's own path, not its destination's.
-	for _, base := range []string{cleanRoot, resolvedRoot} {
-		if rel, ok := relativeTo(base, cleanTarget); ok {
-			return rel, true
-		}
-	}
-	return relativeTo(resolvedRoot, resolvedTarget)
-}
-
-func relativeTo(root, target string) (string, bool) {
-	if !pathWithin(root, target) {
-		return "", false
-	}
-	rel, err := filepath.Rel(root, target)
+	rel, err := filepath.Rel(resolvedRoot, resolvedTarget)
 	if err != nil {
 		return "", false
 	}
 	return filepath.ToSlash(rel), true
 }
 
-// resolveExistingPrefix resolves symlinks in the longest existing ancestor of
-// target and re-appends the missing tail, so a not-yet-created file under a
-// symlinked directory still compares against a resolved root.
-func resolveExistingPrefix(target string) (string, bool) {
-	clean := filepath.Clean(target)
-	tail := ""
-	for current := clean; ; {
-		if resolved, err := resolvedFilesystemPath(current); err == nil {
-			return filepath.Join(resolved, tail), true
+// resolveInFilesystemOrder resolves an absolute path one component at a time,
+// following each symlink before applying the ".." after it. Cleaning first
+// would be wrong: with link -> /elsewhere/dir, "root/link/../file" names
+// /elsewhere/file, not root/file. Once a component does not exist the rest is
+// joined as written, since a missing directory holds no links to follow.
+func resolveInFilesystemOrder(absolute string) string {
+	volume := filepath.VolumeName(absolute)
+	resolved := volume + string(filepath.Separator)
+	parts := strings.FieldsFunc(absolute[len(volume):], func(r rune) bool { return r == '/' || r == filepath.Separator })
+	for i, part := range parts {
+		switch part {
+		case ".":
+			continue
+		case "..":
+			resolved = filepath.Dir(resolved)
+			continue
 		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", false
+		next, err := resolvedFilesystemPath(filepath.Join(resolved, part))
+		if err != nil {
+			return filepath.Join(append([]string{resolved}, parts[i:]...)...)
 		}
-		tail = filepath.Join(filepath.Base(current), tail)
-		current = parent
+		resolved = next
 	}
+	return resolved
 }
