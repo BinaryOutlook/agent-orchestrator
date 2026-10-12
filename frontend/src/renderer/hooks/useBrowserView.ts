@@ -195,6 +195,9 @@ let browserHoleOwner: string | null = null;
 
 function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
 	const root = document.documentElement;
+	// Custom properties on :root restyle the whole document, so only write them
+	// while the translucent window actually needs the hole.
+	if (rect && root.dataset.windowTranslucent !== "true") rect = null;
 	if (!rect) {
 		if (browserHoleOwner !== viewId) return;
 		browserHoleOwner = null;
