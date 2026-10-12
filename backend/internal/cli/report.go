@@ -148,7 +148,7 @@ func lintHTMLArtifacts(references []string) error {
 			continue
 		}
 		if findings := renderpage.Lint(string(page)); len(findings) > 0 {
-			return fmt.Errorf("%s: %s\nFix the page, then report again.", reference, renderpage.FindingsError(findings))
+			return fmt.Errorf("%s: %s; fix the page, then report again", reference, renderpage.FindingsError(findings))
 		}
 	}
 	return nil

@@ -254,6 +254,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
 					onPageFocus: unsubscribe,
+					setArtifactTheme: () => undefined,
 				},
 				browserProfiles: {
 					list: async () => ({ profiles: [] }),
@@ -870,6 +871,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
 					onPageFocus: unsubscribe,
+					setArtifactTheme: () => undefined,
 				},
 				browserProfiles: {
 					list: async () => ({ profiles: [] }),

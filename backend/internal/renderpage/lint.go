@@ -73,7 +73,7 @@ var (
 	quotedHex    = regexp.MustCompile(`["'\x60]#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})["'\x60]`)
 	textRun      = regexp.MustCompile(`>([^<]+)<`)
 	emoji        = regexp.MustCompile(`[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{2B00}-\x{2BFF}\x{FE0F}]`)
-	headingText  = regexp.MustCompile(`(?is)<(h[1-3]|th)\b[^>]*>(.*?)</(?:h[1-3]|th)\s*>`)
+	headingText  = regexp.MustCompile(`(?is)<(h[123]|th)\b[^>]*>(.*?)</(?:h[123]|th)\s*>`)
 	innerTag     = regexp.MustCompile(`<[^>]*>`)
 	// Code-like text keeps its own case.
 	codeSpans = []*regexp.Regexp{
