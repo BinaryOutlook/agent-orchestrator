@@ -7,9 +7,11 @@ import type { FeatherIconName } from "./icons";
  *
  * Every action here maps to an endpoint that actually exists. That constraint
  * is the whole design: the obvious missing item is "Stop", and there is no stop
- * or pause endpoint. The archive action calls `killSession`, which terminates
- * the runtime but preserves the session, conversation, and worktree for a later
- * restore. A "Stop" entry would therefore be a second name for the same call.
+ * or pause endpoint. The archive action calls `killSession`: it stops the agent
+ * and deletes the session's worktree folder unless that folder has uncommitted
+ * changes (the daemon refuses to remove a dirty worktree). The conversation and
+ * the branch's commits stay, which is what Restore rebuilds from. A "Stop" entry
+ * would therefore be a second name for the same call.
  */
 import type { SFSymbol } from "sf-symbols-typescript";
 
@@ -48,11 +50,18 @@ export function workerContextActions(state: WorkerActionState): WorkerAction[] {
 
 	if (state.hasPr) actions.push({ id: "openPr", title: "Review pull request" });
 
-	// The internal id predates Archive. Keep it stable for the action routing, but
-	// present the operation honestly: kill is reversible through Restore.
-	actions.push({ id: "delete", title: "Archive session" });
+	// The internal id predates Archive and stays for action routing. Still
+	// destructive: archiving deletes a clean worktree folder.
+	actions.push({ id: "delete", title: "Archive session", destructive: true });
 	return actions;
 }
+
+/** Confirmation copy for every Archive entry point; see the module comment. */
+export function archiveSessionMessage(name: string): string {
+	return `This stops ${name} and moves it to Archive. Its worktree folder is deleted unless it has uncommitted changes. The conversation and committed work on its branch are kept, so you can restore it later.`;
+}
+
+export const ARCHIVE_SESSION_HINT = "Stops the agent and moves it to Archive. Deletes the worktree folder unless it has uncommitted changes.";
 
 /**
  * SF Symbol per action, for iOS's native menu.

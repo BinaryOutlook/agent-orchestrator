@@ -128,7 +128,7 @@ export const WorkerListRow = memo(
 						haptics.tap();
 						void onSetPinned(pinned);
 					}}
-					onDelete={() => { closeActionRailRef.current(); haptics.tap(); onDelete(); }}
+					onDelete={() => { closeActionRailRef.current(); haptics.warning(); onDelete(); }}
 				/>
 			</View>
 		),

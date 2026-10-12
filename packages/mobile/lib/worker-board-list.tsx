@@ -22,6 +22,7 @@ import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { ListSectionHeader } from "./ui";
+import { archiveSessionMessage } from "./worker-action-model";
 import { WorkerListRow } from "./worker-list-row";
 import { filterWorkerSessions } from "./worker-search";
 import { type, space } from "./tokens";
@@ -292,13 +293,13 @@ export function WorkerBoardList({
 	}, [restore, resumeAgent]);
 
 	const confirmDeleteSession = useCallback((session: DashboardSession) => {
-		haptics.tap();
+		haptics.warning();
 		Alert.alert(
 			"Archive session?",
-			`This stops ${session.displayName?.trim() || "this worker"} and moves the session to Archive. You can restore it later; its conversation and worktree are preserved.`,
+			archiveSessionMessage(session.displayName?.trim() || "this worker"),
 			[
 				{ text: "Cancel", style: "cancel" },
-				{ text: "Archive session", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
+				{ text: "Archive session", style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
 			],
 		);
 	}, [kill]);

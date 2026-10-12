@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	ARCHIVE_SESSION_HINT,
+	archiveSessionMessage,
 	hasWorkerActionDrawable,
 	workerActionGlyph,
 	workerActionSymbol,
@@ -62,13 +64,22 @@ describe("workerContextActions", () => {
 		expect(everything).not.toContain("pause");
 	});
 
-	it("keeps the restorable archive action last without destructive styling", () => {
+	// Archive calls killSession, which deletes a clean worktree folder.
+	it("keeps Archive last and marks it as the only destructive action", () => {
 		for (const over of [{}, { pinned: true, hasPr: true }, { terminated: true }]) {
 			const actions = workerContextActions(state(over));
-			const last = actions.at(-1);
-			expect(last).toEqual({ id: "delete", title: "Archive session" });
-			expect(actions.filter((a) => a.destructive)).toHaveLength(0);
+			expect(actions.at(-1)).toEqual({ id: "delete", title: "Archive session", destructive: true });
+			expect(actions.filter((a) => a.destructive)).toHaveLength(1);
 		}
+	});
+
+	it("tells the user Archive deletes a clean worktree but keeps what Restore needs", () => {
+		const message = archiveSessionMessage("Fix login");
+		expect(message).toContain("Fix login");
+		expect(message).toMatch(/worktree folder is deleted unless it has uncommitted changes/);
+		expect(message).toMatch(/conversation and committed work on its branch are kept/);
+		expect(message).not.toMatch(/worktree (is|are) preserved/);
+		expect(ARCHIVE_SESSION_HINT).toMatch(/Deletes the worktree folder unless it has uncommitted changes/);
 	});
 
 	it("opens with Open, so the menu's first item is the row's own tap", () => {

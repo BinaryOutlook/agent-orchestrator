@@ -55,6 +55,7 @@ import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from
 import { iconSize, type, space } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
+import { archiveSessionMessage } from "../worker-action-model";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -482,15 +483,15 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			},
 			onRefresh: () => void conversation.refresh(),
 			onDelete: () => {
-				haptics.tap();
+				haptics.warning();
 				Alert.alert(
 					"Archive session?",
-					`This stops ${sessionName} and moves the session to Archive. You can restore it later; its conversation and worktree are preserved.`,
+					archiveSessionMessage(sessionName),
 					[
 						{ text: "Cancel", style: "cancel" },
 						// Leave first: the session this screen is showing is about to stop
 						// existing, and the board is where its row disappears from.
-						{ text: "Archive session", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
+						{ text: "Archive session", style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
 					],
 				);
 			},
