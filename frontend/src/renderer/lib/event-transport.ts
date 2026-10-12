@@ -70,6 +70,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
+			// Reviews, interface transitions and model catalogs are otherwise only
+			// refreshed by their own events. A fresh stream starts at the newest event,
+			// so a lifecycle refresh must cover whatever changed in the gap.
+			let allEventScopedCachesInvalidationPending = false;
 			let retryTimer: ReturnType<typeof setTimeout> | undefined;
 			let source: EventSource | undefined;
 			let sourceBaseUrl: string | undefined;
@@ -220,6 +224,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(sessionUsageQueryRoot);
 					workspaceInvalidationPending = false;
 				}
+				if (allEventScopedCachesInvalidationPending) {
+					invalidate(["session-reviews"]);
+					invalidate(["session-interface-transition"]);
+					invalidate(["agent-models"]);
+					allEventScopedCachesInvalidationPending = false;
+				}
 				if (allEditorHandoffsInvalidationPending) {
 					invalidate(editorHandoffQueryRoot);
 					allEditorHandoffsInvalidationPending = false;
@@ -264,6 +274,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// leaving an open chat frozen on its pre-gap snapshot.
 					allConversationsInvalidationPending = true;
 					allEditorHandoffsInvalidationPending = true;
+					allEventScopedCachesInvalidationPending = true;
 				}
 				if (event && "data" in event) {
 					try {

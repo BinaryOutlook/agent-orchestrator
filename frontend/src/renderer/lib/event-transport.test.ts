@@ -413,6 +413,23 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	it("refreshes event-scoped caches on reopen because the stream starts at the newest event", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].onopen?.();
+
+			vi.advanceTimersByTime(200);
+
+			for (const queryKey of [["session-reviews"], ["session-interface-transition"], ["agent-models"]]) {
+				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey }, { cancelRefetch: false });
+			}
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("invalidates only the named conversation for conversation CDC", () => {
 		vi.useFakeTimers();
 		try {
