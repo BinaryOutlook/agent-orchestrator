@@ -1032,7 +1032,7 @@ func defaultProjectID(path string) domain.ProjectID {
 	for strings.Contains(id, "..") {
 		id = strings.ReplaceAll(id, "..", ".")
 	}
-	id = strings.TrimLeftFunc(id, func(r rune) bool { return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9') })
+	id = strings.TrimLeftFunc(id, func(r rune) bool { return (r < 'a' || r > 'z') && (r < '0' || r > '9') })
 	id = strings.TrimRight(id, "-")
 	if id == "" {
 		id = "project"
