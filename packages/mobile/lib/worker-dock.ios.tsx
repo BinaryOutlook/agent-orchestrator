@@ -17,7 +17,7 @@ import {
 	textFieldStyle,
 	tint,
 } from "@expo/ui/swift-ui/modifiers";
-import { memo, startTransition, useLayoutEffect, useRef } from "react";
+import { memo, startTransition } from "react";
 import { glassCircle, glassField } from "./glass";
 import { GLASS_CIRCLE_SIZE } from "./native-header-button.ios";
 import { haptics } from "./haptics";
@@ -29,6 +29,7 @@ import { ALL_WORKER_ENVIRONMENTS, workerEnvironmentOptions, workerProjectLabel, 
 import type { WorkerDockProps } from "./worker-dock";
 import { workerDockVisibility } from "./worker-dock-layout";
 import { workerSearchClearState } from "./worker-search";
+import { useNativeTextInput } from "./useNativeTextInput";
 
 export const WorkerDock = memo(function WorkerDock({
 	query,
@@ -48,19 +49,12 @@ export const WorkerDock = memo(function WorkerDock({
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const text = useNativeState(query);
-	const lastQueryChange = useRef(query);
+	const changeQuery = useNativeTextInput(query, text, onQueryChange);
 	const clear = workerSearchClearState(query);
 	const environmentOptions = workerEnvironmentOptions(environments);
 	const projectOptions = workerProjectOptions(projects, selectedEnvironmentId);
 	const selectedProjectLabel = workerProjectLabel(projects, selectedProjectId, selectedEnvironmentId);
 	const visibility = workerDockVisibility(searchOpen);
-
-	useLayoutEffect(() => {
-		// Native typing can advance before React acknowledges an earlier change.
-		if (query === lastQueryChange.current) return;
-		lastQueryChange.current = query;
-		if (text.get() !== query) text.set(query);
-	}, [query, text]);
 
 	return (
 		<Host style={{ flex: 1, height: 52 }} colorScheme={scheme} seedColor={t.accent}>
@@ -158,8 +152,7 @@ export const WorkerDock = memo(function WorkerDock({
 							text={text}
 							autoFocus
 							onTextChange={(next) => {
-								lastQueryChange.current = next;
-								onQueryChange(next);
+								changeQuery(next);
 							}}
 							onFocusChange={(focused) => {
 								if (!focused && !text.get().trim()) onSearchClose();
@@ -176,7 +169,7 @@ export const WorkerDock = memo(function WorkerDock({
 							label="Clear and close search"
 							systemImage="xmark.circle.fill"
 							onPress={() => {
-								onQueryChange("");
+								changeQuery("", true);
 								onSearchClose();
 							}}
 							modifiers={[

@@ -28,6 +28,8 @@ Module._load = function(name, parent, main) {
  if (name === "./machineAppearance" || name === "./machine-menu-image") return {};
  return originalLoad.call(this, name, parent, main);
 };
+// Load the real shared hook along with the real component.
+Module._extensions[".ts"] = (loaded, filename) => loaded._compile(ts.transpileModule(fs.readFileSync(filename, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, filename);
 const React = require("react");
 const Renderer = require("react-test-renderer");
 const isSearch = process.argv[1] === "search";

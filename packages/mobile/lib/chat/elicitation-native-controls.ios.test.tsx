@@ -56,3 +56,50 @@ it("preserves numeric input while acknowledging its normalized value and applies
 	act(() => resetValue(2));
 	expect(native.value).toBe("2");
 });
+
+it("forwards the newest buffered callback after the parent acknowledges the older value", () => {
+	const onChange = vi.fn();
+	const field = (value: string | number, numeric = false) => <ElicitationTextField value={value} label="Title" numeric={numeric} onChange={onChange} />;
+	act(() => { renderer = create(field("")); });
+	native.value = "A"; act(() => renderer!.root.findByType(TextField).props.onTextChange("A"));
+	native.value = "AB"; act(() => renderer!.root.findByType(TextField).props.onTextChange("AB"));
+	expect(onChange.mock.calls.map(call => call[0])).toEqual(["A"]);
+	act(() => renderer!.update(field("A")));
+	expect(onChange.mock.calls.map(call => call[0])).toEqual(["A", "AB"]);
+	expect(native.value).toBe("AB"); expect(native.set).not.toHaveBeenCalled();
+	act(() => renderer!.update(field("AB")));
+	expect(native.set).not.toHaveBeenCalled();
+	act(() => renderer!.update(field("")));
+	expect(native.value).toBe("");
+	act(() => renderer!.update(field("A")));
+	expect(native.value).toBe("A");
+});
+
+it("preserves newer numeric lexical input across multiple normalized acknowledgements", () => {
+	const field = (value: string | number) => <ElicitationTextField value={value} label="Amount" numeric onChange={vi.fn()} />;
+	act(() => { renderer = create(field("")); });
+	native.value = "1."; act(() => renderer!.root.findByType(TextField).props.onTextChange("1."));
+	native.value = "12."; act(() => renderer!.root.findByType(TextField).props.onTextChange("12."));
+	act(() => renderer!.update(field(1)));
+	expect(native.value).toBe("12."); expect(native.set).not.toHaveBeenCalled();
+	act(() => renderer!.update(field(12)));
+	expect(native.set).not.toHaveBeenCalled();
+	act(() => renderer!.update(field(3)));
+	expect(native.value).toBe("3");
+});
+
+
+it.each([false, true])("handles repeated native values followed by an external reset (numeric: %s)", (numeric) => {
+	act(() => { renderer = create(<Harness numeric={numeric} />); });
+	const values = numeric ? ["1.", "12.", "1."] : ["A", "AB", "A"];
+	act(() => {
+		for (const value of values) {
+			native.value = value;
+			renderer!.root.findByType(TextField).props.onTextChange(value);
+		}
+	});
+	expect(native.value).toBe(values[2]);
+	expect(native.set).not.toHaveBeenCalled();
+	act(() => resetValue(numeric ? 12 : "AB"));
+	expect(native.value).toBe(numeric ? "12" : "AB");
+});

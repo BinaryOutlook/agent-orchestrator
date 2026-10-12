@@ -13,12 +13,12 @@ import {
 	textFieldStyle,
 	tint,
 } from "@expo/ui/swift-ui/modifiers";
-import { useLayoutEffect, useRef } from "react";
 import { glassPanel } from "../glass";
 import { haptics } from "../haptics";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import type { ElicitationActionProps, ElicitationChoiceListProps, ElicitationTextFieldProps } from "./elicitation-native-controls";
 import { iconSize, type } from "../tokens";
+import { useNativeTextInput } from "../useNativeTextInput";
 
 export function ElicitationChoiceList({ choices, selected, multi, onChange }: ElicitationChoiceListProps) {
 	const t = useTheme();
@@ -51,15 +51,9 @@ export function ElicitationChoiceList({ choices, selected, multi, onChange }: El
 export function ElicitationTextField({ value, label, numeric, maxLength, onChange }: ElicitationTextFieldProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	const text = useNativeState(value === undefined ? "" : String(value));
-	const lastChange = useRef(value === undefined ? "" : String(value));
-	useLayoutEffect(() => {
-		const next = value === undefined ? "" : String(value);
-		// Native typing can advance before React acknowledges an earlier change.
-		if (next === lastChange.current) return;
-		lastChange.current = next;
-		if (text.get() !== next) text.set(next);
-	}, [text, value]);
+	const controlledText = value === undefined ? "" : String(value);
+	const text = useNativeState(controlledText);
+	const changeText = useNativeTextInput(controlledText, text, onChange);
 	return <Host style={{ width: "100%", height: 46 }} colorScheme={scheme} seedColor={t.accent}>
 		<TextField
 			text={text}
@@ -67,8 +61,7 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 			maxLength={maxLength}
 			onTextChange={(next) => {
 				const changed = numeric ? (next === "" ? "" : Number(next)) : next;
-				lastChange.current = String(changed);
-				onChange(changed);
+				changeText(changed);
 			}}
 			modifiers={[
 				textFieldStyle("plain"),

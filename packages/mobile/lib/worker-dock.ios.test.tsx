@@ -117,7 +117,6 @@ describe("iOS worker environment filter menu", () => {
 	});
 });
 
-
 it("keeps newer native search input while React acknowledges an earlier prefix, and still clears search", () => {
 	function Screen() {
 		const [query, setQuery] = useState("");
@@ -136,4 +135,86 @@ it("keeps newer native search input while React acknowledges an earlier prefix, 
 	const clear = renderer!.root.findAll((node) => String(node.type) === "Button" && node.props.label === "Clear and close search")[0];
 	act(() => clear.props.onPress());
 	expect(native.value).toBe("");
+});
+
+it("keeps AB when A and AB callbacks both arrive before the parent acknowledges A", () => {
+	const screen = (query: string) => <WorkerDock query={query} onQueryChange={vi.fn()} onSpawn={vi.fn()}
+		searchOpen onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
+		projectFiltered={false} environments={[]} selectedEnvironmentId="all" onSelectEnvironment={vi.fn()}
+		projects={[]} selectedProjectId="all" onSelectProject={vi.fn()} />;
+	act(() => { renderer = create(screen("")); });
+	const change = (value: string) => { native.value = value; act(() => renderer!.root.findAll(node => String(node.type) === "TextField")[0].props.onTextChange(value)); };
+	change("A"); change("AB");
+	act(() => renderer!.update(screen("A")));
+	expect(native.value).toBe("AB"); expect(native.set).not.toHaveBeenCalled();
+	act(() => renderer!.update(screen("AB")));
+	expect(native.set).not.toHaveBeenCalled();
+	act(() => renderer!.update(screen("")));
+	expect(native.value).toBe("");
+	act(() => renderer!.update(screen("A")));
+	expect(native.value).toBe("A");
+});
+
+it("clears native text even when the parent has not acknowledged any typing yet", () => {
+	act(() => { renderer = create(<WorkerDock query="" onQueryChange={vi.fn()} onSpawn={vi.fn()}
+		searchOpen onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
+		projectFiltered={false} environments={[]} selectedEnvironmentId="all" onSelectEnvironment={vi.fn()}
+		projects={[]} selectedProjectId="all" onSelectProject={vi.fn()} />); });
+	native.value = "AB";
+	act(() => renderer!.root.findAll(node => String(node.type) === "TextField")[0].props.onTextChange("AB"));
+	act(() => renderer!.root.findAll(node => String(node.type) === "Button" && node.props.label === "Clear and close search")[0].props.onPress());
+	expect(native.value).toBe("");
+});
+
+it("coalesces repeated native values without mistaking a later external reset for an acknowledgement", () => {
+	let resetQuery!: (query: string) => void;
+	function Screen() {
+		const [query, setQuery] = useState("");
+		resetQuery = setQuery;
+		return <WorkerDock query={query} onQueryChange={setQuery} onSpawn={vi.fn()}
+			searchOpen onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
+			projectFiltered={false} environments={[]} selectedEnvironmentId="all" onSelectEnvironment={vi.fn()}
+			projects={[]} selectedProjectId="all" onSelectProject={vi.fn()} />;
+	}
+	act(() => { renderer = create(<Screen />); });
+	act(() => {
+		for (const value of ["A", "AB", "A"]) {
+			native.value = value;
+			renderer!.root.findAll(node => String(node.type) === "TextField")[0].props.onTextChange(value);
+		}
+	});
+	expect(native.value).toBe("A");
+	expect(native.set).not.toHaveBeenCalled();
+	act(() => resetQuery("AB"));
+	expect(native.value).toBe("AB");
+});
+
+it("forwards new typing after Clear cancels the uncommitted parent echo and search reopens", () => {
+	let reopen!: () => void;
+	let parentQuery = "";
+	const changes = vi.fn();
+	function Screen() {
+		const [query, setQuery] = useState("");
+		parentQuery = query;
+		const [open, setOpen] = useState(true);
+		reopen = () => setOpen(true);
+		return <WorkerDock query={query} onQueryChange={(next) => { changes(next); setQuery(next); }} onSpawn={vi.fn()}
+			searchOpen={open} onSearchOpen={reopen} onSearchClose={() => { setQuery(""); setOpen(false); }} onOpenControls={vi.fn()}
+			projectFiltered={false} environments={[]} selectedEnvironmentId="all" onSelectEnvironment={vi.fn()}
+			projects={[]} selectedProjectId="all" onSelectProject={vi.fn()} />;
+	}
+	act(() => { renderer = create(<Screen />); });
+	act(() => {
+		native.value = "AB";
+		renderer!.root.findAll(node => String(node.type) === "TextField")[0].props.onTextChange("AB");
+		renderer!.root.findAll(node => String(node.type) === "Button" && node.props.label === "Clear and close search")[0].props.onPress();
+	});
+	expect(native.value).toBe("");
+	act(() => reopen());
+	act(() => {
+		native.value = "C";
+		renderer!.root.findAll(node => String(node.type) === "TextField")[0].props.onTextChange("C");
+	});
+	expect(changes.mock.calls.map(call => call[0])).toEqual(["AB", "", "C"]);
+	expect(parentQuery).toBe("C");
 });
