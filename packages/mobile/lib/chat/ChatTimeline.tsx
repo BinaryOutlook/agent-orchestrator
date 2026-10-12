@@ -334,6 +334,7 @@ function SystemSignal({ icon, title, detail, danger }: { icon: keyof typeof Feat
  * daemon's preview-files route with the connection's Bearer header, the same
  * credential every other mobile request uses; anything else stays a name chip.
  * Images sit in the bubble as center-cropped tiles and open full-screen on tap.
+ * RN 0.86 Android forwards HTTP headers only for array sources, on both surfaces.
  * Render it only for messages that carry attachments: it subscribes to the app
  * store, and doing that for every bubble would defeat TimelineItem's memo.
  */
@@ -365,7 +366,7 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 		// Cover-cropping a square reads as a deliberate thumbnail; the viewer shows the whole image.
 		return <>
 			<Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${name}`} onPress={() => { haptics.tap(); setViewerOpen(true); }} style={[styles.attachmentTile, { width: tileSize, height: tileSize }]}>
-				<Image accessibilityIgnoresInvertColors source={source} resizeMode="cover" onError={() => setFailedLoad(source)} style={styles.attachmentTileImage} />
+				<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [source] : source} resizeMode="cover" onError={() => setFailedLoad(source)} style={styles.attachmentTileImage} />
 			</Pressable>
 			<AttachmentViewer visible={viewerOpen} name={name} source={source} onClose={() => setViewerOpen(false)} />
 		</>;
@@ -385,7 +386,7 @@ function AttachmentViewer({ visible, name, source, onClose }: { visible: boolean
 	return <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
 		<View style={styles.viewer}>
 			<ScrollView maximumZoomScale={4} minimumZoomScale={1} centerContent bouncesZoom showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}>
-				<Image accessibilityLabel={name} accessibilityIgnoresInvertColors source={source} resizeMode="contain" style={{ width, height }} />
+				<Image accessibilityLabel={name} accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [source] : source} resizeMode="contain" style={{ width, height }} />
 			</ScrollView>
 			<Pressable accessibilityRole="button" accessibilityLabel="Close image" hitSlop={10} onPress={() => { haptics.tap(); onClose(); }} style={[styles.viewerClose, { top: insets.top + 12 }]}>
 				<Feather name="x" size={20} color="#fff" />
