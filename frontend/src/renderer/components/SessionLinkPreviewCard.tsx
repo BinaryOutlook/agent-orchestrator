@@ -2,9 +2,10 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { FileText, Globe, LoaderCircle, Play } from "lucide-react";
+import { FileText, Globe, LoaderCircle, Play, Sheet } from "lucide-react";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { csvPreviewRows, tabularDelimiter } from "../lib/csv-preview";
 import { clampPreviewText, parseMarkdownFrontmatter } from "../lib/markdown-frontmatter";
 import { cn } from "../lib/utils";
 import { parseArtifactLink, parseSessionLink } from "../lib/session-links";
@@ -17,6 +18,7 @@ import { AgentAvatar } from "./AgentAvatar";
 import { Button } from "./ui/button";
 import { HoverCardContent } from "./ui/hover-card";
 import { Skeleton } from "./ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 
 const prToneClasses = {
 	neutral: { dot: "bg-status-idle", text: "text-muted-foreground" },
@@ -211,6 +213,12 @@ export function SessionLinkPreviewCard({
 }
 
 const ARTIFACT_EXCERPT_CHARS = 480;
+const TABLE_PREVIEW_ROWS = 6;
+const TABLE_PREVIEW_COLUMNS = 4;
+// The page renders at PAGE_PREVIEW_WIDTH and is scaled to the card's 296px content width.
+const PAGE_PREVIEW_WIDTH = 1000;
+const PAGE_PREVIEW_HEIGHT = 625;
+const PAGE_PREVIEW_SCALE = 296 / PAGE_PREVIEW_WIDTH;
 const MARKDOWN_FRONTMATTER = /^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
 
 /** The leading readable text of an artifact, for a hover preview. */
@@ -229,15 +237,80 @@ export function artifactExcerpt(kind: SessionArtifact["kind"], content: string):
 	return text.length > ARTIFACT_EXCERPT_CHARS ? `${text.slice(0, ARTIFACT_EXCERPT_CHARS).trimEnd()}…` : text;
 }
 
-function ArtifactCardBody({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
+/** A scaled, non-interactive render of an HTML artifact on its own inline origin. */
+function ArtifactPagePreview({ url, title }: { url: string; title: string }) {
+	return (
+		<div
+			className="relative overflow-hidden rounded-sm border border-border bg-background"
+			style={{ height: PAGE_PREVIEW_HEIGHT * PAGE_PREVIEW_SCALE }}
+		>
+			<iframe
+				src={url}
+				title={title}
+				sandbox="allow-scripts allow-same-origin"
+				loading="lazy"
+				tabIndex={-1}
+				aria-hidden="true"
+				className="pointer-events-none absolute left-0 top-0 origin-top-left border-0"
+				style={{ width: PAGE_PREVIEW_WIDTH, height: PAGE_PREVIEW_HEIGHT, transform: `scale(${PAGE_PREVIEW_SCALE})` }}
+			/>
+		</div>
+	);
+}
+
+function ArtifactTablePreview({ rows }: { rows: string[][] }) {
+	const [header = [], ...body] = rows;
+	return (
+		<Table className="table-fixed text-xs">
+			<TableHeader>
+				<TableRow className="hover:bg-transparent">
+					{header.map((cell, column) => <TableHead key={column} className="h-6 truncate px-1.5">{cell}</TableHead>)}
+				</TableRow>
+			</TableHeader>
+			<TableBody>
+				{body.map((row, index) => (
+					<TableRow key={index} className="hover:bg-transparent">
+						{header.map((_, column) => <TableCell key={column} className="truncate px-1.5 py-1 text-popover-foreground">{row[column] ?? ""}</TableCell>)}
+					</TableRow>
+				))}
+			</TableBody>
+		</Table>
+	);
+}
+
+function ArtifactContentPreview({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
 	const { t } = useTranslation();
-	const file = useQuery({ ...sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl), enabled: Boolean(artifact.rawUrl), staleTime: 30_000 });
+	const page = artifact.kind === "html" ? artifact.inlineUrl : undefined;
+	const file = useQuery({ ...sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl), enabled: Boolean(artifact.rawUrl) && !page, staleTime: 30_000 });
+	if (page) return <ArtifactPagePreview url={page} title={artifact.name} />;
+	if (file.isLoading) return <div className="space-y-1.5"><Skeleton className="h-2.5 w-full" /><Skeleton className="h-2.5 w-5/6" /><Skeleton className="h-2.5 w-2/3" /></div>;
 	const content = file.data && !file.data.binary ? file.data.content : "";
+	const delimiter = tabularDelimiter(artifact.path);
+	const rows = content && delimiter ? csvPreviewRows(content, delimiter, TABLE_PREVIEW_ROWS, TABLE_PREVIEW_COLUMNS) : [];
+	if (rows.length > 0) return <ArtifactTablePreview rows={rows} />;
 	const frontmatter = artifact.kind === "markdown" && content ? parseMarkdownFrontmatter(content) : undefined;
 	const title = frontmatter?.name ? clampPreviewText(frontmatter.name) : undefined;
 	const description = frontmatter?.description ? clampPreviewText(frontmatter.description) : undefined;
 	const excerpt = content ? artifactExcerpt(artifact.kind, content) : "";
-	const Icon = artifact.kind === "html" ? Globe : FileText;
+	if (!title && !description && !excerpt) return <p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>;
+	return (
+		<div className="space-y-1.5">
+			{title || description ? (
+				<div className="space-y-0.5">
+					{title ? <p className="truncate text-xs font-semibold text-foreground">{title}</p> : null}
+					{description ? <p className="line-clamp-4 break-words text-xs leading-4 text-muted-foreground">{description}</p> : null}
+				</div>
+			) : null}
+			{excerpt ? (
+				<p className={cn("whitespace-pre-wrap break-words text-xs leading-4 text-popover-foreground", title || description ? "line-clamp-3" : "line-clamp-6", artifact.kind === "file" && "font-mono")}>{excerpt}</p>
+			) : null}
+		</div>
+	);
+}
+
+function ArtifactCardBody({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const Icon = artifact.kind === "html" ? Globe : tabularDelimiter(artifact.path) ? Sheet : FileText;
 	return (
 		<div className="space-y-2" role="status" aria-label={artifact.name}>
 			<div className="flex min-w-0 items-start gap-2">
@@ -251,23 +324,7 @@ function ArtifactCardBody({ artifact, session }: { artifact: SessionArtifact; se
 				<span className="shrink-0 text-xs text-muted-foreground">{relativeTime(artifact.updatedAt, t)}</span>
 			</div>
 			<div className="border-t border-border pt-2">
-				{file.isLoading ? (
-					<div className="space-y-1.5"><Skeleton className="h-2.5 w-full" /><Skeleton className="h-2.5 w-5/6" /><Skeleton className="h-2.5 w-2/3" /></div>
-				) : title || description || excerpt ? (
-					<div className="space-y-1.5">
-						{title || description ? (
-							<div className="space-y-0.5">
-								{title ? <p className="truncate text-xs font-semibold text-foreground">{title}</p> : null}
-								{description ? <p className="line-clamp-4 break-words text-xs leading-4 text-muted-foreground">{description}</p> : null}
-							</div>
-						) : null}
-						{excerpt ? (
-							<p className={cn("whitespace-pre-wrap break-words text-xs leading-4 text-popover-foreground", title || description ? "line-clamp-3" : "line-clamp-6", artifact.kind === "file" && "font-mono")}>{excerpt}</p>
-						) : null}
-					</div>
-				) : (
-					<p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>
-				)}
+				<ArtifactContentPreview artifact={artifact} session={session} />
 			</div>
 		</div>
 	);

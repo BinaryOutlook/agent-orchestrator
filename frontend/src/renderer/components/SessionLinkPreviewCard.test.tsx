@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
@@ -229,6 +229,43 @@ describe("ArtifactLinkPreviewCard", () => {
 		expect(screen.getByText("What ships next quarter")).toBeInTheDocument();
 		expect(screen.getByText(/Ship artifact links\./)).toBeInTheDocument();
 		expect(screen.queryByText(/description:/)).not.toBeInTheDocument();
+	});
+
+	it("previews a CSV artifact as a table of its leading rows", async () => {
+		const worker = session({ artifactFiles: [artifact({ kind: "file", name: "sizes.csv", path: "sizes.csv" })] });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
+		mocks.artifactFile.mockResolvedValue({ binary: false, content: "package,size\n\"backend, go\",42\nfrontend,17\n" });
+
+		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/sizes.csv" />);
+
+		const table = await screen.findByRole("table");
+		expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual(["package", "size"]);
+		expect(within(table).getByRole("cell", { name: "backend, go" })).toBeInTheDocument();
+		expect(within(table).getByRole("cell", { name: "17" })).toBeInTheDocument();
+	});
+
+	it("previews an HTML artifact as a sandboxed render of its inline page without fetching its source", () => {
+		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html", inlineUrl: "http://inline.localhost/chart.html" });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [page] }))] }));
+
+		const { container } = renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/chart.html" />);
+
+		const frame = container.querySelector("iframe");
+		expect(frame).toHaveAttribute("src", "http://inline.localhost/chart.html");
+		expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+		expect(frame).toHaveAttribute("tabindex", "-1");
+		expect(mocks.artifactFile).not.toHaveBeenCalled();
+	});
+
+	it("falls back to an HTML artifact's text when it has no inline page", async () => {
+		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html" });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [page] }))] }));
+		mocks.artifactFile.mockResolvedValue({ binary: false, content: "<html><body><p>Remote chart</p></body></html>" });
+
+		const { container } = renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/chart.html" />);
+
+		expect(await screen.findByText("Remote chart")).toBeInTheDocument();
+		expect(container.querySelector("iframe")).toBeNull();
 	});
 
 	it("reports an artifact the session no longer lists", () => {
