@@ -281,6 +281,35 @@ describe("createEventTransport", () => {
 		} finally { vi.useRealTimers(); }
 	});
 
+	it("refreshes on a real daemon status change but not on repeated identical pushes", async () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			const pushStatus = onStatusMock.mock.calls[0][0] as (status: { state: string; port?: number; pid?: number }) => void;
+			const conversationRefreshes = () =>
+				(queryClient.invalidateQueries as ReturnType<typeof vi.fn>).mock.calls.filter(
+					([filters]) => JSON.stringify(filters.queryKey) === JSON.stringify(["conversation"]),
+				).length;
+
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			await vi.advanceTimersByTimeAsync(200);
+			const afterFirst = conversationRefreshes();
+			expect(afterFirst).toBeGreaterThan(0);
+
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			await vi.advanceTimersByTimeAsync(200);
+			expect(conversationRefreshes()).toBe(afterFirst);
+
+			pushStatus({ state: "ready", port: 3001, pid: 11 });
+			await vi.advanceTimersByTimeAsync(200);
+			expect(conversationRefreshes()).toBeGreaterThan(afterFirst);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("opens the CDC and Codex account SSE connections on connect", () => {
 		createEventTransport(fakeQueryClient()).connect();
 

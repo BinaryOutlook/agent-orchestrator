@@ -490,7 +490,15 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 			};
 
-			const removeDaemonListener = aoBridge.daemon.onStatus(() => {
+			// Main re-pushes the same status on every getStatus poll (~10s) when it is
+			// attached to a daemon it did not spawn. Only a real change (state, port or
+			// pid) can mean missed events; refreshing on each echo refetched every open
+			// conversation and the workspace list every 10 seconds.
+			let lastDaemonStatusKey: string | undefined;
+			const removeDaemonListener = aoBridge.daemon.onStatus((status) => {
+				const key = `${status?.state}:${status?.port ?? ""}:${status?.pid ?? ""}`;
+				if (key === lastDaemonStatusKey) return;
+				lastDaemonStatusKey = key;
 				connectSource();
 				refreshWorkspaces();
 			});
