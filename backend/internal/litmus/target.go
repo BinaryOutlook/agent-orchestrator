@@ -174,10 +174,15 @@ func legEnv(r Recipe, runID string, pr int, leg, legDir, root, nodeDir string, d
 	for _, k := range slices.Sorted(maps.Keys(r.Env)) {
 		env = append(env, k+"="+r.Env[k])
 	}
-	if pr > 0 { // the desktop labels its Dock icon and window "Litmus: PR build #N" from this
+	if pr > 0 { // the window label script names the window "Litmus: PR build #N" from this
 		env = append(env, "LITMUS_PR="+strconv.Itoa(pr))
 	}
-	env = append(env, "LITMUS_ROOT="+root, "LITMUS_LEG="+leg, "LITMUS_RUN_ID="+runID, "LITMUS_RUN_NUM="+runNumber(runID), "LITMUS_DAEMON_PORT="+strconv.Itoa(daemonPort), "LITMUS_DEBUG_PORT="+strconv.Itoa(debugPort))
+	// The label script rides into the Electron main process on NODE_OPTIONS, after whatever the recipe set there.
+	nodeOptions := "--require " + filepath.Join(legDir, windowLabelScriptName)
+	if prior := envValue(env, "NODE_OPTIONS"); prior != "" {
+		nodeOptions = prior + " " + nodeOptions
+	}
+	env = append(env, "NODE_OPTIONS="+nodeOptions, "LITMUS_ICON="+filepath.Join(legDir, windowLabelIconName), "LITMUS_ROOT="+root, "LITMUS_LEG="+leg, "LITMUS_RUN_ID="+runID, "LITMUS_RUN_NUM="+runNumber(runID), "LITMUS_DAEMON_PORT="+strconv.Itoa(daemonPort), "LITMUS_DEBUG_PORT="+strconv.Itoa(debugPort))
 	if r.Isolation {
 		env = append(env,
 			"AO_DEV_ELECTRON_DIR="+filepath.Join(legDir, "electron"),
@@ -317,6 +322,9 @@ func (s *Service) startLeg(ctx context.Context, runID string, pr int, r Recipe, 
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o750); err != nil {
 			return leg, err
 		}
+	}
+	if err := writeWindowLabel(dir); err != nil {
+		return leg, err
 	}
 	ports, err := freePorts(2)
 	if err != nil {

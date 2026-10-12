@@ -71,7 +71,6 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, w
 import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { litmusLabel } from "./main/litmus-label";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
@@ -207,8 +206,7 @@ process.stderr.on("error", ignoreStdStreamError);
 // Must run before app ready so the About panel and default-menu role labels use it.
 // Unpackaged runs get a distinct name so the dev window, dock menu, and About
 // panel never impersonate the installed app (#3642).
-const litmus = litmusLabel(process.env);
-app.setName(litmus?.name ?? (app.isPackaged ? "Agent Orchestrator" : "Agent Orchestrator (dev)"));
+app.setName(app.isPackaged ? "Agent Orchestrator" : "Agent Orchestrator (dev)");
 
 // Windows shows native toasts only when the app declares an AppUserModelID that
 // matches its installer shortcut (the NSIS maker's appId). Without it,
@@ -511,15 +509,8 @@ function windowIconPath(): string | undefined {
 function applyRuntimeAppIcon(): void {
 	if (process.platform !== "darwin") return;
 	// Unpackaged runs keep Electron's default dock icon so the dev window is
-	// visually distinct from the installed app (#3642). A Litmus window gets
-	// Litmus's own icon so the two builds under test are never mistaken for
-	// either the installed app or a plain dev window.
-	if (!app.isPackaged) {
-		if (!litmus) return;
-		const icon = nativeImage.createFromPath(path.join(app.getAppPath(), "assets", "litmus-icon.png"));
-		if (!icon.isEmpty()) app.dock.setIcon(icon);
-		return;
-	}
+	// visually distinct from the installed app (#3642).
+	if (!app.isPackaged) return;
 	const iconPath = windowIconPath();
 	if (!iconPath) return;
 	const icon = nativeImage.createFromPath(iconPath);
@@ -654,7 +645,7 @@ async function createWindowInternal(): Promise<void> {
 		height: 860,
 		minWidth: 960,
 		minHeight: 640,
-		title: litmus?.title ?? (app.isPackaged ? "Agent Orchestrator" : "Agent Orchestrator (dev)"),
+		title: app.isPackaged ? "Agent Orchestrator" : "Agent Orchestrator (dev)",
 		icon: windowIconPath(),
 		backgroundColor: NATIVE_WINDOW_BACKGROUND_DARK,
 		// Windows goes frameless and the renderer paints the whole titlebar,

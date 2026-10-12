@@ -47,7 +47,7 @@ func TestLegEnvIsolatesTheTarget(t *testing.T) {
 	for k, want := range map[string]string{
 		"AO_PORT": "3200", "AO_RUN_FILE": "/run/head/running.json", "AO_DATA_DIR": "/run/head/data", "AO_DEV_ELECTRON_DIR": "/run/head/electron",
 		"AO_TMUX_SOCKET_NAME": "litmus-run_s1-head", "AO_APP_RUN_ID": "run_s1-head", "AO_TELEMETRY_REMOTE": "off", "FEATURE_FLAG": "1",
-		"LITMUS_DEBUG_PORT": "9400", "LITMUS_DAEMON_PORT": "3200", "LITMUS_ROOT": "/clone", "LITMUS_LEG": "head", "LITMUS_RUN_ID": "run_s1", "LITMUS_PR": "6394", "LITMUS_RUN_NUM": "1", "AO_SESSION_ID": "", "ELECTRON_RUN_AS_NODE": "",
+		"LITMUS_DEBUG_PORT": "9400", "LITMUS_DAEMON_PORT": "3200", "LITMUS_ROOT": "/clone", "LITMUS_LEG": "head", "LITMUS_RUN_ID": "run_s1", "LITMUS_PR": "6394", "NODE_OPTIONS": "--require /run/head/litmus-window.cjs", "LITMUS_ICON": "/run/head/litmus-icon.png", "LITMUS_RUN_NUM": "1", "AO_SESSION_ID": "", "ELECTRON_RUN_AS_NODE": "",
 	} {
 		if got := envValue(env, k); got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)
