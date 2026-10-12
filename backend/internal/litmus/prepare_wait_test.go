@@ -3,6 +3,7 @@ package litmus
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -70,5 +71,19 @@ func TestPrepareRetryWaitsForTheBuildInFlight(t *testing.T) {
 	}
 	if st, err := svc.Status(ctx, "s1"); err != nil || len(st.InFlight) != 0 {
 		t.Fatalf("after prepare: in flight %+v err %v", st.InFlight, err)
+	}
+}
+
+// A build step that fails reaches the tester as TESTING_PREPARE_FAILED with the step's last lines, not a bare 500.
+func TestPrepareReportsAFailedBuildStepWithItsOutput(t *testing.T) {
+	svc, f := prepSvc(t, map[string]string{"v24": "v24.21.0\n"})
+	if _, err := svc.Intake(ctx, "s1", prURL); err != nil {
+		t.Fatal(err)
+	}
+	f.sh, f.shOut = func(string) error { return errors.New("exit status 1") }, "vite: out of memory"
+	_, err := svc.Prepare(ctx, "s1")
+	is(t, "TESTING_PREPARE_FAILED")(nil, err)
+	if !strings.Contains(err.Error(), "head build at ") || !strings.Contains(err.Error(), "exit status 1") {
+		t.Fatalf("err = %v", err)
 	}
 }

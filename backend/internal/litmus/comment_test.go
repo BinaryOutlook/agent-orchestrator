@@ -197,6 +197,32 @@ func TestBlockedCommentCarriesTheReason(t *testing.T) {
 	}
 }
 
+func TestBlockedRunSkipsTheCheckParagraphs(t *testing.T) {
+	run := commentRun
+	run.Areas = []Area{{Name: "Tests", Files: 4}}
+	checks := []Check{{ID: "c1", Name: "artifactversions-tests", Expect: "the artifactversions package tests pass: files are captured after two stable ticks", Receipts: nil}}
+	v := Verdict{Overall: CheckBlocked, Checks: checks, Reasons: []string{"prepare refused: no checkout"}}
+	got := renderComment(run, v, evidence{}, run.CreatedAt.Add(7*time.Minute))
+	const want = `Litmus tried #7 on the PR build (7 minutes).
+
+**Result: could not test this one.**
+
+Not checked by this run: tests (4 files).
+
+I could not run the checks. Prepare refused: no checkout.
+
+<!-- litmus:comment o/r#7 -->`
+	if got != want {
+		t.Fatalf("blocked comment:\n%s\nwant:\n%s", got, want)
+	}
+	noSlop(t, got)
+
+	v.Overall = CheckPartial // not blocked: a check with nothing seen says so in one sentence, not an empty note
+	if got := checkPara(run, v, checks[0], 80, 0); got != "Artifactversions tests could not be run on the PR build." {
+		t.Fatalf("unobserved check: %q", got)
+	}
+}
+
 func TestUpsertEditsOnlyTheTokensOwnMarkerComment(t *testing.T) {
 	marker := commentMarker("o/r", 7)
 	for name, c := range map[string]struct {

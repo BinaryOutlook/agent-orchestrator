@@ -363,6 +363,11 @@ func (s *Service) prepare(ctx context.Context, run Run, done func()) (Run, error
 	for _, l := range []struct{ name, sha string }{{"head", run.HeadSHA}, {"base", run.BaseSHA}} {
 		leg, err := s.prepareLeg(ctx, run.Repo, recipe, l.name, l.sha, run.RequestedRepo)
 		if err != nil {
+			var typed *apierr.Error
+			if !errors.As(err, &typed) { // a git, install or build failure: the tester gets the last lines, not a bare 500
+				slog.Warn("litmus: prepare failed", "run", run.ID, "leg", l.name, "sha", l.sha, "error", err)
+				err = apierr.Unavailable("TESTING_PREPARE_FAILED", fmt.Sprintf("%s build at %.8s failed: %v", l.name, l.sha, err))
+			}
 			return Run{}, err
 		}
 		if err := s.pruneClone(ctx, leg.Worktree); err != nil { // best effort: a stale record only matters if a spawn trips on it

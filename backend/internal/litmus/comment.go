@@ -375,6 +375,9 @@ func checkPara(run Run, v Verdict, c Check, n, i int) string {
 	if c.State == CheckSkipped {
 		return strings.TrimSpace(fmt.Sprintf("I could not check that %s. %s", label, recase(plainSentence(c.Note, n), true)))
 	}
+	if c.onLeg() == "head" && outcomeWords[c.State] == "" && plainSentence(c.Note, n) == "" { // nothing was seen on the PR build
+		return recase(strings.ReplaceAll(c.Name, "-", " "), true) + " could not be run on the PR build."
+	}
 	say := func(who string, x Check) string {
 		note := plainSentence(x.Note, n)
 		if subjectLed(note, run) {
@@ -482,8 +485,12 @@ func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) s
 	})
 	add("Litmus tried #%d%s on the PR build%s (%s).", run.PRNumber, issuesFor(run.Issues), map[bool]string{true: " and on " + main}[both], lasted(now.Sub(run.CreatedAt)))
 	add("**Result: %s.**", verdictLine(v.Overall, count(v.Checks), main))
-	if why := lowerFirst(mdText(clause(v.SkipBase, 200), 400)); why != "" {
+	blocked := v.Overall == CheckBlocked // no check ran: the result line and the reason below say it all
+	if why := lowerFirst(mdText(clause(v.SkipBase, 200), 400)); why != "" && !blocked {
 		add("I did not run %s: %s.", main, why)
+	}
+	if blocked {
+		rows = nil
 	}
 	if len(rows) > 4 { // a handful of checks read better as paragraphs; a long list also gets a table to scan
 		table := make([]string, 0, 2+len(rows))
