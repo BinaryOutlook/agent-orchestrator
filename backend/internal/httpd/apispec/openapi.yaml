@@ -9492,6 +9492,681 @@ paths:
       summary: Cancel an unclaimed speculative task worktree
       tags:
       - projects
+  /api/v1/testing/checks:
+    post:
+      operationId: addTestingCheck
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingCheck'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Add a check with the observable the worker expects
+      tags:
+      - testing
+  /api/v1/testing/checks/{id}/compare:
+    post:
+      operationId: compareTestingCheck
+      parameters:
+      - description: Check id within the run, e.g. c1.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Check id within the run, e.g. c1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: {}
+                type: object
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Diff a check's last base and head after-shots
+      tags:
+      - testing
+  /api/v1/testing/checks/{id}/end:
+    post:
+      operationId: endTestingCheck
+      parameters:
+      - description: Check id within the run, e.g. c1.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Check id within the run, e.g. c1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingCheck'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: End a check with an outcome; refused without a receipt
+      tags:
+      - testing
+  /api/v1/testing/checks/{id}/start:
+    post:
+      operationId: startTestingCheck
+      parameters:
+      - description: Check id within the run, e.g. c1.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Check id within the run, e.g. c1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingCheck'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Start a check so receipts attach to it
+      tags:
+      - testing
+  /api/v1/testing/cleanup:
+    post:
+      operationId: cleanupTesting
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingRun'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Stop the run's targets and remove its private state
+      tags:
+      - testing
+  /api/v1/testing/drive:
+    post:
+      operationId: driveTesting
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: {}
+                type: object
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Run one driving action on a launched leg
+      tags:
+      - testing
+  /api/v1/testing/intake:
+    post:
+      operationId: intakeTesting
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingRun'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Pin a pull request and start the run's 15 minute budget
+      tags:
+      - testing
+  /api/v1/testing/launch:
+    post:
+      operationId: launchTesting
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingRun'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Launch a private copy of the base or head build
+      tags:
+      - testing
+  /api/v1/testing/prepare:
+    post:
+      operationId: prepareTesting
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingRun'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Prepare the base and head clones and builds
+      tags:
+      - testing
+  /api/v1/testing/prune:
+    post:
+      operationId: pruneTesting
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LitmusPruneReport'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Delete old litmus checkouts and run dirs the retention rules no longer
+        need
+      tags:
+      - testing
+  /api/v1/testing/recipe/validate:
+    post:
+      operationId: validateTestingRecipe
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingRecipe'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Validate a per-repo recipe file
+      tags:
+      - testing
+  /api/v1/testing/start:
+    post:
+      operationId: startTesting
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingStarted'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Spawn a worker that tests a pull request
+      tags:
+      - testing
+  /api/v1/testing/status:
+    get:
+      operationId: getTestingStatus
+      parameters:
+      - description: The testing worker's AO session id.
+        in: query
+        name: sessionId
+        required: true
+        schema:
+          description: The testing worker's AO session id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingRunStatus'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Get the calling session's run and its checks
+      tags:
+      - testing
+  /api/v1/testing/submit:
+    post:
+      operationId: submitTesting
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingVerdict'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Submit the verdict built from the checks and their receipts
+      tags:
+      - testing
+  /api/v1/testing/test:
+    post:
+      operationId: runTestingTests
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LitmusTestResult'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Run an allow-listed test command in a prepared leg's checkout, time-boxed;
+        withTestsFrom head runs the PR's test files against the base code
+      tags:
+      - testing
   /api/v1/usage/memory/pressure:
     get:
       operationId: getMemoryPressure
@@ -13397,6 +14072,84 @@ components:
       - entries
       - truncated
       type: object
+    LitmusArea:
+      properties:
+        files:
+          type: integer
+        name:
+          type: string
+        stems:
+          items:
+            type: string
+          type: array
+      required:
+      - name
+      - files
+      type: object
+    LitmusPruneReport:
+      properties:
+        bytesFreed:
+          format: int64
+          type: integer
+        checkouts:
+          items:
+            type: string
+          type: array
+        dryRun:
+          type: boolean
+        lines:
+          items:
+            type: string
+          type: array
+        runs:
+          items:
+            type: string
+          type: array
+      required:
+      - dryRun
+      - checkouts
+      - runs
+      - bytesFreed
+      - lines
+      type: object
+    LitmusTestResult:
+      properties:
+        args:
+          items:
+            type: string
+          type: array
+        copiedFiles:
+          items:
+            type: string
+          type: array
+        exit:
+          type: integer
+        leg:
+          type: string
+        output:
+          type: string
+        receipt:
+          type: string
+        seconds:
+          format: double
+          type: number
+        seq:
+          type: integer
+        summary:
+          type: string
+        timedOut:
+          type: boolean
+        withTestsFrom:
+          type: string
+      required:
+      - leg
+      - args
+      - exit
+      - seconds
+      - output
+      - receipt
+      - seq
+      type: object
     MarkAllNotificationsReadRequest:
       properties:
         ids:
@@ -16026,6 +16779,409 @@ components:
       - ready
       - requirements
       type: object
+    TestingCheck:
+      properties:
+        diff:
+          type: string
+        expect:
+          type: string
+        id:
+          type: string
+        leg:
+          type: string
+        name:
+          type: string
+        note:
+          type: string
+        receipts:
+          items:
+            $ref: '#/components/schemas/TestingReceipt'
+          type: array
+        state:
+          type: string
+      required:
+      - id
+      - name
+      - expect
+      - state
+      type: object
+    TestingEngineInfo:
+      properties:
+        binary:
+          type: string
+        endpoint:
+          type: string
+        namespace:
+          type: string
+        runDir:
+          type: string
+        session:
+          type: string
+        socketDir:
+          type: string
+      required:
+      - runDir
+      - session
+      - namespace
+      - endpoint
+      - socketDir
+      type: object
+    TestingLeg:
+      properties:
+        buildManifest:
+          type: string
+        daemonPort:
+          type: integer
+        dataDir:
+          type: string
+        debugPort:
+          type: integer
+        engine:
+          $ref: '#/components/schemas/TestingEngineInfo'
+        name:
+          type: string
+        pid:
+          type: integer
+        pidStart:
+          format: date-time
+          type: string
+        recordCursor:
+          type: boolean
+        recordFps:
+          type: string
+        recordStartedAt:
+          format: date-time
+          type: string
+        recordStoppedAt:
+          format: date-time
+          type: string
+        runFile:
+          type: string
+        state:
+          type: string
+        worktree:
+          type: string
+      required:
+      - name
+      - pidStart
+      - state
+      - recordStartedAt
+      - recordStoppedAt
+      type: object
+    TestingReady:
+      properties:
+        daemonPath:
+          type: string
+        debugPath:
+          type: string
+        pageTargets:
+          type: integer
+      type: object
+    TestingReceipt:
+      properties:
+        action:
+          type: string
+        afterPath:
+          type: string
+        args:
+          items:
+            type: string
+          type: array
+        at:
+          format: date-time
+          type: string
+        beforePath:
+          type: string
+        consoleTail:
+          type: string
+        leg:
+          type: string
+        outputPath:
+          type: string
+        seq:
+          type: integer
+        targetName:
+          type: string
+        targetRole:
+          type: string
+      required:
+      - seq
+      - action
+      - at
+      type: object
+    TestingRecipe:
+      properties:
+        build:
+          $ref: '#/components/schemas/TestingStep'
+        env:
+          additionalProperties:
+            type: string
+          type: object
+        install:
+          $ref: '#/components/schemas/TestingStep'
+        isolation:
+          type: boolean
+        kind:
+          type: string
+        ready:
+          $ref: '#/components/schemas/TestingReady'
+        repo:
+          type: string
+        run:
+          $ref: '#/components/schemas/TestingStep'
+        seed:
+          items:
+            $ref: '#/components/schemas/TestingSeedStep'
+          type: array
+        timings:
+          items:
+            type: string
+          type: array
+        toolchain:
+          $ref: '#/components/schemas/TestingToolchain'
+      required:
+      - kind
+      - toolchain
+      - install
+      - build
+      - run
+      - ready
+      - isolation
+      type: object
+    TestingRequest:
+      properties:
+        action:
+          type: string
+        args:
+          description: 'drive: the action''s arguments; test: the command and its
+            arguments.'
+          items:
+            type: string
+          type: array
+        blocked:
+          description: 'submit only: close the run as blocked instead of judging checks.'
+          type: boolean
+        dir:
+          description: 'test only: folder inside the leg''s checkout to run in, like
+            backend.'
+          type: string
+        dryRun:
+          description: 'prune only: report what would be deleted and delete nothing.'
+          type: boolean
+        expect:
+          type: string
+        harness:
+          type: string
+        keepCheckouts:
+          description: 'prune only: most recent finished runs whose checkouts are
+            kept besides those of unfinished runs (default 2).'
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        keepRuns:
+          description: 'prune only: finished run dirs to keep besides unfinished ones
+            (default 20).'
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        leg:
+          enum:
+          - base
+          - head
+          type: string
+        name:
+          type: string
+        noComment:
+          description: 'start only: the run''s verdict is written to comment.md but
+            not posted to the pull request.'
+          type: boolean
+        noEvidence:
+          description: 'start only: no screenshots or GIFs are published to the repo''s
+            litmus/evidence branch for the comment.'
+          type: boolean
+        note:
+          type: string
+        path:
+          type: string
+        prUrl:
+          type: string
+        projectId:
+          type: string
+        reason:
+          description: 'submit with blocked: what failed; required and non-empty.'
+          type: string
+        result:
+          enum:
+          - pass
+          - fail
+          - partial
+          - skipped
+          type: string
+        sessionId:
+          type: string
+        skipBase:
+          description: 'submit only: why the base was not run; lets a submit through
+            while a prepared base is unlaunched.'
+          type: string
+        summary:
+          type: string
+        withTestsFrom:
+          description: 'test only, with leg base: copy the PR''s added or changed
+            test files from the head checkout into a scratch copy of the base checkout
+            and run there.'
+          enum:
+          - head
+          type: string
+      type: object
+    TestingRun:
+      properties:
+        areas:
+          items:
+            $ref: '#/components/schemas/LitmusArea'
+          type: array
+        baseRef:
+          type: string
+        baseSha:
+          type: string
+        comment:
+          type: string
+        commentState:
+          type: string
+        commentUrl:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        deadline:
+          format: date-time
+          type: string
+        error:
+          type: string
+        evidence:
+          type: string
+        evidenceCommit:
+          type: string
+        evidenceState:
+          type: string
+        headSha:
+          type: string
+        id:
+          type: string
+        legs:
+          items:
+            $ref: '#/components/schemas/TestingLeg'
+          type: array
+        prNumber:
+          type: integer
+        repo:
+          type: string
+        repoId:
+          format: int64
+          type: integer
+        repoVisibility:
+          type: string
+        requestedRepo:
+          type: string
+        sessionId:
+          type: string
+        state:
+          type: string
+        videoState:
+          type: string
+        videoUrls:
+          additionalProperties:
+            type: string
+          type: object
+      required:
+      - id
+      - sessionId
+      - repo
+      - prNumber
+      - state
+      - createdAt
+      - deadline
+      type: object
+    TestingRunStatus:
+      properties:
+        checks:
+          items:
+            $ref: '#/components/schemas/TestingCheck'
+          type: array
+        run:
+          $ref: '#/components/schemas/TestingRun'
+      required:
+      - run
+      - checks
+      type: object
+    TestingSeedStep:
+      properties:
+        cmd:
+          type: string
+        waitFor:
+          type: string
+      required:
+      - cmd
+      type: object
+    TestingStarted:
+      properties:
+        name:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - name
+      type: object
+    TestingStep:
+      properties:
+        args:
+          items:
+            type: string
+          type: array
+        cacheKey:
+          items:
+            type: string
+          type: array
+        cmd:
+          type: string
+        dir:
+          type: string
+      type: object
+    TestingToolchain:
+      properties:
+        node:
+          type: string
+      type: object
+    TestingVerdict:
+      properties:
+        checks:
+          items:
+            $ref: '#/components/schemas/TestingCheck'
+          type: array
+        commentState:
+          type: string
+        commentUrl:
+          type: string
+        evidenceCommit:
+          type: string
+        evidenceState:
+          type: string
+        overall:
+          type: string
+        reasons:
+          items:
+            type: string
+          type: array
+        skipBase:
+          type: string
+        summary:
+          type: string
+      required:
+      - overall
+      - checks
+      type: object
     TrackerIntakeConfig:
       properties:
         assignee:
@@ -16829,6 +17985,9 @@ tags:
   name: mobile
 - description: Target-isolated desktop browser runtime (loopback only)
   name: browser
+- description: 'Agentic pull-request testing: spawn a tester, then pin, build, drive
+    and judge the PR'
+  name: testing
 - description: Read-only filesystem browsing for remote clients
   name: fs
 - description: Local machine readiness checks the desktop app runs before showing

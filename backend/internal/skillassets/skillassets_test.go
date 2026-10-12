@@ -223,3 +223,45 @@ func TestEmbeddedRenderGuidanceSeparatesRendersFromArtifacts(t *testing.T) {
 		}
 	}
 }
+
+func TestLitmusSkillFrontmatterWordCapAndInstall(t *testing.T) {
+	body, err := files.ReadFile("litmus/SKILL.md")
+	if err != nil {
+		t.Fatalf("read embedded litmus SKILL.md: %v", err)
+	}
+	parts := strings.SplitN(string(body), "---", 3)
+	if len(parts) != 3 {
+		t.Fatal("litmus SKILL.md is missing YAML frontmatter delimiters")
+	}
+	var fm struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+		Trigger     string `yaml:"trigger"`
+	}
+	if err := yaml.Unmarshal([]byte(parts[1]), &fm); err != nil {
+		t.Fatalf("parse litmus frontmatter: %v", err)
+	}
+	if fm.Name != LitmusSkillName || strings.TrimSpace(fm.Description) == "" || strings.TrimSpace(fm.Trigger) == "" {
+		t.Fatalf("litmus frontmatter incomplete: %+v", fm)
+	}
+	if n := len(strings.Fields(string(body))); n > 900 {
+		t.Fatalf("litmus SKILL.md is %d words, want at most 900", n)
+	}
+	for _, verb := range []string{"intake", "prepare", "launch", "check add", "snapshot", "compare", "submit", "ao testing test --leg head --dir backend --", "--leg base", "run it again by itself", "You have 25 minutes", "gate notes"} {
+		if !strings.Contains(string(body), verb) {
+			t.Fatalf("litmus SKILL.md does not mention %q", verb)
+		}
+	}
+
+	dataDir := t.TempDir()
+	if err := Install(dataDir); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(LitmusDir(dataDir), "SKILL.md"))
+	if err != nil {
+		t.Fatalf("installed litmus skill: %v", err)
+	}
+	if string(got) != string(body) {
+		t.Fatal("installed litmus SKILL.md differs from the embedded copy")
+	}
+}

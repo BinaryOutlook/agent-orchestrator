@@ -3302,3 +3302,41 @@ type MuteDeviceRequest struct {
 type InstallIDParam struct {
 	InstallID string `path:"installId" description:"The device's stable install id."`
 }
+
+// TestingStatusQuery is the query of GET /api/v1/testing/status.
+type TestingStatusQuery struct {
+	SessionID string `query:"sessionId" required:"true" description:"The testing worker's AO session id."`
+}
+
+// TestingCheckIDParam is the {id} path parameter of the check routes.
+type TestingCheckIDParam struct {
+	ID string `path:"id" description:"Check id within the run, e.g. c1."`
+}
+
+// TestingRequest is the body of every POST /api/v1/testing verb; each verb reads
+// only the fields it needs. SessionID attributes the call to the worker's run; start and recipe validate need none.
+type TestingRequest struct {
+	SessionID     string   `json:"sessionId,omitempty"`
+	ProjectID     string   `json:"projectId,omitempty"`
+	Harness       string   `json:"harness,omitempty"`
+	PRURL         string   `json:"prUrl,omitempty"`
+	Leg           string   `json:"leg,omitempty" enum:"base,head"`
+	Name          string   `json:"name,omitempty"`
+	Expect        string   `json:"expect,omitempty"`
+	Result        string   `json:"result,omitempty" enum:"pass,fail,partial,skipped"`
+	Note          string   `json:"note,omitempty"`
+	Summary       string   `json:"summary,omitempty"`
+	Blocked       bool     `json:"blocked,omitempty" description:"submit only: close the run as blocked instead of judging checks."`
+	Reason        string   `json:"reason,omitempty" description:"submit with blocked: what failed; required and non-empty."`
+	SkipBase      string   `json:"skipBase,omitempty" description:"submit only: why the base was not run; lets a submit through while a prepared base is unlaunched."`
+	Action        string   `json:"action,omitempty"`
+	Args          []string `json:"args,omitempty" description:"drive: the action's arguments; test: the command and its arguments."`
+	Dir           string   `json:"dir,omitempty" description:"test only: folder inside the leg's checkout to run in, like backend."`
+	WithTestsFrom string   `json:"withTestsFrom,omitempty" enum:"head" description:"test only, with leg base: copy the PR's added or changed test files from the head checkout into a scratch copy of the base checkout and run there."`
+	Path          string   `json:"path,omitempty"`
+	NoComment     bool     `json:"noComment,omitempty" description:"start only: the run's verdict is written to comment.md but not posted to the pull request."`
+	NoEvidence    bool     `json:"noEvidence,omitempty" description:"start only: no screenshots or GIFs are published to the repo's litmus/evidence branch for the comment."`
+	KeepRuns      *int     `json:"keepRuns,omitempty" minimum:"0" description:"prune only: finished run dirs to keep besides unfinished ones (default 20)."`
+	KeepCheckouts *int     `json:"keepCheckouts,omitempty" minimum:"0" description:"prune only: most recent finished runs whose checkouts are kept besides those of unfinished runs (default 2)."`
+	DryRun        bool     `json:"dryRun,omitempty" description:"prune only: report what would be deleted and delete nothing."`
+}

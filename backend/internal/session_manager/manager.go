@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
@@ -1037,6 +1038,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		agentConfig = resolved
 	}
 	cfg.RequestedMode = mode
+	testing := isTestingSpawn(ctx)
+	if testing && (cfg.Harness != domain.HarnessClaudeCode || mode != domain.SessionModeTUI || cfg.Kind != domain.KindWorker) {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: got %s %s %s", ErrTestingHarness, cfg.Harness, cfg.Kind, mode)
+	}
 
 	// Adapters whose model picker is an agent-owned mode list (e.g. Amp) keep
 	// their selectable values in AgentConfig.Mode. Normalize a copy for the
@@ -1240,7 +1245,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 		}
 	}
-	if ws.Path == "" {
+	if ws.Path == "" && testing {
+		ws, err = createTestingWorkspace(m.dataDir, id, cfg.ProjectID)
+	} else if ws.Path == "" {
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, project)
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, cfg, id, branch, baseRefs)
 	}
@@ -1326,6 +1333,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, adapterConfig.Permissions)
+	applyTestingEnv(env, m.dataDir, id, ws.Path)
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
 		if authErr != nil {
@@ -1352,6 +1360,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		Config:           adapterConfig,
 		Permissions:      adapterConfig.Permissions,
 	}
+	applyTestingLaunch(&launchCfg, m.dataDir)
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
@@ -1431,7 +1440,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if prompt != "" {
 		metadata.LatestUserPromptAt = m.clock()
 	}
-	if projectKind == domain.ProjectKindSingleRepo {
+	if projectKind == domain.ProjectKindSingleRepo && !testing {
 		metadata.DiffBaseSHA, metadata.DiffBaseRef = resolveSpawnDiffBase(ctx, ws.Path, ws.BaseRef)
 	}
 	if cfg.AutomationRunID != nil {
@@ -1980,6 +1989,10 @@ func spawnGitSingleLine(ctx context.Context, root string, args ...string) (strin
 }
 
 func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceInfo, workspaceProject *ports.WorkspaceProjectInfo) bool {
+	if litmus.IsRunDir(m.dataDir, ws.Path) { // no worktree to remove; drop the run dir if nothing was put in it
+		_ = os.Remove(ws.Path)
+		return true
+	}
 	if release, ok := ctx.Value(spawnWorkspaceGateKey{}).(func()); ok {
 		release()
 	}
@@ -2586,7 +2599,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		if freed {
 			m.cleanupAgentWorkspace(ctx, rec, ws.Path)
 		}
-	} else if ws.Path != "" {
+	} else if ws.Path != "" && !litmus.IsRunDir(m.dataDir, ws.Path) { // a run dir holds the evidence; it is kept
 		if err := m.workspace.Destroy(ctx, ws); err != nil {
 			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, id, err, true)
 		}
@@ -3273,6 +3286,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
+	applyTestingEnv(env, m.dataDir, rec.ID, ws.Path)
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
 		if authErr != nil {
@@ -3314,6 +3328,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
 	}
+	applyTestingLaunch(&launchCfg, m.dataDir)
 	afterStartPrompt := rec.Metadata.Prompt
 	if delivery == ports.PromptDeliveryAfterStart && mode != RestoreModeNative {
 		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
@@ -4151,6 +4166,9 @@ func (m *Manager) markSessionWorktreesActive(ctx context.Context, rows []domain.
 }
 
 func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.ProjectRecord, rec domain.SessionRecord) (ports.WorkspaceInfo, error) {
+	if litmus.IsRunDir(m.dataDir, rec.Metadata.WorkspacePath) {
+		return createTestingWorkspace(m.dataDir, rec.ID, rec.ProjectID)
+	}
 	if projectKindForSession(project, rec.ProjectID) != domain.ProjectKindWorkspace {
 		recreated, err := workspacePathMissing(rec.Metadata.WorkspacePath)
 		if err != nil {
@@ -5051,6 +5069,9 @@ func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.Project
 // call) — most commonly because a scoped shell terminal could not be
 // confirmed closed, so reclaiming would pull the ground out from under it.
 func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (ports.WorkspaceReclaim, string) {
+	if litmus.IsRunDir(m.dataDir, ws.Path) { // a testing session's run dir is evidence, not a worktree
+		return ports.WorkspaceReclaimAlreadyAbsent, ""
+	}
 	{
 		release := m.acquireWorkspaceGate(rec.ProjectID)
 
@@ -5449,7 +5470,13 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 			cfg.AdditionalSections = append(cfg.AdditionalSections, workspacePrompt)
 		}
 	}
-	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
+	var pointer string
+	if m.isTestingSession(ctx, sessionID) {
+		pointer = m.litmusSkillPointer()
+	} else {
+		pointer = m.aoSkillPointer(chat)
+	}
+	if pointer = strings.TrimSpace(pointer); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
@@ -5883,6 +5910,9 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 // post-create commands. Either failing aborts the spawn so a half-provisioned
 // workspace never launches an agent.
 func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+	if litmus.IsRunDir(m.dataDir, workspacePath) {
+		return nil
+	}
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}
@@ -6274,7 +6304,9 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 		WorkspacePath: workspacePath,
 		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: meta.AgentSessionID},
 	}
-	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
+	restoreCfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions}
+	applyTestingRestore(&restoreCfg, dataDir)
+	cmd, ok, err := agent.GetRestoreCommand(ctx, restoreCfg)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("restore command: %w", err)
 	}
@@ -6348,6 +6380,7 @@ func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
 	}
+	applyTestingLaunch(&launchCfg, dataDir)
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("prompt delivery: %w", err)

@@ -56,6 +56,7 @@ type APIDeps struct {
 	Telemetry                ports.EventSink
 	Mobile                   *controllers.MobileController
 	Browser                  controllers.BrowserService
+	Testing                  controllers.TestingService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
@@ -137,6 +138,7 @@ type API struct {
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
 	browser       *controllers.BrowserController
+	testing       *controllers.TestingController
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
@@ -195,6 +197,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser},
+		testing:       &controllers.TestingController{Svc: deps.Testing},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
@@ -226,9 +229,14 @@ func (a *API) Register(root chi.Router) {
 			r.Use(func(next http.Handler) http.Handler {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
+				long := middleware.Timeout(max(timeout, 4*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					if attachmentUploadRoute(req) {
 						upload.ServeHTTP(w, req)
+						return
+					}
+					if testingTestRoute(req) {
+						long.ServeHTTP(w, req)
 						return
 					}
 					ordinary.ServeHTTP(w, req)
@@ -255,6 +263,9 @@ func (a *API) Register(root chi.Router) {
 			a.settings.Register(r)
 			a.dev.Register(r)
 			a.browser.Register(r)
+			if a.deps.Testing != nil {
+				a.testing.Register(r)
+			}
 			a.system.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)
@@ -270,6 +281,12 @@ func (a *API) Register(root chi.Router) {
 		a.sessions.RegisterStreams(r)
 		a.events.Register(r)
 	})
+}
+
+// testingTestRoute is the Litmus verb that runs a package's tests inside a checkout. Its own cap is 3 minutes,
+// so the ordinary 60 s request budget would answer 504 while the tests were still running.
+func testingTestRoute(req *http.Request) bool {
+	return req.Method == http.MethodPost && chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/testing/test"
 }
 
 func attachmentUploadRoute(req *http.Request) bool {

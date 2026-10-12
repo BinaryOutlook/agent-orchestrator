@@ -24,6 +24,7 @@ trigger: "Using the ao CLI in an AO workspace: creating Cues, spawning workers, 
 | `preview` | Start a session-owned app or open an exact URL/file | Running and showing the worker's relevant app, Markdown, HTML, PDF, or image | [commands/preview.md](commands/preview.md) |
 | `render` | Show a self-contained HTML page inline in a chat thread | Answering with a chart, table, diagram, or mockup | [commands/render.md](commands/render.md) |
 | `browser` | Inspect and control the session's shared live browser | Verifying a web app through snapshots, interactions, waits, screenshots, console, and errors | [commands/browser.md](commands/browser.md) |
+| `testing` | Spawn a PR-testing worker (`ao testing start --pr <url>`); the worker follows the litmus skill | Asked to test or verify a pull request in a running build | - |
 | `start` | Fetch (if needed) and open the AO desktop app | Launching the app | [commands/start.md](commands/start.md) |
 | `stop` | Stop the AO daemon | Shutting down AO | [commands/stop.md](commands/stop.md) |
 | `status` | Show daemon status | Verifying the daemon is up and healthy | [commands/status.md](commands/status.md) |
