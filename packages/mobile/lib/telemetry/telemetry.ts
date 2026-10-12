@@ -84,16 +84,16 @@ export function createMobileTelemetry(
 	let adoptedId: string | null = null;
 	let adoptedKey: string | null = null;
 
+	// With awaitPreference the facade's initial `optedOut` is a guess, not what the
+	// SDK and the saved marker hold (a previous run may have left both opted out).
+	// The first decision, from the saved preference or a live desktop, is therefore
+	// always pushed to both even when it equals the guess.
+	let settled = !(options.awaitPreference ?? false);
+
 	const setOptedOut = (next: boolean): void => {
 		blocked = false;
-		if (next === optedOut) {
-			// First load of a saved opt-out: the SDK has not been told yet.
-			if (next && options.awaitPreference) {
-				client.reset();
-				void client.optOut();
-			}
-			return;
-		}
+		if (next === optedOut && settled) return;
+		settled = true;
 		optedOut = next;
 		options.onOptOutChange?.(next);
 		if (next) {

@@ -168,6 +168,23 @@ describe("createMobileTelemetry", () => {
 			expect(persisted).toEqual([true]);
 		});
 
+		it("a live opt-in clears a previous run's SDK opt-out and saved marker, and a late saved opt-out cannot undo it", () => {
+			const { client, captures, calls } = fakeClient();
+			const persisted: boolean[] = [];
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true, onOptOutChange: (v) => persisted.push(v) });
+			// The previous run left the SDK and the marker opted out; the opted-in
+			// desktop answers first, then the marker read returns "1".
+			t.adoptDesktopIdentity({ distinctId: "ins_a", optedOut: false });
+			t.restoreOptOut(true);
+			expect(calls).toContain("optIn");
+			expect(persisted).toEqual([false]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+			// Later opted-in syncs keep it that way.
+			t.adoptDesktopIdentity({ distinctId: "ins_a", optedOut: false });
+			expect(calls.filter((c) => c === "optOut")).toEqual([]);
+		});
+
 		it("a late saved opt-in does not override a newer desktop opt-in either", () => {
 			const { client, captures } = fakeClient();
 			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
