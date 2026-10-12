@@ -167,7 +167,12 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined): str
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
-export type ChatComposerHandle = { focus(): void; isEmpty(): boolean };
+export type ChatComposerHandle = {
+	focus(): void;
+	isEmpty(): boolean;
+	/** Replaces the draft with text, saved like typed input, and focuses the editor. */
+	setDraft(text: string): void;
+};
 
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
@@ -692,7 +697,6 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus || disabled) return;
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
-	useImperativeHandle(focusRef, () => ({ focus: focusEditor, isEmpty: () => !hasDraft }), [focusEditor, hasDraft]);
 
 	useEffect(() => {
 		focusEditor();
@@ -1038,6 +1042,20 @@ export const ChatComposer = memo(function ChatComposer({
 			setDismissedKey(null);
 		}
 	}, [draftScope, onQueuedDraftChange, optimisticSend]);
+	useImperativeHandle(
+		focusRef,
+		() => ({
+			focus: focusEditor,
+			isEmpty: () => !hasDraft,
+			setDraft: (text: string) => {
+				editor.current?.setText(text);
+				const snapshot = editor.current?.getSnapshot();
+				if (snapshot) onEditorChange(snapshot);
+				editor.current?.focus();
+			},
+		}),
+		[focusEditor, hasDraft, onEditorChange],
+	);
 
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;

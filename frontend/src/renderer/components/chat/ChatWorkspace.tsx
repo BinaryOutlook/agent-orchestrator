@@ -35,7 +35,7 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
+import { ArrowDown, Lightbulb, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
@@ -1110,6 +1110,7 @@ function ChatWorkspaceContent({
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
+	const artifactSession = session?.outputKind === "artifact";
 	const annotationNavigationRef = useRef<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>(null);
 	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
@@ -1719,8 +1720,11 @@ function ChatWorkspaceContent({
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								{conversationEmpty ? (
 									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
-										{t("chat.welcome.heading")}
+										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
+								) : null}
+								{conversationEmpty && artifactSession && !newWorkDisabled ? (
+									<ArtifactPromptSuggestions onPick={(text) => composerFocusRef.current?.setDraft(text)} />
 								) : null}
 								<div ref={composerBoxRef} className="relative">
 									{welcomeLeaving ? (
@@ -1728,7 +1732,7 @@ function ChatWorkspaceContent({
 											aria-hidden="true"
 											className="chat-welcome-leaving pointer-events-none absolute inset-x-0 bottom-full mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl"
 										>
-											{t("chat.welcome.heading")}
+											{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 										</h1>
 									) : null}
 									<McpServerBanner
@@ -1786,7 +1790,7 @@ function ChatWorkspaceContent({
 										// task can have non-message activity before its first visible chat
 										// message, and the generic placeholder makes a still-empty composer
 										// look like a regression.
-										emptyPlaceholder={conversationEmpty ? emptyChatPlaceholder : undefined}
+										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
 										skills={skills}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
@@ -4797,4 +4801,31 @@ function rendersNothing(run: TimelineRun): boolean {
 	if (run.kind !== "single" || !item) return false;
 	if (item.kind === "message") return item.role === "assistant" && item.text.trim() === "";
 	return item.activityKind === "user_input" || (item.activityKind === "approval" && item.status === "pending");
+}
+
+const ARTIFACT_PROMPT_KEYS = [
+	"chat.welcome.artifactPrompt.plan",
+	"chat.welcome.artifactPrompt.compare",
+	"chat.welcome.artifactPrompt.notes",
+] as const;
+
+/** Sample requests for a session started from Create artifact; picking one fills the composer. */
+function ArtifactPromptSuggestions({ onPick }: { onPick: (text: string) => void }) {
+	const { t } = useTranslation();
+	return (
+		<ul aria-label={t("chat.welcome.artifactPrompts")} className="mb-2 flex flex-col">
+			{ARTIFACT_PROMPT_KEYS.map((key) => (
+				<li key={key}>
+					<button
+						type="button"
+						className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left text-control text-muted-foreground transition-colors duration-(--duration-fast) hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+						onClick={() => onPick(t(key))}
+					>
+						<Lightbulb aria-hidden="true" className="size-icon-sm shrink-0" />
+						<span className="truncate">{t(key)}</span>
+					</button>
+				</li>
+			))}
+		</ul>
+	);
 }
