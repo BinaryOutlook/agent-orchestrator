@@ -159,6 +159,14 @@ export async function sendConversationMessage(
 	sessionId: string,
 	input: SendMessageInput,
 ): Promise<SendMessageResult> {
+	if (input.excerpts?.length) {
+		// Probe the target again for restored drafts and retries after a host change.
+		// Older daemons accept the message but silently ignore the excerpts field.
+		const snapshot = await getConversationPage(cfg, sessionId);
+		if (!snapshot.supportsExcerpts) {
+			throw new Error("Update AO on this machine to send quoted responses. Your draft is saved.");
+		}
+	}
 	const res = await apiRequest(cfg, conversationPath(sessionId, "/messages"), {
 		method: "POST",
 		headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
