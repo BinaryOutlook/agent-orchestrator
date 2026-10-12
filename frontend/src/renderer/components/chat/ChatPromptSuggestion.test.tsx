@@ -39,6 +39,49 @@ describe("next-message suggestion", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
+	it.each(["/review", "Summarize @README.md"])("sends an accepted suggestion containing completion syntax verbatim: %s", async (text) => {
+		const { field, onSend } = renderComposer({
+			promptSuggestion: { id: `syntax-${text}`, text },
+			skills: [{ name: "review", displayName: "review", description: "Review changes", source: "user" }],
+			filePaths: ["README.md"],
+		});
+		await userEvent.keyboard("{Tab}");
+		expect(lexicalEditorText(field)).toBe(`${text} `);
+		expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith(text));
+	});
+
+	it("restores ordinary file completion when the user edits an accepted suggestion", async () => {
+		const { field } = renderComposer({ promptSuggestion: { id: "editable-file", text: "Summarize @READ" }, filePaths: ["README.md"] });
+		await userEvent.keyboard("{Tab}");
+		expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+		await typeInLexicalEditor(field, "and @READM");
+		expect(screen.getByRole("listbox")).toBeInTheDocument();
+		await userEvent.keyboard("{Tab}");
+		expect(lexicalEditorText(field)).toBe("Summarize @READ and README.md ");
+	});
+
+	it("sends an accepted file-reference suggestion after restoring its saved draft", async () => {
+		const text = "Summarize @README.md";
+		const props = { draftSessionId: "prompt-suggestion-restored-reference", promptSuggestion: { id: "restored-file", text }, filePaths: ["README.md"] };
+		const first = renderComposer(props);
+		await userEvent.keyboard("{Tab}");
+		expect(readChatSessionDraft(props.draftSessionId).composer.text).toBe(`${text} `);
+		first.unmount();
+		const { field, onSend } = renderComposer(props);
+		await waitFor(() => expect(lexicalEditorText(field)).toBe(`${text} `));
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith(text, undefined, expect.any(String)));
+	});
+
+	it("notifies the owning suggestion cache when Escape dismisses it", () => {
+		const onDismiss = vi.fn();
+		const { field } = renderComposer({ promptSuggestion: { ...suggestion, onDismiss } });
+		fireEvent.keyDown(field, { key: "Escape" });
+		expect(onDismiss).toHaveBeenCalledOnce();
+	});
+
 	it("dismisses with Escape until the next reply", async () => {
 		const { field, onSend, rerender } = renderComposer();
 		fireEvent.keyDown(field, { key: "Escape" });

@@ -2,12 +2,14 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
 type promptSuggestionService interface {
@@ -30,6 +32,14 @@ func (c *ConversationsController) promptSuggestion(w http.ResponseWriter, r *htt
 	}
 	prompt, err := svc.PromptSuggestion(r.Context(), sessionID(r), req.TurnID)
 	if err != nil {
+		if r.Context().Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return
+		}
+		if errors.Is(err, chatsvc.ErrPromptSuggestionBusy) {
+			w.Header().Set("Retry-After", "1")
+			envelope.WriteAPIError(w, r, http.StatusTooManyRequests, "too_many_requests", "CHAT_PROMPT_SUGGESTION_BUSY", "Prompt suggestion capacity is busy; retry shortly", nil)
+			return
+		}
 		writeConversationError(w, r, err)
 		return
 	}

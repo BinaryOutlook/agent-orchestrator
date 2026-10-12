@@ -265,6 +265,27 @@ describe("SessionChatSurface prompt suggestions", () => {
 		expect(postMock).toHaveBeenCalledOnce();
 	});
 
+	it("keeps an in-flight suggestion while a file pane temporarily hides the composer", async () => {
+		settleConversation();
+		let signal: AbortSignal | undefined;
+		let resolve!: (value: unknown) => void;
+		postMock.mockImplementation((_path, options: { signal: AbortSignal }) => {
+			signal = options.signal;
+			return new Promise((complete) => { resolve = complete; });
+		});
+		const client = new QueryClient();
+		const tree = (workspaceFileActive = false) => <Wrapper client={client}><SessionChatSurface session={session} workspaceFileActive={workspaceFileActive} /></Wrapper>;
+		const view = render(tree());
+		await waitFor(() => expect(postMock).toHaveBeenCalledOnce());
+		view.rerender(tree(true));
+		expect(signal?.aborted).toBe(false);
+		expect(screen.getByTestId("prompt-suggestion")).toBeEmptyDOMElement();
+		await act(async () => resolve({ data: { turnId: "turn-1", prompt: "Explain the fix." } }));
+		view.rerender(tree());
+		await waitFor(() => expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent("Explain the fix."));
+		expect(postMock).toHaveBeenCalledOnce();
+	});
+
 	it.each([
 		{ workspaceFileActive: true },
 		{ workspaceActiveTabKey: "file:README.md" },

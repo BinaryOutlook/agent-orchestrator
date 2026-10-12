@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -74,13 +75,41 @@ func TestPromptSuggestionRoutePreservesTypedErrorEnvelopes(t *testing.T) {
 		{ports.ErrSessionNotFound, http.StatusNotFound, "SESSION_NOT_FOUND"},
 		{chatsvc.ErrNotChatMode, http.StatusConflict, "SESSION_MODE_MISMATCH"},
 		{chatsvc.ErrPromptSuggestionStale, http.StatusConflict, "CHAT_PROMPT_SUGGESTION_STALE"},
+		{chatsvc.ErrPromptSuggestionBusy, http.StatusTooManyRequests, "CHAT_PROMPT_SUGGESTION_BUSY"},
 		{errors.New("provider failed"), http.StatusInternalServerError, "INTERNAL_ERROR"},
 	} {
 		svc := &promptSuggestionStub{fakeChatService: &fakeChatService{}, err: tt.err}
 		srv := promptSuggestionServer(t, svc)
-		body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/conversation/prompt-suggestion", `{"turnId":"turn-7"}`)
+		body, status, headers := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/conversation/prompt-suggestion", `{"turnId":"turn-7"}`)
 		if status != tt.status || !strings.Contains(string(body), `"code":"`+tt.code+`"`) {
 			t.Fatalf("error %v: status=%d response=%s", tt.err, status, body)
+		}
+		if errors.Is(tt.err, chatsvc.ErrPromptSuggestionBusy) && headers.Get("Retry-After") != "1" {
+			t.Fatalf("busy suggestion has no retry hint: %v", headers)
+		}
+	}
+}
+
+func TestPromptSuggestionRouteDoesNotReportCanceledRequestReads(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		err := context.Canceled
+		if deadline {
+			cancel()
+			ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			err = context.DeadlineExceeded
+		} else {
+			cancel()
+		}
+		svc := &promptSuggestionStub{fakeChatService: &fakeChatService{}, err: err}
+		router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil,
+			httpd.APIDeps{Conversations: svc}, httpd.ControlDeps{})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/ao-1/conversation/prompt-suggestion", strings.NewReader(`{"turnId":"turn-7"}`)).WithContext(ctx)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		cancel()
+		if !svc.called || response.Body.Len() != 0 {
+			t.Fatalf("canceled request emitted an error envelope: called=%v response=%s", svc.called, response.Body)
 		}
 	}
 }

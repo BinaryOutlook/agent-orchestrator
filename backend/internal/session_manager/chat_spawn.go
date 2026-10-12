@@ -110,7 +110,7 @@ func (m *Manager) RunBackgroundTask(
 	defer func() { _ = os.RemoveAll(workspace) }()
 
 	config := ports.AgentConfig{
-		Model: rec.Metadata.Model, Effort: rec.Metadata.Effort, Permissions: backgroundTaskPermissions(rec.Harness),
+		Model: rec.Metadata.Model, Permissions: backgroundTaskPermissions(rec.Harness),
 	}
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, nil)
 	if m.agents != nil {

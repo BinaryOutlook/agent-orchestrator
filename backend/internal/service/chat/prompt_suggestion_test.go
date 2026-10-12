@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -184,15 +185,54 @@ func TestPromptSuggestionReturnsEmptyForNoUsefulMalformedOrOversizedAnswer(t *te
 	h := newHarness(t)
 	turnID := settledSuggestionTurn(t, h)
 	for _, raw := range []string{
-		`{"prompt":""}`, `{"prompt":"NONE"}`, `{"prompt":" none\n"}`, "",
+		`{"prompt":""}`, "",
 		`{"prompt":"` + strings.Repeat("界", 241) + `"}`,
 		"getaddrinfo ENOTFOUND llm.substrate.dev",
 		"{invalid json}", `{"prompt":42}`, `{"error":"provider unavailable"}`,
-		"```json\n{\"prompt\":\"Run the tests.\"}\n```",
+		"Here is a suggestion: {\"prompt\":\"Run the tests.\"}",
+		"```json\n{\"prompt\":\"Run the tests.\"}\n```\nProvider failed.",
+		`{"prompt":"Run the tests."} trailing prose`,
 	} {
 		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) { return raw, nil })
 		if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); err != nil || prompt != "" {
 			t.Fatalf("answer %q: prompt=%q err=%v", raw, prompt, err)
+		}
+	}
+}
+
+func TestPromptSuggestionAcceptsStructuredJSONAndSingleFences(t *testing.T) {
+	h := newHarness(t)
+	turnID := settledSuggestionTurn(t, h)
+	for _, raw := range []string{
+		`{"prompt":"Run the tests."}`,
+		"```json\n{\"prompt\":\"Run the tests.\"}\n```",
+		"```json\r\n{\"prompt\":\"Run the tests.\"}\r\n```",
+		"```JSON\n{\"prompt\":\"Run the tests.\"}\n```",
+		"```\n{\"prompt\":\"Run the tests.\"}\n```",
+	} {
+		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) { return raw, nil })
+		if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); err != nil || prompt != "Run the tests." {
+			t.Fatalf("answer %q: prompt=%q err=%v", raw, prompt, err)
+		}
+	}
+	h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) {
+		return `{"prompt":"NONE"}`, nil
+	})
+	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); err != nil || prompt != "NONE" {
+		t.Fatalf("plain-text protocol sentinel still intercepted JSON: prompt=%q err=%v", prompt, err)
+	}
+}
+
+func TestPromptSuggestionOmitsExpectedOptionalRunnerFailures(t *testing.T) {
+	h := newHarness(t)
+	turnID := settledSuggestionTurn(t, h)
+	for _, runErr := range []error{
+		errors.New("provider unavailable"), errors.New("background task requested user interaction"),
+		errors.New("background task returned no text"), errors.New("session: harness install active"), context.DeadlineExceeded,
+	} {
+		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) { return "", runErr })
+		if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); prompt != "" || err != nil {
+			t.Fatalf("optional error %v: prompt=%q err=%v", runErr, prompt, err)
 		}
 	}
 }
@@ -224,7 +264,7 @@ func TestPromptSuggestionLimitsConcurrentProviderCallsAndHonorsCancellation(t *t
 			t.Fatal("suggestion runner did not start")
 		}
 	}
-	if prompt, err := h.svc.PromptSuggestion(ctx, testSession, turnID); err != nil || prompt != "" || calls.Load() != 2 {
+	if prompt, err := h.svc.PromptSuggestion(ctx, testSession, turnID); !errors.Is(err, chatsvc.ErrPromptSuggestionBusy) || prompt != "" || calls.Load() != 2 {
 		t.Fatalf("capacity result = %q, %v; calls=%d", prompt, err, calls.Load())
 	}
 	cancel()
@@ -232,5 +272,119 @@ func TestPromptSuggestionLimitsConcurrentProviderCallsAndHonorsCancellation(t *t
 		if err := <-done; !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancel error = %v", err)
 		}
+	}
+	h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) {
+		return `{"prompt":"Run the tests."}`, nil
+	})
+	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); err != nil || prompt != "Run the tests." {
+		t.Fatalf("released capacity did not recover: prompt=%q err=%v", prompt, err)
+	}
+}
+
+func newPagedSuggestionHarness(t *testing.T, read chatsvc.SnapshotPageReaderFunc) *harness {
+	t.Helper()
+	st := openStore(t)
+	conv := newFakeConversation()
+	h := &harness{st: st, conv: conv, clock: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)}
+	var counter atomic.Int32
+	h.svc = chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st), PageReader: read,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: conv}}, Now: h.now,
+		NewID: func() string { return fmt.Sprintf("suggestion-%d", counter.Add(1)) },
+	})
+	var err error
+	h.ctrl, err = h.svc.Start(context.Background(), chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.svc.Stop(context.Background(), testSession) })
+	return h
+}
+
+func suggestionPage(rows store.ConversationSnapshot) chatsvc.ConversationRows {
+	return chatsvc.ConversationRows{
+		Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, Turns: rows.Turns,
+		Messages: rows.Messages, Activities: rows.Activities, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore,
+	}
+}
+
+func TestPromptSuggestionReadsBoundedPagesAcrossActivityHistory(t *testing.T) {
+	var h *harness
+	var reads int
+	h = newPagedSuggestionHarness(t, func(ctx context.Context, conversationID string, before, limit int64) (chatsvc.ConversationRows, error) {
+		if limit != 200 {
+			t.Fatalf("unbounded page limit: %d", limit)
+		}
+		reads++
+		rows, err := h.st.LoadConversationSnapshotPage(ctx, conversationID, before, limit)
+		return suggestionPage(rows), err
+	})
+	for i := range 4 {
+		turnID := completeTurn(t, h, fmt.Sprintf("Message %d", i), fmt.Sprintf("provider-turn-%d", i+1))
+		h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+			return len(s.Turns) == i+1 && s.Turns[i].ID == turnID && s.Turns[i].State == domain.TurnStateCompleted && h.ctrl.State() == ports.ChatControllerReady
+		})
+	}
+	rows, err := h.st.LoadConversationSnapshot(context.Background(), h.ctrl.ConversationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 205 {
+		// Late activity belongs to an older turn. The latest turn must retain
+		// durable row ordering even when the first page represents only that turn.
+		if err := h.st.UpsertActivity(context.Background(), h.ctrl.ConversationID(), "provider-turn-1", domain.ConversationActivity{
+			ID: fmt.Sprintf("suggestion-activity-%d", i), ProviderItemID: fmt.Sprintf("suggestion-item-%d", i),
+			Kind: domain.ActivityKindUsage, Status: domain.ActivityStatusCompleted,
+		}, h.now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.svc.SetPromptSuggestionRunner(func(_ context.Context, _ domain.SessionID, _, prompt string) (string, error) {
+		if strings.Count(prompt, "\nuser: ") != 4 || strings.Count(prompt, "\nassistant: ") != 4 || !strings.Contains(prompt, "user: Message 0") {
+			t.Fatalf("activity pages lost the last eight text messages: %q", prompt)
+		}
+		return `{"prompt":"Run the tests."}`, nil
+	})
+	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, rows.Turns[len(rows.Turns)-1].ID); err != nil || prompt != "Run the tests." || reads != 4 {
+		t.Fatalf("paged suggestion: prompt=%q err=%v reads=%d", prompt, err, reads)
+	}
+}
+
+func TestPromptSuggestionRevalidatesWithCallerContextAndPreservesReadErrors(t *testing.T) {
+	for _, failure := range []string{"none", "initial", "revalidation"} {
+		t.Run(failure, func(t *testing.T) {
+			var h *harness
+			var runCalls, reads int
+			readErr := errors.New("snapshot database unavailable")
+			h = newPagedSuggestionHarness(t, func(ctx context.Context, conversationID string, before, limit int64) (chatsvc.ConversationRows, error) {
+				reads++
+				if _, hasDeadline := ctx.Deadline(); hasDeadline {
+					t.Fatal("snapshot read inherited the provider deadline")
+				}
+				if failure == "initial" || (failure == "revalidation" && runCalls > 0) {
+					return chatsvc.ConversationRows{}, readErr
+				}
+				rows, err := h.st.LoadConversationSnapshotPage(ctx, conversationID, before, limit)
+				return suggestionPage(rows), err
+			})
+			turnID := settledSuggestionTurn(t, h)
+			h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _ string) (string, error) {
+				runCalls++
+				if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+					t.Fatal("provider has no deadline")
+				}
+				return `{"prompt":"Run the tests."}`, nil
+			})
+			prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID)
+			if failure == "none" {
+				if prompt != "Run the tests." || err != nil || reads != 2 {
+					t.Fatalf("successful revalidation: prompt=%q err=%v reads=%d", prompt, err, reads)
+				}
+			} else if prompt != "" || !errors.Is(err, readErr) || (failure == "initial" && runCalls != 0) {
+				t.Fatalf("snapshot failure suppressed: prompt=%q err=%v runner calls=%d", prompt, err, runCalls)
+			}
+		})
 	}
 }

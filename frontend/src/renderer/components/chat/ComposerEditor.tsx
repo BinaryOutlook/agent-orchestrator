@@ -66,7 +66,7 @@ export type ComposerEditorSnapshot = {
 	trigger?: ComposerTrigger;
 };
 
-export type ComposerPromptSuggestion = { id: string; text: string };
+export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
 
 export type ComposerEditorHandle = {
 	focus(): void;
@@ -508,7 +508,10 @@ const EditorBridge = forwardRef<
 				const selection = $getSelection();
 				if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
 				$addUpdateTag(HISTORY_PUSH_TAG);
-				selection.insertText(promptSuggestion.text);
+				// End a generated @path or /skill with a boundary, including after draft
+				// restore. Outgoing text is trimmed; ordinary prose stays unchanged.
+				const trailingTrigger = findActiveTrigger(promptSuggestion.text, promptSuggestion.text.length);
+				selection.insertText(promptSuggestion.text + (trailingTrigger ? " " : ""));
 				onDismissSuggestion();
 				if (event) {
 					completionHandledEvents.add(event);
@@ -635,7 +638,10 @@ export const ComposerEditor = forwardRef<
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
-		if (promptSuggestion) setDismissedSuggestionId(promptSuggestion.id);
+		if (promptSuggestion) {
+			setDismissedSuggestionId(promptSuggestion.id);
+			promptSuggestion.onDismiss?.();
+		}
 	}, [promptSuggestion]);
 	const initialConfig = {
 		namespace: "AOChatComposer",

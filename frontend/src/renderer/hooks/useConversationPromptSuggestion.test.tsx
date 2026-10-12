@@ -53,28 +53,38 @@ describe("useConversationPromptSuggestion", () => {
 		expect(post).toHaveBeenCalledTimes(2);
 	});
 
-	it("keys only the eight recent messages and the same Unicode context boundaries as the daemon", async () => {
-		function message(id: string, role: "user" | "assistant", text: string): ConversationMessage {
-			return { kind: "message", id, role, text, origin: "provider", sequence: 1, revision: 1, streaming: false, createdAt: "" };
-		}
-		const items = [message("old", "user", "Old context"), ...Array.from({ length: 6 }, (_, i) => message(`recent-${i}`, "user", "Recent context")),
-			message("user", "user", `${"😀".repeat(2048)}old user ending`),
-			message("assistant", "assistant", `old assistant beginning${"😀".repeat(2048)}`)];
+	it("uses a compact settled-answer version and invalidates a correction outside the old truncation boundary", async () => {
+		const reply: ConversationMessage = {
+			kind: "message", id: "reply-1", role: "assistant", text: `Original beginning${"😀".repeat(20_000)}`,
+			origin: "provider", sequence: 1, revision: 1, streaming: false, createdAt: "",
+		};
+		const client = new QueryClient();
 		const { result, rerender } = renderHook(({ snapshot }) => useConversationPromptSuggestion(snapshot, true), {
-			wrapper: wrapperFor(), initialProps: { snapshot: { ...settled, items } },
+			wrapper: wrapperFor(client), initialProps: { snapshot: { ...settled, items: [reply] } },
 		});
 		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
+		expect(JSON.stringify(client.getQueryCache().getAll()[0].queryKey).length).toBeLessThan(300);
+		expect(client.getQueryCache().getAll()[0].gcTime).toBeLessThan(Infinity);
 		const firstId = result.current?.id;
-		rerender({ snapshot: { ...settled, items: [message("old", "user", "Changed discarded context"), ...items.slice(1, 7),
-			message("user", "user", `${"😀".repeat(2048)}changed user ending`),
-			message("assistant", "assistant", `changed assistant beginning${"😀".repeat(2048)}`)] } });
-		expect(result.current?.id).toBe(firstId);
-		expect(post).toHaveBeenCalledOnce();
-		rerender({ snapshot: { ...settled, items: [...items.slice(0, -1), message("assistant", "assistant", `prefix${"😀".repeat(2047)}!`)] } });
+		rerender({ snapshot: { ...settled, items: [{ ...reply, text: `Corrected beginning${"😀".repeat(20_000)}`, revision: 2 }] } });
 		expect(result.current).toBeUndefined();
 		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
 		expect(result.current?.id).not.toBe(firstId);
 		expect(post).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not retain a query per streamed text refresh", () => {
+		const client = new QueryClient();
+		const running = { ...settled, turns: [{ ...settled.turns[0], state: "running" as const }] };
+		const { rerender } = renderHook(({ snapshot }) => useConversationPromptSuggestion(snapshot, true), {
+			wrapper: wrapperFor(client), initialProps: { snapshot: running },
+		});
+		for (let revision = 1; revision <= 100; revision++) {
+			rerender({ snapshot: { ...running, items: [{ kind: "message", id: "reply-1", role: "assistant", origin: "provider", text: "Streaming".repeat(revision), sequence: 1, revision, streaming: true, createdAt: "" }] } });
+		}
+		expect(client.getQueryCache().getAll()).toHaveLength(1);
+		expect(client.getQueryCache().getAll()[0].gcTime).toBeLessThan(Infinity);
+		expect(post).not.toHaveBeenCalled();
 	});
 
 	it("requests once per settled context and reuses it when the chat returns", async () => {
@@ -116,11 +126,12 @@ describe("useConversationPromptSuggestion", () => {
 		expect(post.mock.calls[0][1].body).toEqual({ turnId: "turn-1" });
 	});
 
-	it("does not request an inactive chat and cancels generation when it becomes inactive", async () => {
+	it("does not start while hidden but preserves an in-flight suggestion when temporarily hidden", async () => {
 		let signal: AbortSignal | undefined;
+		let resolve!: (value: unknown) => void;
 		post.mockImplementation((_path, options: { signal: AbortSignal }) => {
 			signal = options.signal;
-			return new Promise(() => {});
+			return new Promise((complete) => { resolve = complete; });
 		});
 		const { result, rerender } = renderHook(({ enabled }) => useConversationPromptSuggestion(settled, enabled), {
 			wrapper: wrapperFor(), initialProps: { enabled: false },
@@ -129,8 +140,46 @@ describe("useConversationPromptSuggestion", () => {
 		rerender({ enabled: true });
 		await waitFor(() => expect(post).toHaveBeenCalledOnce());
 		rerender({ enabled: false });
-		expect(signal?.aborted).toBe(true);
+		expect(signal?.aborted).toBe(false);
 		expect(result.current).toBeUndefined();
+		await act(async () => resolve({ data: { turnId: "turn-1", prompt: "Explain the fix." } }));
+		rerender({ enabled: true });
+		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
+		expect(post).toHaveBeenCalledOnce();
+	});
+
+	it("keeps dismissal across remount and query eviction until another reply", async () => {
+		const client = new QueryClient();
+		const wrapper = wrapperFor(client);
+		const first = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
+		await waitFor(() => expect(first.result.current?.text).toBe("Explain the fix."));
+		act(() => first.result.current?.onDismiss());
+		await waitFor(() => expect(first.result.current).toBeUndefined());
+		first.unmount();
+		client.removeQueries({ queryKey: ["conversation-prompt-suggestion"] });
+		const second = renderHook(({ snapshot }) => useConversationPromptSuggestion(snapshot, true), { wrapper, initialProps: { snapshot: settled } });
+		expect(second.result.current).toBeUndefined();
+		expect(post).toHaveBeenCalledOnce();
+		post.mockResolvedValue({ data: { turnId: "turn-2", prompt: "Review the new reply." } });
+		second.rerender({ snapshot: { ...settled, turns: [...settled.turns, { id: "turn-2", state: "completed", requestedAt: "" }] } });
+		await waitFor(() => expect(second.result.current?.text).toBe("Review the new reply."));
+		expect(post).toHaveBeenCalledTimes(2);
+	});
+
+	it("retries only typed busy responses twice and does not cache them as an empty success", async () => {
+		post.mockResolvedValue({ error: { code: "CHAT_PROMPT_SUGGESTION_BUSY" } });
+		const client = new QueryClient();
+		const wrapper = wrapperFor(client);
+		const first = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
+		await waitFor(() => expect(post).toHaveBeenCalledTimes(3), { timeout: 3500 });
+		await waitFor(() => expect(client.isFetching()).toBe(0));
+		expect(first.result.current).toBeUndefined();
+		expect(client.getQueryCache().getAll()[0].state.status).toBe("error");
+		first.unmount();
+		post.mockResolvedValue({ data: { turnId: "turn-1", prompt: "Retry succeeded." } });
+		const second = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
+		await waitFor(() => expect(second.result.current?.text).toBe("Retry succeeded."));
+		expect(post).toHaveBeenCalledTimes(4);
 	});
 
 	it("cancels an obsolete turn and uses the owning remote daemon", async () => {
@@ -175,6 +224,7 @@ describe("useConversationPromptSuggestion", () => {
 
 	it.each([
 		{ error: { message: "No model configured" } },
+		{ error: { code: "RATE_LIMITED" }, response: { status: 429 } },
 		{ data: { turnId: "turn-1", prompt: " " } },
 		{ data: { turnId: "other-turn", prompt: "Wrong context." } },
 		new Error("Disconnected"),
