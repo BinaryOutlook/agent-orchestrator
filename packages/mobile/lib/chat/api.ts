@@ -159,7 +159,7 @@ export async function requireConversationExcerptSupport(cfg: ServerConfig, sessi
 	// Older daemons accept messages but silently ignore the excerpts field.
 	const snapshot = await getConversationPage(cfg, sessionId);
 	if (!snapshot.supportsExcerpts) {
-		throw new Error("Update AO on this machine to send quoted responses. Your draft is saved.");
+		throw new Error("Update Orchestrator on this machine to send quoted responses. Your draft is saved.");
 	}
 }
 
