@@ -23,7 +23,8 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files";
+/** "artifacts" has no tab: it opens from the overflow menu ({@link SessionInspectorShellView}'s `overflowMenu`). */
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -43,8 +44,10 @@ export const inspectorEmptyClass = "text-xs text-settings-muted leading-normal";
 export function SessionInspectorShellView({
 	activeView,
 	ariaLabel,
+	artifactsView,
 	browserPoppedOut,
 	browserView,
+	overflowMenu,
 	sideChatView,
 	filesView,
 	headerActions,
@@ -57,8 +60,11 @@ export function SessionInspectorShellView({
 }: {
 	activeView: InspectorView;
 	ariaLabel: string;
+	artifactsView?: ReactNode;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
+	/** Trailing menu (e.g. the three-dot trigger) for views that have no tab; sits at the end of the tab strip. */
+	overflowMenu?: ReactNode;
 	sideChatView?: ReactNode;
 	filesView?: ReactNode;
 	headerActions?: ReactNode;
@@ -180,6 +186,7 @@ export function SessionInspectorShellView({
 								</span>
 							</button>
 						))}
+						{overflowMenu ? <span className="ml-auto inline-flex shrink-0 pr-1" role="presentation">{overflowMenu}</span> : null}
 					</div>
 				) : null}
 				{isVisible ? headerActions : null}
@@ -190,8 +197,8 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && inspectorScrollableBodyClass,
-					activeView === "sideChat" && "p-0 overflow-hidden",
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					(activeView === "sideChat" || activeView === "artifacts") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
@@ -204,6 +211,7 @@ export function SessionInspectorShellView({
 				{activeView === "browser" ? browserView : null}
 				{activeView === "sideChat" ? sideChatView : null}
 				{activeView === "files" ? filesView : null}
+				{activeView === "artifacts" ? artifactsView : null}
 			</div>
 		</aside>
 	);

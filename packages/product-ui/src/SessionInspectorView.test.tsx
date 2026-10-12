@@ -80,6 +80,19 @@ describe("SessionInspectorShellView", () => {
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
   });
+  it("renders the artifacts view, with no tab selected, beside the overflow menu", () => {
+    render(<SessionInspectorShellView
+      activeView="artifacts" ariaLabel="Session inspector" browserPoppedOut={false}
+      artifactsView={<div data-testid="artifacts-slot" />}
+      overflowMenu={<button type="button">More</button>}
+      tabs={tabs} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("artifacts-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("overflow-y-auto");
+    expect(screen.getAllByRole("tab").every((tab) => tab.getAttribute("aria-selected") === "false")).toBe(true);
+    expect(screen.getByRole("tablist")).toContainElement(screen.getByRole("button", { name: "More" }));
+  });
   it("preserves the tab semantics, responsive labels, badge, and host slots", () => {
     const onViewChange = vi.fn();
     const { rerender } = render(

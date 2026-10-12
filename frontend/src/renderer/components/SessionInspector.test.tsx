@@ -1216,6 +1216,26 @@ describe("SessionInspector Artifacts section", () => {
     );
   });
 
+  it("opens the Artifacts view from the three-dot menu and lists every artifact", async () => {
+    const onViewChange = vi.fn();
+    renderWithQuery(
+      <SessionInspector
+        onViewChange={onViewChange}
+        session={session([], {
+          artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })],
+        })}
+        view="artifacts"
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "More" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Artifacts" }));
+    expect(onViewChange).toHaveBeenCalledWith("artifacts");
+  });
+
   it("does not render a feedback button on artifact rows", () => {
     renderWithQuery(
       <SessionInspector

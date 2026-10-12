@@ -29,14 +29,15 @@ import {
 	ArrowUpRight,
 	ChevronDown,
 	ChevronRight,
-	Files as FilesIcon,
 	GitPullRequest,
 	GitMerge,
 	Globe,
 	Info,
 	Play,
 	Loader2,
+	MoreVertical,
 	SearchCheck,
+	Shapes,
 	X,
 } from "lucide-react";
 import type { components } from "../../api/schema";
@@ -51,6 +52,8 @@ import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
+import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
@@ -191,6 +194,8 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue,
 	isInspectorVisible = true,
 	onToggleBrowserPopOut,
+	artifactRequest,
+	onArtifactRequestConsumed,
 	onOpenArtifact,
 	onOpenFiles,
 	onOpenReviewFile,
@@ -210,6 +215,9 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue?: BrowserAnnotationQueueModel;
 	isInspectorVisible?: boolean;
 	onToggleBrowserPopOut?: (next: boolean) => void;
+	/** The artifact the Artifacts view should show, e.g. one clicked in the Summary. */
+	artifactRequest?: ArtifactOpenRequest | null;
+	onArtifactRequestConsumed?: (key: number) => void;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	onOpenFiles?: () => void;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
@@ -264,7 +272,8 @@ export const SessionInspector = memo(function SessionInspector({
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined));
-	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+	// Artifacts has no tab; the overflow menu opens it.
+	const view: InspectorView = onlyBrowser ? "browser" : requestedView === "artifacts" && session ? "artifacts" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	useEffect(() => {
 		if (view === requestedView) return;
 		setInternalView(view);
@@ -295,6 +304,35 @@ export const SessionInspector = memo(function SessionInspector({
 				sideChatView={sideChatView ?? <p className="p-4 text-xs text-muted-foreground">{t("sideChat.unavailable")}</p>}
 				activeView={view}
 				ariaLabel={t("inspector.aria")}
+				artifactsView={
+					session ? (
+						<SessionArtifactsView hostId={hostId} key={sessionUiKey(session.id, hostId)} onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} session={session} />
+					) : undefined
+				}
+				overflowMenu={session && !onlyBrowser ? (
+					<DropdownMenu>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<DropdownMenuTrigger asChild>
+									<button
+										aria-label={t("inspector.more")}
+										className="inline-flex size-control-md items-center justify-center rounded-md text-passive transition-colors duration-fast hover:bg-interactive-hover hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground"
+										type="button"
+									>
+										<MoreVertical aria-hidden="true" className="size-icon-md" />
+									</button>
+								</DropdownMenuTrigger>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">{t("inspector.more")}</TooltipContent>
+						</Tooltip>
+						<DropdownMenuContent align="end">
+							<DropdownMenuItem onSelect={() => setView("artifacts")}>
+								<Shapes aria-hidden="true" />
+								{t("artifacts.title")}
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
+				) : undefined}
 				browserPoppedOut={browserPoppedOut}
 				browserView={
 					session && (!hostId || browserView) ? (
@@ -1465,9 +1503,8 @@ function PRSummaryCard({
 
 /**
  * One row in the Summary panel's Artifacts list. HTML artifacts open in the
- * Browser panel; markdown/file artifacts open in a dedicated read-only
- * viewer in the Files inspector, since artifact files live outside the git
- * workspace and the workspace-diff Files flow can't resolve them.
+ * Browser panel; markdown/file artifacts open in the inspector's Artifacts view,
+ * since artifact files live outside the git workspace.
  */
 function ArtifactSummaryCard({
 	artifact,
@@ -1496,7 +1533,7 @@ function ArtifactSummaryCard({
 				{artifact.kind === "html" ? (
 					<Globe aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				) : (
-					<FilesIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+					<Shapes aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				)}
 				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
 			</button>
