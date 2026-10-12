@@ -43,11 +43,11 @@ func TestLegEnvIsolatesTheTarget(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "real")
 	t.Setenv("ELECTRON_RUN_AS_NODE", "1")
 	r := Recipe{Isolation: true, Env: map[string]string{"FEATURE_FLAG": "1", "AO_PORT": "1", "AO_TELEMETRY_REMOTE": "on"}}
-	env := legEnv(r, "run_s1", "head", "/run/head", "/clone", "/node/bin", 3200, 9400)
+	env := legEnv(r, "run_s1", 6394, "head", "/run/head", "/clone", "/node/bin", 3200, 9400)
 	for k, want := range map[string]string{
 		"AO_PORT": "3200", "AO_RUN_FILE": "/run/head/running.json", "AO_DATA_DIR": "/run/head/data", "AO_DEV_ELECTRON_DIR": "/run/head/electron",
 		"AO_TMUX_SOCKET_NAME": "litmus-run_s1-head", "AO_APP_RUN_ID": "run_s1-head", "AO_TELEMETRY_REMOTE": "off", "FEATURE_FLAG": "1",
-		"LITMUS_DEBUG_PORT": "9400", "LITMUS_DAEMON_PORT": "3200", "LITMUS_ROOT": "/clone", "LITMUS_LEG": "head", "LITMUS_RUN_ID": "run_s1", "LITMUS_RUN_NUM": "1", "AO_SESSION_ID": "", "ELECTRON_RUN_AS_NODE": "",
+		"LITMUS_DEBUG_PORT": "9400", "LITMUS_DAEMON_PORT": "3200", "LITMUS_ROOT": "/clone", "LITMUS_LEG": "head", "LITMUS_RUN_ID": "run_s1", "LITMUS_PR": "6394", "LITMUS_RUN_NUM": "1", "AO_SESSION_ID": "", "ELECTRON_RUN_AS_NODE": "",
 	} {
 		if got := envValue(env, k); got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)
@@ -56,7 +56,7 @@ func TestLegEnvIsolatesTheTarget(t *testing.T) {
 	if !strings.HasPrefix(envValue(env, "PATH"), "/node/bin"+string(os.PathListSeparator)) {
 		t.Errorf("PATH = %q", envValue(env, "PATH"))
 	}
-	if got := envValue(legEnv(Recipe{}, "run_s1", "base", "/run/base", "/clone", "", 1, 2), "AO_RUN_FILE"); got != "" {
+	if got := envValue(legEnv(Recipe{}, "run_s1", 0, "base", "/run/base", "/clone", "", 1, 2), "AO_RUN_FILE"); got != "" {
 		t.Errorf("a recipe without isolation got AO_RUN_FILE=%q", got)
 	}
 	ports, err := freePorts(2)
@@ -254,7 +254,7 @@ func TestCleanupVerbAndStaleSweep(t *testing.T) {
 func TestElectronLaunchArgsKeepHiddenWindowsPainting(t *testing.T) {
 	def, err := ParseRecipe(defaultRecipe)
 	is(t, "")(nil, err)
-	env := legEnv(def, "run_s1", "head", "/run/head", "/clone", "", 3200, 9400)
+	env := legEnv(def, "run_s1", 0, "head", "/run/head", "/clone", "", 3200, 9400)
 	occ, bg := "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"
 	port := "--remote-debugging-port=9400"
 	for _, c := range []struct {

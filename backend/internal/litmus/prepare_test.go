@@ -167,7 +167,7 @@ func TestPrepareLegFailures(t *testing.T) {
 func TestSeededNamesReadAsSamplesAndCarryTheSessionNumber(t *testing.T) {
 	r, err := ParseRecipe(defaultRecipe)
 	is(t, "")(nil, err)
-	env := legEnv(r, "run_ao-9", "head", "/run/head", "/clone", "", 3200, 9400)
+	env := legEnv(r, "run_ao-9", 0, "head", "/run/head", "/clone", "", 3200, 9400)
 	expand := func(cmd string) string { return os.Expand(cmd, func(k string) string { return envValue(env, k) }) }
 	project, chat := expand(r.Seed[0].Cmd), expand(r.Seed[1].Cmd)
 	// the id stays unique per leg and run (the shared clone's branches are named after it); only the sidebar name changes

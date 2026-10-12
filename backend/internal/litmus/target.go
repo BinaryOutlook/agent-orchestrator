@@ -169,10 +169,13 @@ func tmuxSocket(runID, leg string) string { return "litmus-" + runID + "-" + leg
 
 // legEnv is the target's whole environment. The isolation block comes last, so a
 // recipe cannot point a target back at the real AO; inherited AO_* never gets through.
-func legEnv(r Recipe, runID, leg, legDir, root, nodeDir string, daemonPort, debugPort int) []string {
+func legEnv(r Recipe, runID string, pr int, leg, legDir, root, nodeDir string, daemonPort, debugPort int) []string {
 	env := baseEnv(nodeDir)
 	for _, k := range slices.Sorted(maps.Keys(r.Env)) {
 		env = append(env, k+"="+r.Env[k])
+	}
+	if pr > 0 { // the desktop labels its Dock icon and window "Litmus: PR build #N" from this
+		env = append(env, "LITMUS_PR="+strconv.Itoa(pr))
 	}
 	env = append(env, "LITMUS_ROOT="+root, "LITMUS_LEG="+leg, "LITMUS_RUN_ID="+runID, "LITMUS_RUN_NUM="+runNumber(runID), "LITMUS_DAEMON_PORT="+strconv.Itoa(daemonPort), "LITMUS_DEBUG_PORT="+strconv.Itoa(debugPort))
 	if r.Isolation {
@@ -304,7 +307,7 @@ func runArgs(r Recipe, env []string, goos string) []string {
 
 // startLeg runs the recipe's run command in its own process group, waits until the
 // target is ready, then seeds it. Any failure kills the leg again before returning.
-func (s *Service) startLeg(ctx context.Context, runID string, r Recipe, leg Leg, w *laps) (Leg, error) {
+func (s *Service) startLeg(ctx context.Context, runID string, pr int, r Recipe, leg Leg, w *laps) (Leg, error) {
 	m := readManifest(leg.Worktree)
 	if m.SHA == "" {
 		return leg, conflict("TESTING_NOT_PREPARED", "leg "+leg.Name+" has no build; run `ao testing prepare`")
@@ -323,7 +326,7 @@ func (s *Service) startLeg(ctx context.Context, runID string, r Recipe, leg Leg,
 	if m.NodePath != "" {
 		nodeDir = filepath.Dir(m.NodePath)
 	}
-	env := legEnv(r, runID, leg.Name, dir, leg.Worktree, nodeDir, ports[0], ports[1])
+	env := legEnv(r, runID, pr, leg.Name, dir, leg.Worktree, nodeDir, ports[0], ports[1])
 	logPath := filepath.Join(dir, "logs", "dev.log")
 	logf, err := os.Create(logPath)
 	if err != nil {
@@ -468,7 +471,7 @@ func (s *Service) Launch(ctx context.Context, sessionID, leg string) (Run, error
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), readyLimit+time.Duration(len(recipe.Seed)+1)*seedTimeout)
 	defer cancel()
-	started, lerr := s.startLeg(ctx, run.ID, recipe, run.Legs[i], newLaps())
+	started, lerr := s.startLeg(ctx, run.ID, run.PRNumber, recipe, run.Legs[i], newLaps())
 	if lerr == nil {
 		started, lerr = s.attachEngine(ctx, run.ID, started)
 	}
@@ -666,7 +669,7 @@ func (s *Service) RecipeValidate(ctx context.Context, ref string) (Recipe, error
 	leg, err := s.prepareLeg(ctx, cmp.Or(r.Repo, DefaultRepo), r, "head", sha)
 	w.lap("prepare")
 	if err == nil {
-		_, err = s.startLeg(ctx, id, r, leg, w)
+		_, err = s.startLeg(ctx, id, 0, r, leg, w)
 	}
 	if err == nil {
 		err = cleanLeg(ctx, s.sys, s.store.legDir(id, "head"), true)
