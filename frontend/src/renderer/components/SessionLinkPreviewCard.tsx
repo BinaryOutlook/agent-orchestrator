@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import Markdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { FileText, Globe, LoaderCircle, Play, Sheet } from "lucide-react";
@@ -213,6 +215,7 @@ export function SessionLinkPreviewCard({
 }
 
 const ARTIFACT_EXCERPT_CHARS = 480;
+const MARKDOWN_PREVIEW_CHARS = 1500;
 const TABLE_PREVIEW_ROWS = 6;
 const TABLE_PREVIEW_COLUMNS = 4;
 // The page renders at PAGE_PREVIEW_WIDTH and is scaled to the card's 296px content width.
@@ -235,6 +238,45 @@ export function artifactExcerpt(kind: SessionArtifact["kind"], content: string):
 	}
 	text = text.trim();
 	return text.length > ARTIFACT_EXCERPT_CHARS ? `${text.slice(0, ARTIFACT_EXCERPT_CHARS).trimEnd()}…` : text;
+}
+
+/** A Markdown artifact's body without frontmatter, cut at a line break near the preview limit. */
+export function markdownPreviewSource(content: string): string {
+	const body = content.replace(MARKDOWN_FRONTMATTER, "").trim();
+	if (body.length <= MARKDOWN_PREVIEW_CHARS) return body;
+	const cut = body.lastIndexOf("\n", MARKDOWN_PREVIEW_CHARS);
+	return body.slice(0, cut > 0 ? cut : MARKDOWN_PREVIEW_CHARS).trimEnd();
+}
+
+const MARKDOWN_PREVIEW_ELEMENTS = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "blockquote", "pre", "code", "strong", "em", "del", "a", "img", "br", "hr"];
+const MARKDOWN_PREVIEW_HEADING = "mt-1.5 text-xs font-semibold text-foreground first:mt-0";
+const MARKDOWN_PREVIEW_COMPONENTS: Components = {
+	h1: ({ children }) => <p className={cn(MARKDOWN_PREVIEW_HEADING, "text-sm")}>{children}</p>,
+	h2: ({ children }) => <p className={MARKDOWN_PREVIEW_HEADING}>{children}</p>,
+	h3: ({ children }) => <p className={MARKDOWN_PREVIEW_HEADING}>{children}</p>,
+	h4: ({ children }) => <p className={MARKDOWN_PREVIEW_HEADING}>{children}</p>,
+	h5: ({ children }) => <p className={MARKDOWN_PREVIEW_HEADING}>{children}</p>,
+	h6: ({ children }) => <p className={MARKDOWN_PREVIEW_HEADING}>{children}</p>,
+	p: ({ children }) => <p className="mt-1 break-words first:mt-0">{children}</p>,
+	ul: ({ children }) => <ul className="mt-1 list-disc space-y-0.5 pl-4 first:mt-0">{children}</ul>,
+	ol: ({ children }) => <ol className="mt-1 list-decimal space-y-0.5 pl-4 first:mt-0">{children}</ol>,
+	blockquote: ({ children }) => <blockquote className="mt-1 border-l-2 border-border pl-2 text-muted-foreground first:mt-0">{children}</blockquote>,
+	pre: ({ children }) => <pre className="mt-1 overflow-hidden rounded-sm bg-surface px-1.5 py-1 font-mono text-[11px] first:mt-0">{children}</pre>,
+	code: ({ children }) => <code className="font-mono text-[0.95em] text-markdown-code">{children}</code>,
+	a: ({ children }) => <span className="text-markdown-link">{children}</span>,
+	img: ({ alt }) => <span className="text-muted-foreground">{alt}</span>,
+	hr: () => <hr className="my-1.5 border-border" />,
+};
+
+/** A Markdown artifact's body, formatted compactly and with links and images inert. */
+function ArtifactMarkdownPreview({ source, clamp }: { source: string; clamp: "short" | "tall" }) {
+	return (
+		<div className={cn("overflow-hidden text-xs leading-4 text-popover-foreground [mask-image:linear-gradient(to_bottom,black_70%,transparent)]", clamp === "short" ? "max-h-20" : "max-h-40")}>
+			<Markdown allowedElements={MARKDOWN_PREVIEW_ELEMENTS} unwrapDisallowed remarkPlugins={[remarkGfm]} components={MARKDOWN_PREVIEW_COMPONENTS}>
+				{source}
+			</Markdown>
+		</div>
+	);
 }
 
 /** A scaled, non-interactive render of an HTML artifact on its own inline origin. */
@@ -291,8 +333,9 @@ function ArtifactContentPreview({ artifact, session }: { artifact: SessionArtifa
 	const frontmatter = artifact.kind === "markdown" && content ? parseMarkdownFrontmatter(content) : undefined;
 	const title = frontmatter?.name ? clampPreviewText(frontmatter.name) : undefined;
 	const description = frontmatter?.description ? clampPreviewText(frontmatter.description) : undefined;
-	const excerpt = content ? artifactExcerpt(artifact.kind, content) : "";
-	if (!title && !description && !excerpt) return <p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>;
+	const markdown = artifact.kind === "markdown" && content ? markdownPreviewSource(content) : "";
+	const excerpt = content && !markdown ? artifactExcerpt(artifact.kind, content) : "";
+	if (!title && !description && !markdown && !excerpt) return <p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>;
 	return (
 		<div className="space-y-1.5">
 			{title || description ? (
@@ -301,6 +344,7 @@ function ArtifactContentPreview({ artifact, session }: { artifact: SessionArtifa
 					{description ? <p className="line-clamp-4 break-words text-xs leading-4 text-muted-foreground">{description}</p> : null}
 				</div>
 			) : null}
+			{markdown ? <ArtifactMarkdownPreview source={markdown} clamp={title || description ? "short" : "tall"} /> : null}
 			{excerpt ? (
 				<p className={cn("whitespace-pre-wrap break-words text-xs leading-4 text-popover-foreground", title || description ? "line-clamp-3" : "line-clamp-6", artifact.kind === "file" && "font-mono")}>{excerpt}</p>
 			) : null}

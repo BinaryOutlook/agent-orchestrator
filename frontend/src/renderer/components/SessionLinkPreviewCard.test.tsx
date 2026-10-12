@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
 import type { SessionLinkSource } from "../lib/use-session-link-navigation";
 import type { PullRequestFacts, SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { ArtifactLinkPreviewCard, SessionLinkPreviewCard, artifactExcerpt } from "./SessionLinkPreviewCard";
+import { ArtifactLinkPreviewCard, SessionLinkPreviewCard, artifactExcerpt, markdownPreviewSource } from "./SessionLinkPreviewCard";
 
 const mocks = vi.hoisted(() => ({ restore: vi.fn(), source: vi.fn(), artifactFile: vi.fn() }));
 
@@ -192,6 +192,11 @@ describe("artifactExcerpt", () => {
 		expect(artifactExcerpt("markdown", "---\nname: Plan\ndescription: Q3\n---\n# Plan\nBody")).toBe("# Plan\nBody");
 	});
 
+	it("cuts a long markdown body at a line break", () => {
+		const body = `${"a".repeat(1000)}\n${"b".repeat(1000)}`;
+		expect(markdownPreviewSource(`---\nname: x\n---\n${body}`)).toBe("a".repeat(1000));
+	});
+
 	it("truncates long text", () => {
 		const excerpt = artifactExcerpt("markdown", "a".repeat(1000));
 		expect(excerpt.length).toBe(481);
@@ -229,6 +234,21 @@ describe("ArtifactLinkPreviewCard", () => {
 		expect(screen.getByText("What ships next quarter")).toBeInTheDocument();
 		expect(screen.getByText(/Ship artifact links\./)).toBeInTheDocument();
 		expect(screen.queryByText(/description:/)).not.toBeInTheDocument();
+	});
+
+	it("renders a markdown artifact's body as formatted markdown with inert links", async () => {
+		const worker = session({ artifactFiles: [artifact()] });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
+		mocks.artifactFile.mockResolvedValue({ binary: false, content: "# Plan\n\nShip **artifact links** and [docs](https://example.com).\n\n- one\n- two\n" });
+
+		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/plans/plan.md" />);
+
+		expect(await screen.findByText("Plan")).toBeInTheDocument();
+		expect(screen.queryByText(/^# Plan/)).not.toBeInTheDocument();
+		expect(screen.getByText("artifact links").tagName).toBe("STRONG");
+		expect(screen.getByText("docs")).not.toHaveAttribute("href");
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["one", "two"]);
 	});
 
 	it("previews a CSV artifact as a table of its leading rows", async () => {
