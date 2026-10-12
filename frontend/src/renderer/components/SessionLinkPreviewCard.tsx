@@ -1,15 +1,17 @@
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { LoaderCircle, Play } from "lucide-react";
+import { FileText, Globe, LoaderCircle, Play } from "lucide-react";
 import { useRestoreSession } from "../hooks/useRestoreSession";
+import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { cn } from "../lib/utils";
-import { parseSessionLink } from "../lib/session-links";
+import { parseArtifactLink, parseSessionLink } from "../lib/session-links";
 import { getSessionStatusDotView, getSessionStatusView } from "../lib/session-presentation";
 import { prCanMerge, prCardPresentation, sessionPRDisplaySummaries, type PRDisplayTone } from "../lib/pr-display";
 import { useSessionLinkSource } from "../lib/use-session-link-navigation";
 import { LOCAL_HOST } from "../lib/hosts";
-import type { WorkspaceSession } from "../types/workspace";
+import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { Button } from "./ui/button";
 import { HoverCardContent } from "./ui/hover-card";
@@ -200,6 +202,82 @@ export function SessionLinkPreviewCard({
 			{session.isTerminated === true || session.status === "terminated"
 				? <TerminatedCard session={session} hostId={restoreHostId} />
 				: <SessionCardBody session={session} />}
+		</HoverCardContent>
+	);
+	if (source.isLoading) return <LoadingCard />;
+	if (source.isError) return <ErrorCard />;
+	return <UnavailableCard />;
+}
+
+const ARTIFACT_EXCERPT_CHARS = 480;
+
+/** The leading readable text of an artifact, for a hover preview. */
+export function artifactExcerpt(kind: SessionArtifact["kind"], content: string): string {
+	let text = content;
+	if (kind === "html") {
+		const document = new DOMParser().parseFromString(content, "text/html");
+		for (const node of document.querySelectorAll("script, style, noscript, template")) node.remove();
+		const title = document.title.trim();
+		const body = (document.body?.textContent ?? "").replace(/\s+/g, " ").trim();
+		text = title && !body.startsWith(title) ? `${title}\n${body}` : body;
+	}
+	text = text.trim();
+	return text.length > ARTIFACT_EXCERPT_CHARS ? `${text.slice(0, ARTIFACT_EXCERPT_CHARS).trimEnd()}…` : text;
+}
+
+function ArtifactCardBody({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const file = useQuery({ ...sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl), enabled: Boolean(artifact.rawUrl), staleTime: 30_000 });
+	const excerpt = file.data && !file.data.binary ? artifactExcerpt(artifact.kind, file.data.content) : "";
+	const Icon = artifact.kind === "html" ? Globe : FileText;
+	return (
+		<div className="space-y-2" role="status" aria-label={artifact.name}>
+			<div className="flex min-w-0 items-start gap-2">
+				<Icon aria-hidden="true" className="mt-0.5 size-icon-sm shrink-0 text-muted-foreground" />
+				<div className="min-w-0 flex-1">
+					<p className="truncate text-sm font-semibold text-foreground">{artifact.name}</p>
+					<p className="mt-0.5 truncate text-xs text-muted-foreground">
+						{session.title} <span className="font-mono">#{session.id.slice(-3)}</span>
+					</p>
+				</div>
+				<span className="shrink-0 text-xs text-muted-foreground">{relativeTime(artifact.updatedAt, t)}</span>
+			</div>
+			<div className="border-t border-border pt-2">
+				{file.isLoading ? (
+					<div className="space-y-1.5"><Skeleton className="h-2.5 w-full" /><Skeleton className="h-2.5 w-5/6" /><Skeleton className="h-2.5 w-2/3" /></div>
+				) : excerpt ? (
+					<p className={cn("line-clamp-6 whitespace-pre-wrap break-words text-xs leading-4 text-popover-foreground", artifact.kind === "file" && "font-mono")}>{excerpt}</p>
+				) : (
+					<p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>
+				)}
+			</div>
+		</div>
+	);
+}
+
+export function ArtifactLinkPreviewCard({
+	href,
+	sourceHostId,
+	sourceKind,
+}: {
+	href: string;
+	sourceHostId?: string;
+	sourceKind?: "cloud";
+}) {
+	const { t } = useTranslation();
+	const target = parseArtifactLink(href);
+	const source = useSessionLinkSource(sourceHostId, sourceKind);
+	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
+	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
+	const artifact = session?.artifactFiles?.find((candidate) => candidate.path === target?.path);
+	if (session && artifact) return (
+		<HoverCardContent collisionPadding={8} sideOffset={6} className="w-80 p-3">
+			<ArtifactCardBody artifact={artifact} session={session} />
+		</HoverCardContent>
+	);
+	if (session) return (
+		<HoverCardContent collisionPadding={8} sideOffset={6} className="p-3">
+			<p role="status" className="text-sm font-medium text-foreground">{t("artifactLink.unavailable")}</p>
 		</HoverCardContent>
 	);
 	if (source.isLoading) return <LoadingCard />;

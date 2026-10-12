@@ -1,12 +1,20 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
 import type { SessionLinkSource } from "../lib/use-session-link-navigation";
-import type { PullRequestFacts, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { SessionLinkPreviewCard } from "./SessionLinkPreviewCard";
+import type { PullRequestFacts, SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import { ArtifactLinkPreviewCard, SessionLinkPreviewCard, artifactExcerpt } from "./SessionLinkPreviewCard";
 
-const mocks = vi.hoisted(() => ({ restore: vi.fn(), source: vi.fn() }));
+const mocks = vi.hoisted(() => ({ restore: vi.fn(), source: vi.fn(), artifactFile: vi.fn() }));
+
+vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
+	sessionArtifactFileQueryOptions: (sessionId: string, path: string, rawUrl: string) => ({
+		queryKey: ["session-artifact-file", rawUrl, sessionId, path],
+		queryFn: () => mocks.artifactFile(path),
+	}),
+}));
 
 vi.mock("../hooks/useRestoreSession", () => ({
 	useRestoreSession: () => mocks.restore,
@@ -154,5 +162,64 @@ describe("SessionLinkPreviewCard", () => {
 	it("localizes the PR count instead of adding an English suffix", () => {
 		expect(appI18n.t("pr.count", { count: 1, lng: "es" })).toBe("1 PR");
 		expect(appI18n.t("pr.count", { count: 2, lng: "es" })).toBe("2 PR");
+	});
+});
+
+function artifact(overrides: Partial<SessionArtifact> = {}): SessionArtifact {
+	return {
+		kind: "markdown",
+		name: "plan.md",
+		path: "plans/plan.md",
+		rawUrl: "http://127.0.0.1/raw/plans/plan.md",
+		size: 42,
+		updatedAt: "2026-10-08T10:00:00Z",
+		...overrides,
+	};
+}
+
+function renderWithQuery(ui: React.ReactElement) {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
+
+describe("artifactExcerpt", () => {
+	it("reads an html page's visible text without scripts or styles", () => {
+		const html = "<html><head><title>Q3 plan</title><style>p{}</style></head><body><script>alert(1)</script><p>Ship   links</p></body></html>";
+		expect(artifactExcerpt("html", html)).toBe("Q3 plan\nShip links");
+	});
+
+	it("truncates long text", () => {
+		const excerpt = artifactExcerpt("markdown", "a".repeat(1000));
+		expect(excerpt.length).toBe(481);
+		expect(excerpt.endsWith("…")).toBe(true);
+	});
+});
+
+describe("ArtifactLinkPreviewCard", () => {
+	beforeEach(() => {
+		mocks.source.mockReset();
+		mocks.artifactFile.mockReset();
+	});
+
+	it("previews the linked artifact's leading content", async () => {
+		const worker = session({ artifactFiles: [artifact()] });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
+		mocks.artifactFile.mockResolvedValue({ binary: false, content: "# Plan\nShip artifact links." });
+
+		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/plans/plan.md" sourceHostId="box-a" />);
+
+		expect(mocks.source).toHaveBeenCalledWith("box-a", undefined);
+		expect(screen.getByText("plan.md")).toBeInTheDocument();
+		expect(await screen.findByText(/Ship artifact links\./)).toBeInTheDocument();
+		expect(mocks.artifactFile).toHaveBeenCalledWith("plans/plan.md");
+	});
+
+	it("reports an artifact the session no longer lists", () => {
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [] }))] }));
+
+		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/gone.md" />);
+
+		expect(screen.getByRole("status")).toHaveTextContent("Artifact unavailable");
+		expect(mocks.artifactFile).not.toHaveBeenCalled();
 	});
 });
