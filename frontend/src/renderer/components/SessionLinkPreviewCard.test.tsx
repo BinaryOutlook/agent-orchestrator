@@ -266,16 +266,42 @@ describe("ArtifactLinkPreviewCard", () => {
 	});
 
 	it("previews an HTML artifact as a sandboxed render of its inline page without fetching its source", () => {
-		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html", inlineUrl: "http://inline.localhost/chart.html" });
+		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html", inlineUrl: "http://ao-inline-artifact.abc123.localhost:8080/chart.html" });
 		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [page] }))] }));
 
 		const { container } = renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/chart.html" />);
 
 		const frame = container.querySelector("iframe");
-		expect(frame).toHaveAttribute("src", "http://inline.localhost/chart.html");
+		expect(frame).toHaveAttribute("src", "http://ao-inline-artifact.abc123.localhost:8080/chart.html");
 		expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
 		expect(frame).toHaveAttribute("tabindex", "-1");
 		expect(mocks.artifactFile).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["a URL outside the inline artifact origin", "http://127.0.0.1:8080/chart.html", undefined],
+		["the app's own origin", "http://localhost:5173/chart.html", undefined],
+		["a remote host's proxy URL", "http://ao-inline-artifact.abc123.localhost:8080/chart.html", "box-a"],
+	])("never frames %s", async (_name, inlineUrl, hostId) => {
+		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html", inlineUrl });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [page] }))] }));
+		mocks.artifactFile.mockResolvedValue({ binary: false, content: "<html><body><p>Fallback text</p></body></html>" });
+
+		const { container } = renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/chart.html" sourceHostId={hostId} />);
+
+		expect(await screen.findByText("Fallback text")).toBeInTheDocument();
+		expect(container.querySelector("iframe")).toBeNull();
+	});
+
+	it("never frames a Cloud session's page", async () => {
+		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html", inlineUrl: "http://ao-inline-artifact.abc123.localhost:8080/chart.html" });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [page] }))] }));
+		mocks.artifactFile.mockResolvedValue({ binary: false, content: "<html><body><p>Cloud text</p></body></html>" });
+
+		const { container } = renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/chart.html" sourceKind="cloud" />);
+
+		expect(await screen.findByText("Cloud text")).toBeInTheDocument();
+		expect(container.querySelector("iframe")).toBeNull();
 	});
 
 	it("falls back to an HTML artifact's text when it has no inline page", async () => {

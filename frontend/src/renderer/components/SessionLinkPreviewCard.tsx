@@ -14,6 +14,7 @@ import { parseArtifactLink, parseSessionLink } from "../lib/session-links";
 import { getSessionStatusDotView, getSessionStatusView } from "../lib/session-presentation";
 import { prCanMerge, prCardPresentation, sessionPRDisplaySummaries, type PRDisplayTone } from "../lib/pr-display";
 import { useSessionLinkSource } from "../lib/use-session-link-navigation";
+import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import { LOCAL_HOST } from "../lib/hosts";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
@@ -320,9 +321,12 @@ function ArtifactTablePreview({ rows }: { rows: string[][] }) {
 	);
 }
 
-function ArtifactContentPreview({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
+function ArtifactContentPreview({ artifact, session, remote }: { artifact: SessionArtifact; session: WorkspaceSession; remote: boolean }) {
 	const { t } = useTranslation();
-	const page = artifact.kind === "html" ? artifact.inlineUrl : undefined;
+	// The frame allows same-origin, which is only safe on the dedicated inline artifact
+	// origin. A remote host's page URL carries a proxy capability token the page could
+	// read, so a remote or Cloud session shows the text excerpt instead.
+	const page = artifact.kind === "html" && !remote && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
 	const file = useQuery({ ...sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl), enabled: Boolean(artifact.rawUrl) && !page, staleTime: 30_000 });
 	if (page) return <ArtifactPagePreview url={page} title={artifact.name} />;
 	if (file.isLoading) return <div className="space-y-1.5"><Skeleton className="h-2.5 w-full" /><Skeleton className="h-2.5 w-5/6" /><Skeleton className="h-2.5 w-2/3" /></div>;
@@ -352,7 +356,7 @@ function ArtifactContentPreview({ artifact, session }: { artifact: SessionArtifa
 	);
 }
 
-function ArtifactCardBody({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
+function ArtifactCardBody({ artifact, session, remote }: { artifact: SessionArtifact; session: WorkspaceSession; remote: boolean }) {
 	const { t } = useTranslation();
 	const Icon = artifact.kind === "html" ? Globe : tabularDelimiter(artifact.path) ? Sheet : FileText;
 	const author = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title;
@@ -370,7 +374,7 @@ function ArtifactCardBody({ artifact, session }: { artifact: SessionArtifact; se
 				<span className="shrink-0 text-xs text-muted-foreground">{relativeTime(artifact.updatedAt, t)}</span>
 			</div>
 			<div className="border-t border-border pt-2">
-				<ArtifactContentPreview artifact={artifact} session={session} />
+				<ArtifactContentPreview artifact={artifact} session={session} remote={remote} />
 			</div>
 		</div>
 	);
@@ -393,7 +397,7 @@ export function ArtifactLinkPreviewCard({
 	const artifact = session?.artifactFiles?.find((candidate) => candidate.path === target?.path);
 	if (session && artifact) return (
 		<HoverCardContent collisionPadding={8} sideOffset={6} className="w-80 p-3">
-			<ArtifactCardBody artifact={artifact} session={session} />
+			<ArtifactCardBody artifact={artifact} session={session} remote={sourceKind === "cloud" || Boolean(sourceHostId && sourceHostId !== LOCAL_HOST)} />
 		</HoverCardContent>
 	);
 	if (session) return (
