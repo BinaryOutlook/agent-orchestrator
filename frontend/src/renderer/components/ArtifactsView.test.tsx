@@ -156,8 +156,8 @@ describe("ArtifactsView", () => {
 		const user = userEvent.setup();
 		renderView();
 
-		await user.click(screen.getByRole("combobox", { name: "Filter by project" }));
-		await user.click(screen.getByRole("option", { name: "Scratchpad" }));
+		await user.click(screen.getByRole("button", { name: "Filter by project" }));
+		await user.click(await screen.findByRole("menuitem", { name: /Scratchpad/ }));
 
 		expect(screen.getAllByRole("region").map((section) => section.getAttribute("aria-label"))).toEqual(["Scratchpad"]);
 	});

@@ -202,6 +202,7 @@ export const ChatComposer = memo(function ChatComposer({
 	editingQueuedTurnId,
 	onCancelQueuedEdit,
 	onQueuedDraftChange,
+	onDraftEmptyChange,
 	queuedDraftScope,
 	onQueuedAttachmentsChange,
 	onQueuedRetainedAttachmentsChange,
@@ -287,6 +288,8 @@ export const ChatComposer = memo(function ChatComposer({
 	editingQueuedTurnId?: string;
 	onCancelQueuedEdit?: () => void;
 	onQueuedDraftChange?: (text: string) => void;
+	/** Called when the draft turns empty or non-empty, including after a restore. */
+	onDraftEmptyChange?: (empty: boolean) => void;
 	queuedDraftScope?: ChatDraftScope;
 	onQueuedAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
 	onQueuedRetainedAttachmentsChange?: (attachments: ChatDraftRetainedAttachment[]) => void;
@@ -558,6 +561,9 @@ export const ChatComposer = memo(function ChatComposer({
 		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
 	const controlsDisabled = Boolean(disabled || submitting);
 	const hasDraft = hasText || staged || contextReferences.length > 0;
+	useEffect(() => {
+		onDraftEmptyChange?.(!hasDraft);
+	}, [hasDraft, onDraftEmptyChange]);
 	const savingQueuedEdit = Boolean(editingQueuedTurnId);
 	const acceptedMutationWaiting = Boolean(
 		composerMutation.accepted &&

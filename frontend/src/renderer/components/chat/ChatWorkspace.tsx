@@ -40,6 +40,7 @@ import { Reorder, useDragControls } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "../NavRowHighlight";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
 import {
 	defaultRangeExtractor,
@@ -97,6 +98,7 @@ import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../../stores
 import type { TerminalTarget } from "../../types/terminal";
 import {
 	isOrchestratorSession,
+	STANDALONE_WORKSPACE_ID,
 	type SessionKind,
 	type WorkspaceSession,
 	type SessionProvisionStep,
@@ -1111,6 +1113,9 @@ function ChatWorkspaceContent({
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
 	const artifactSession = session?.requestedOutput === "artifact";
+	// The sample prompts show only while the composer is empty: picking one hides
+	// them, and clearing the draft brings them back.
+	const [composerEmpty, setComposerEmpty] = useState(true);
 	const annotationNavigationRef = useRef<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>(null);
 	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
@@ -1723,9 +1728,6 @@ function ChatWorkspaceContent({
 										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
 								) : null}
-								{conversationEmpty && artifactSession && !newWorkDisabled ? (
-									<ArtifactPromptSuggestions onPick={(text) => composerFocusRef.current?.setDraft(text)} />
-								) : null}
 								<div ref={composerBoxRef} className="relative">
 									{welcomeLeaving ? (
 										<h1
@@ -1760,6 +1762,7 @@ function ChatWorkspaceContent({
 										)}
 										onCancelQueuedEdit={cancelQueuedEdit}
 										onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
+										onDraftEmptyChange={setComposerEmpty}
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
@@ -1818,6 +1821,9 @@ function ChatWorkspaceContent({
 										acceptedClientMessageIds={acceptedClientMessageIds}
 									/>
 								</div>
+								{conversationEmpty && artifactSession && session?.workspaceId === STANDALONE_WORKSPACE_ID && !newWorkDisabled && composerEmpty ? (
+									<ArtifactPromptSuggestions onPick={(text) => composerFocusRef.current?.setDraft(text)} />
+								) : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 							</div>
 						</div>
@@ -4813,16 +4819,21 @@ const ARTIFACT_PROMPT_KEYS = [
 function ArtifactPromptSuggestions({ onPick }: { onPick: (text: string) => void }) {
 	const { t } = useTranslation();
 	return (
-		<ul aria-label={t("chat.welcome.artifactPrompts")} className="mb-2 flex flex-col">
+		<ul aria-label={t("chat.welcome.artifactPrompts")} className="mt-1 flex flex-col divide-y divide-border">
 			{ARTIFACT_PROMPT_KEYS.map((key) => (
-				<li key={key}>
+				<li key={key} className="py-0.5">
 					<button
 						type="button"
-						className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left text-control text-muted-foreground transition-colors duration-(--duration-fast) hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+						// Same growing pill as the sidebar rows; the host stays transparent.
+						className={cn(
+							"artifact-prompt-suggestion flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-control text-muted-foreground focus-visible:outline-none",
+							NAV_ROW_HIGHLIGHT_HOST_CLASS,
+						)}
 						onClick={() => onPick(t(key))}
 					>
-						<Lightbulb aria-hidden="true" className="size-icon-sm shrink-0" />
-						<span className="truncate">{t(key)}</span>
+						<NavRowHighlight />
+						<Lightbulb aria-hidden="true" className="relative z-[1] size-icon-sm shrink-0" />
+						<span className="relative z-[1] truncate">{t(key)}</span>
 					</button>
 				</li>
 			))}
