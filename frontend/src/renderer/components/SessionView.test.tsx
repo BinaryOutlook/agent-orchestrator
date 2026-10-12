@@ -1041,9 +1041,23 @@ describe("SessionView", () => {
 		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("button", { name: "open files" }));
-		expect(screen.getByText("selected report.html")).toBeInTheDocument();
+		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
 		expect(screen.queryByText("feedback request 1")).not.toBeInTheDocument();
 		expect(artifactFeedbackConsumes).toEqual([1]);
+	});
+
+	it("opens the workspace changes from Summary after an artifact was opened", async () => {
+		render(<SessionView sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "open artifact feedback" }));
+		await waitFor(() => expect(screen.getByText("selected report.html")).toBeInTheDocument());
+		useUiStore.getState().setFilesSource("sess-1", { kind: "artifact" });
+
+		fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSource).toEqual({ kind: "workspace" });
+		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
 	});
 
 	it("resumes only the opened stopped session once, including in StrictMode", async () => {

@@ -459,6 +459,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
+	const setFilesSource = useUiStore((state) => state.setFilesSource);
 	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
 	const clearWorkspaceFileOpenRequest = useUiStore((state) => state.clearWorkspaceFileOpenRequest);
 	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
@@ -1518,9 +1519,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const handleOpenFiles = useCallback(() => {
 		markFileViewerPerformance("files-click");
+		// Opens the workspace changes, replacing an artifact opened earlier.
+		setFilesSource(uiSessionId, { kind: "workspace" });
+		setFilePreviewRequestsBySession((current) => {
+			if (current[uiSessionId]?.source !== "artifact") return current;
+			const { [uiSessionId]: _artifact, ...rest } = current;
+			return rest;
+		});
 		prepareFilesInspector();
 		void fetchWorkspaceFiles();
-	}, [fetchWorkspaceFiles, prepareFilesInspector]);
+	}, [fetchWorkspaceFiles, prepareFilesInspector, setFilesSource, uiSessionId]);
 
 	const handleOpenReviewFile = useCallback(
 		(target: { line?: number; path: string }) => {
