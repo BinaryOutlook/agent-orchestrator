@@ -93,6 +93,11 @@ func TestRelaunchTestingSessionCarriesPolicyOnBothPaths(t *testing.T) {
 			runDir := litmus.RunDir(dataDir, "mer-1")
 			rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
 				Metadata: domain.SessionMetadata{WorkspacePath: runDir, AgentSessionID: native, Prompt: "Test PR", RuntimeHandleID: "h1"}}
+			wantModel, wantEffort := litmus.TesterModel, litmus.TesterEffort
+			if native != "" { // a model and effort the user chose are kept; the fresh launch has none and gets the defaults
+				rec.Metadata.Model, rec.Metadata.Effort = "opus", "max"
+				wantModel, wantEffort = "opus", "max"
+			}
 			st.sessions[rec.ID] = rec
 			info, err := m.restoreSessionWorkspace(ctx, st.projects["mer"], rec) // what reconcile does before relaunching
 			if err != nil || info.Path != runDir {
@@ -108,8 +113,8 @@ func TestRelaunchTestingSessionCarriesPolicyOnBothPaths(t *testing.T) {
 			} else {
 				wantPolicy(t, agent.lastLaunch.Permissions, agent.lastLaunch.AllowedTools, agent.lastLaunch.DisallowedTools)
 			}
-			if cfg.Model != litmus.TesterModel || cfg.Effort != litmus.TesterEffort {
-				t.Fatalf("relaunched tester runs on %q at %q", cfg.Model, cfg.Effort)
+			if cfg.Model != wantModel || cfg.Effort != wantEffort {
+				t.Fatalf("relaunched tester runs on %q at %q, want %q at %q", cfg.Model, cfg.Effort, wantModel, wantEffort)
 			}
 			if ws.createCount != 0 || len(ws.restoreConfigs) != 0 {
 				t.Fatalf("restore went to the worktree adapter: %d creates %d restores", ws.createCount, len(ws.restoreConfigs))

@@ -45,7 +45,7 @@ var (
 		"Bash(ao preview:*)", "Bash(ao render:*)", "Bash(ao dev:*)"}
 )
 
-// TesterModel and TesterEffort are what every tester runs on, whatever the project's worker settings say.
+// TesterModel and TesterEffort are what a tester runs on when the project's worker settings name no model or effort.
 const (
 	TesterModel  = "sonnet"
 	TesterEffort = "high"
