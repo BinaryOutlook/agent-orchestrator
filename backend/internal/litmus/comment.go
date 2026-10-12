@@ -449,6 +449,26 @@ func renderComment(run Run, v Verdict, ev evidence, now time.Time) string {
 	return strings.ToValidUTF8(body[:commentCap-len(marker)-6], "") + "...\n\n" + marker
 }
 
+// issuesFor is " (for #6390)", " (for #6390 and #6391)" or " (for #1, #2 and #3)", each number linked to its issue; ""
+// when the PR closes none.
+func issuesFor(issues []IssueRef) string {
+	refs := make([]string, 0, len(issues))
+	for _, is := range issues {
+		ref := "#" + strconv.Itoa(is.Number)
+		if is.URL != "" {
+			ref = "[" + ref + "](" + is.URL + ")"
+		}
+		refs = append(refs, ref)
+	}
+	switch len(refs) {
+	case 0:
+		return ""
+	case 1:
+		return " (for " + refs[0] + ")"
+	}
+	return " (for " + strings.Join(refs[:len(refs)-1], ", ") + " and " + refs[len(refs)-1] + ")"
+}
+
 func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) string {
 	var blocks []string // paragraphs, joined by a blank line
 	add := func(format string, a ...any) { blocks = append(blocks, fmt.Sprintf(format, a...)) }
@@ -462,7 +482,7 @@ func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) s
 	both := slices.ContainsFunc(v.Checks, func(c Check) bool {
 		return c.onLeg() == "base" || slices.ContainsFunc(c.Receipts, func(r Receipt) bool { return r.onLeg() == "base" })
 	})
-	add("Litmus tried #%d on the PR build%s.", run.PRNumber, map[bool]string{true: " and on " + main}[both])
+	add("Litmus tried #%d%s on the PR build%s.", run.PRNumber, issuesFor(run.Issues), map[bool]string{true: " and on " + main}[both])
 	add("**Result: %s.**", verdictLine(v.Overall, count(v.Checks), main))
 	if why := lowerFirst(mdText(clause(v.SkipBase, 200), 400)); why != "" {
 		add("I did not run %s: %s.", main, why)

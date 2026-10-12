@@ -42,24 +42,25 @@ func (s RunState) Closed() bool {
 
 // Run is one PR test attempt, owned by one AO session.
 type Run struct {
-	ID            string    `json:"id"`
-	SessionID     string    `json:"sessionId"`
-	ProjectID     string    `json:"projectId,omitempty"`     // the AO project the tester was started in; empty on runs older than the Litmus panel
-	Repo          string    `json:"repo"`                    // as gh resolved the PR (follows renames), lowercase owner/repo
-	RequestedRepo string    `json:"requestedRepo,omitempty"` // owner/repo from the URL the user gave
-	PRNumber      int       `json:"prNumber"`
-	BaseSHA       string    `json:"baseSha,omitempty"`
-	HeadSHA       string    `json:"headSha,omitempty"`
-	Areas         []Area    `json:"areas,omitempty"`   // the parts of the codebase the PR changes, in words, biggest first
-	BaseRef       string    `json:"baseRef,omitempty"` // the PR's base branch name, as the comment calls the base build; empty on older runs (main)
-	State         RunState  `json:"state"`
-	CreatedAt     time.Time `json:"createdAt"`
-	Deadline      time.Time `json:"deadline"`
-	Legs          []Leg     `json:"legs,omitempty"`
-	Error         string    `json:"error,omitempty"`        // why the last intake failed (a run with no pinned SHAs may retry), or "blocked at prepare: ..."
-	Comment       string    `json:"comment,omitempty"`      // post | off: whether submit posts the verdict to the PR; set by intake, empty on older runs (no post)
-	CommentURL    string    `json:"commentUrl,omitempty"`   // the PR comment submit posted or updated
-	CommentState  string    `json:"commentState,omitempty"` // posted | updated | off | failed:<reason>
+	ID            string     `json:"id"`
+	SessionID     string     `json:"sessionId"`
+	ProjectID     string     `json:"projectId,omitempty"`     // the AO project the tester was started in; empty on runs older than the Litmus panel
+	Repo          string     `json:"repo"`                    // as gh resolved the PR (follows renames), lowercase owner/repo
+	RequestedRepo string     `json:"requestedRepo,omitempty"` // owner/repo from the URL the user gave
+	PRNumber      int        `json:"prNumber"`
+	BaseSHA       string     `json:"baseSha,omitempty"`
+	HeadSHA       string     `json:"headSha,omitempty"`
+	Issues        []IssueRef `json:"issues,omitempty"`  // the issues the PR closes (at most three), so the comment can say what the PR is for
+	Areas         []Area     `json:"areas,omitempty"`   // the parts of the codebase the PR changes, in words, biggest first
+	BaseRef       string     `json:"baseRef,omitempty"` // the PR's base branch name, as the comment calls the base build; empty on older runs (main)
+	State         RunState   `json:"state"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	Deadline      time.Time  `json:"deadline"`
+	Legs          []Leg      `json:"legs,omitempty"`
+	Error         string     `json:"error,omitempty"`        // why the last intake failed (a run with no pinned SHAs may retry), or "blocked at prepare: ..."
+	Comment       string     `json:"comment,omitempty"`      // post | off: whether submit posts the verdict to the PR; set by intake, empty on older runs (no post)
+	CommentURL    string     `json:"commentUrl,omitempty"`   // the PR comment submit posted or updated
+	CommentState  string     `json:"commentState,omitempty"` // posted | updated | off | failed:<reason>
 	// Evidence is whether submit publishes screenshots and GIFs for the comment: post | off; empty on older runs (off).
 	Evidence       string `json:"evidence,omitempty"`
 	EvidenceState  string `json:"evidenceState,omitempty"`  // published | off | failed:<reason>
@@ -69,6 +70,13 @@ type Run struct {
 	RepoID     int64             `json:"repoId,omitempty"`
 	VideoState string            `json:"videoState,omitempty"` // attached | partial | off | failed:<reason>
 	VideoURLs  map[string]string `json:"videoUrls,omitempty"`  // by leg (head | base): the GitHub link of the uploaded video
+}
+
+// IssueRef is an issue the PR says it closes.
+type IssueRef struct {
+	Number int    `json:"number"`
+	Title  string `json:"title,omitempty"`
+	URL    string `json:"url,omitempty"`
 }
 
 // Area is a part of the codebase a PR changes ("Renderer components", "Tests") and how many of its files changed.

@@ -105,6 +105,9 @@ func TestIntakeWritesContextPack(t *testing.T) {
 	if saved, err := svc.store.Get(run.ID); err != nil || saved.HeadSHA != run.HeadSHA || saved.Repo != run.Repo || saved.Error != "" {
 		t.Fatalf("saved %+v err %v", saved, err)
 	}
+	if len(run.Issues) != 0 {
+		t.Fatalf("a PR that closes nothing has issues %+v", run.Issues)
+	}
 	if want, _ := os.ReadFile("testdata/pr6394.diff"); readRunFile(t, svc, run, "diff.patch") != string(want) {
 		t.Fatal("diff.patch is not the whole diff")
 	}
@@ -162,6 +165,9 @@ func TestIntakeIssuePriorRunsRecipeAndCaps(t *testing.T) {
 	}
 	if want := "issue view 7 --repo " + repo + " --json title,body,comments"; gh.calls[2] != want {
 		t.Fatalf("issue call %q, want %q", gh.calls[2], want)
+	}
+	if want := []IssueRef{{Number: 7, Title: "Menu closes by itself", URL: "https://github.com/" + repo + "/issues/7"}}; !reflect.DeepEqual(run.Issues, want) {
+		t.Fatalf("issues %+v, want %+v", run.Issues, want)
 	}
 	pack := readRunFile(t, svc, run, "context-pack.md")
 	for _, want := range []string{"[truncated at 1500 words]", "Menu closes by itself", "issue-comment-5", "comment-04", "run_old (#5): # Verdict: fail", "kind: electron"} {
@@ -295,7 +301,7 @@ func TestSuggestedChecksOnThreeRealPRs(t *testing.T) {
 
 func TestSuggestedChecksTakesTheClaimSentenceAndTheIssueAndStopsAtFiveLines(t *testing.T) {
 	d := intakeData{issue: &issue{Number: 12, Title: "Arrows vanish"}}
-	d.pr.Title = "fix(shell)!: keep arrows"
+	d.pr.Title = "fix(shell)!: keep the navigation arrows"
 	d.pr.Body = "## What\n\nSome context here.\n\n```\nAdds a code line that is not prose.\n```\n\nThis PR keeps the [arrows](http://x) visible. More text.\n"
 	for _, p := range []string{"frontend/src/renderer/components/a/A.tsx", "frontend/src/renderer/hooks/b.ts", "backend/internal/cli/c.go", "backend/internal/store/d.go", "docs/e.md", "backend/internal/cli/c_test.go"} {
 		d.pr.Files = append(d.pr.Files, struct {
@@ -305,7 +311,7 @@ func TestSuggestedChecksTakesTheClaimSentenceAndTheIssueAndStopsAtFiveLines(t *t
 	}
 	got := suggestedChecks(d)
 	lines := strings.Split(strings.TrimSpace(strings.SplitN(got, "\n\n", 2)[1]), "\n")
-	if len(lines) != 5 || lines[0] != "- Headline claim: keep arrows" || lines[1] != "- In the author's words: This PR keeps the arrows visible." || lines[2] != "- Linked issue #12: Arrows vanish" {
+	if len(lines) != 5 || lines[0] != "- Headline claim: keep the navigation arrows" || lines[1] != "- In the author's words: This PR keeps the arrows visible." || lines[2] != "- Linked issue #12: Arrows vanish" {
 		t.Errorf("lines %q", lines)
 	}
 	for _, l := range lines[3:] {
@@ -466,5 +472,116 @@ func TestContextSectionsOnTheRealPR6266(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("sections lack %q", want)
 		}
+	}
+}
+
+func TestBodyIssues(t *testing.T) {
+	const repo = "o/r"
+	cases := []struct {
+		body string
+		want []issueKey
+	}{
+		{"Closes #6390", []issueKey{{repo, 6390}}},
+		{"This fixes #12.\n\nResolves: #13 and closed #12 again, fixes #14, fix #15", []issueKey{{repo, 12}, {repo, 13}, {repo, 14}}},
+		{"Fixes Other/Repo#5", []issueKey{{"other/repo", 5}}},
+		{"resolves https://github.com/O/R/issues/9", []issueKey{{repo, 9}}},
+		{"See https://github.com/x/y/issues/4 and https://github.com/x/y/issues/5", []issueKey{{"x/y", 4}}}, // no phrase: the first issue URL
+		{"Closes #1\n\nSee https://github.com/x/y/issues/4", []issueKey{{repo, 1}}},
+		{"<!-- Closes #123 -->\nNo issue.", nil},
+		{"Closes # and fixes the menu, relates to #77, prefixes #8", nil},
+		{"", nil},
+	}
+	for _, c := range cases {
+		if got := bodyIssues(c.body, repo); !slices.Equal(got, c.want) {
+			t.Errorf("bodyIssues(%q) = %v, want %v", c.body, got, c.want)
+		}
+	}
+}
+
+// issueGH is fixtureGH with a body that closes issues, and an issue view that answers from a title per number.
+type issueGH struct {
+	*fakeGH
+	titles map[string]string
+}
+
+func (g *issueGH) Run(ctx context.Context, args ...string) ([]byte, error) {
+	if args[0] == "issue" {
+		g.calls = append(g.calls, strings.Join(args, " "))
+		title, ok := g.titles[args[2]]
+		if !ok {
+			return nil, errors.New("GraphQL: Could not resolve to an issue with the number of " + args[2] + ".")
+		}
+		return json.Marshal(map[string]any{"title": title, "body": "steps", "comments": []any{}})
+	}
+	return g.fakeGH.Run(ctx, args...)
+}
+
+func TestIntakeStoresClosedIssues(t *testing.T) {
+	for name, c := range map[string]struct {
+		body   string
+		titles map[string]string
+		want   []IssueRef
+	}{
+		"one": {"Keeps the menu open.\n\nCloses #6390", map[string]string{"6390": "Menu closes by itself"},
+			[]IssueRef{{6390, "Menu closes by itself", "https://github.com/orchestratorinc/agent-orchestrator/issues/6390"}}},
+		"two, third unreadable": {"Fixes #6390. Resolves #6391. Closes #1.", map[string]string{"6390": "A", "6391": "B"},
+			[]IssueRef{{6390, "A", "https://github.com/orchestratorinc/agent-orchestrator/issues/6390"}, {6391, "B", "https://github.com/orchestratorinc/agent-orchestrator/issues/6391"}}},
+		"mention gh cannot read": {"Closes #999", nil, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, _ := newSvc(t)
+			gh := svc.gh.(*fakeGH)
+			var pr map[string]any
+			if err := json.Unmarshal(gh.out["pr view"], &pr); err != nil {
+				t.Fatal(err)
+			}
+			pr["body"] = c.body
+			gh.out["pr view"], _ = json.Marshal(pr)
+			svc.gh = &issueGH{fakeGH: gh, titles: c.titles}
+			run, err := svc.Intake(ctx, "s1", prURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(run.Issues, c.want) {
+				t.Fatalf("issues %+v, want %+v", run.Issues, c.want)
+			}
+			if saved, err := svc.store.Get(run.ID); err != nil || !reflect.DeepEqual(saved.Issues, c.want) {
+				t.Fatalf("saved issues %+v err %v", saved.Issues, err)
+			}
+			if first := gh.calls[2]; len(c.want) > 0 && !strings.HasSuffix(first, "--json title,body,comments") {
+				t.Fatalf("first issue call %q", first)
+			}
+			if len(c.want) > 1 && !strings.HasSuffix(gh.calls[3], "--json title") {
+				t.Fatalf("second issue call %q", gh.calls[3])
+			}
+			if pack := readRunFile(t, svc, run, "context-pack.md"); len(c.want) > 0 && !strings.Contains(pack, "#6390 "+c.want[0].Title) {
+				t.Errorf("pack lacks the first issue")
+			}
+		})
+	}
+}
+
+func TestSuggestedChecksLeadsWithTheIssueWhenTheTitleIsVaguer(t *testing.T) {
+	const issueTitle = "Navigation arrows disappear when the sidebar is expanded"
+	for title, wantHead := range map[string]string{
+		"fix: arrows":                            issueTitle, // under 25 characters
+		"fix(shell):":                            issueTitle, // a prefix and nothing else
+		"fix(shell): keep arrows visible always": "keep arrows visible always",
+	} {
+		d := intakeData{issue: &issue{Number: 6390, Title: issueTitle}}
+		d.pr.Title = title
+		got := suggestedChecks(d)
+		want := "## Suggested checks\n\n- Headline claim: " + wantHead + "\n"
+		if wantHead == "keep arrows visible always" {
+			want += "- Linked issue #6390: " + issueTitle + "\n"
+		}
+		if got != want {
+			t.Errorf("%q:\n got %q\nwant %q", title, got, want)
+		}
+	}
+	d := intakeData{issue: &issue{Number: 6390, Title: "Arrows"}}
+	d.pr.Title = "fix: keep arrows visible"
+	if got := suggestedChecks(d); !strings.Contains(got, "Headline claim: keep arrows visible\n") {
+		t.Errorf("a shorter issue title replaced the PR's: %q", got)
 	}
 }

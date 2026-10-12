@@ -533,3 +533,34 @@ func TestPlainTextKeepsQuestionsAndEmailAddresses(t *testing.T) {
 		t.Errorf("refs: %q, want %q", got, want)
 	}
 }
+
+func TestCommentFirstLineNamesTheClosedIssues(t *testing.T) {
+	url := func(n int) string { return fmt.Sprintf("https://github.com/o/r/issues/%d", n) }
+	run := commentRun
+	run.PRNumber = 6403
+	for _, c := range []struct {
+		issues []IssueRef
+		want   string
+	}{
+		{nil, "Litmus tried #6403 on the PR build and on main."},
+		{[]IssueRef{{Number: 6390, URL: url(6390)}}, "Litmus tried #6403 (for [#6390](" + url(6390) + ")) on the PR build and on main."},
+		{[]IssueRef{{Number: 6390, URL: url(6390)}, {Number: 6391, URL: url(6391)}}, "Litmus tried #6403 (for [#6390](" + url(6390) + ") and [#6391](" + url(6391) + ")) on the PR build and on main."},
+		{[]IssueRef{{Number: 1}, {Number: 2}, {Number: 3}}, "Litmus tried #6403 (for #1, #2 and #3) on the PR build and on main."},
+	} {
+		run.Issues = c.issues
+		got := renderComment(run, commentVerdict(commentChecks()), evidence{}, run.CreatedAt.Add(time.Minute))
+		if first, _, _ := strings.Cut(got, "\n"); first != c.want {
+			t.Errorf("first line %q, want %q", first, c.want)
+		}
+		noSlop(t, got)
+	}
+	run.Issues = []IssueRef{{Number: 6390, URL: url(6390)}}
+	one := plainVerdict(run, commentVerdict(commentChecks()))
+	for i := range one.Checks {
+		one.Checks[i].Leg = "head"
+		one.Checks[i].Receipts = nil
+	}
+	if first, _, _ := strings.Cut(commentBody(run, one, evidence{}, run.CreatedAt, commentFits[0]), "\n"); first != "Litmus tried #6403 (for [#6390]("+url(6390)+")) on the PR build." {
+		t.Errorf("head-only first line %q", first)
+	}
+}

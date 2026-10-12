@@ -26,6 +26,8 @@ import (
 const (
 	maxPackWords = 4000
 	maxDiffLines = 300
+	maxIssues    = 3
+	vagueTitle   = 25 // a PR title shorter than this (or only a conventional prefix) is vaguer than its issue's title
 	prFields     = "number,title,body,state,isDraft,author,baseRefName,baseRefOid,headRefName,headRefOid,changedFiles,additions,deletions,files,comments,reviews,closingIssuesReferences,statusCheckRollup,url"
 )
 
@@ -154,8 +156,10 @@ type issue struct {
 type intakeData struct {
 	pr    pullRequest
 	diff  string
-	issue *issue
-	repo  string // as gh reports it, so a renamed repo resolves to its new name
+	issue *issue // the first closed issue gh could read, in full
+	// issues are the closed issues gh could read, at most maxIssues, in the order the PR names them.
+	issues []IssueRef
+	repo   string // as gh reports it, so a renamed repo resolves to its new name
 
 	headDir, baseDir string // where prepare will put the two builds' checkouts
 	gates            string // the gate notes of the touched UI files, composed from the head commit; "" when none or not scannable
@@ -216,7 +220,7 @@ func (s *Service) Intake(ctx context.Context, sessionID, prRef string) (Run, err
 	for i, f := range d.pr.Files {
 		paths[i] = f.Path
 	}
-	run.Areas = areasOf(paths)
+	run.Areas, run.Issues = areasOf(paths), d.issues
 	run.Repo, run.BaseSHA, run.HeadSHA, run.BaseRef, run.Error = d.repo, d.pr.BaseRefOid, d.pr.HeadRefOid, d.pr.BaseRefName, blocked
 	return run, s.store.Save(run)
 }
@@ -255,20 +259,79 @@ func (s *Service) fetch(ctx context.Context, repo string, number int) (intakeDat
 		return d, ghFailure(err, "diff")
 	}
 	d.diff = string(raw)
-	if refs := d.pr.ClosingIssuesReferences; len(refs) > 0 {
-		irepo := d.repo
-		if o, name := refs[0].Repository.Owner.Login, refs[0].Repository.Name; o != "" && name != "" {
-			irepo = strings.ToLower(o + "/" + name)
+	keys, soft := bodyIssues(d.pr.Body, d.repo), true // a mention in the body may name something gh cannot read: skip it
+	if len(keys) == 0 {
+		soft = false // gh's own list of the PR's closing issues must be readable
+		for _, ref := range d.pr.ClosingIssuesReferences {
+			irepo := d.repo
+			if o, name := ref.Repository.Owner.Login, ref.Repository.Name; o != "" && name != "" {
+				irepo = strings.ToLower(o + "/" + name)
+			}
+			keys = append(keys, issueKey{irepo, ref.Number})
 		}
-		if raw, err = s.gh.Run(ctx, "issue", "view", strconv.Itoa(refs[0].Number), "--repo", irepo, "--json", "title,body,comments"); err != nil {
-			return d, ghFailure(err, "linked issue")
+		keys = slices.CompactFunc(keys[:min(len(keys), maxIssues)], func(a, b issueKey) bool { return a == b })
+	}
+	for _, k := range keys {
+		fields := "title"
+		if d.issue == nil {
+			fields = "title,body,comments" // the first issue read goes into the pack in full
 		}
-		d.issue = &issue{Number: refs[0].Number}
-		if err := json.Unmarshal(raw, d.issue); err != nil {
-			return d, apierr.Unavailable("TESTING_GH_FAILED", "gh returned an unreadable linked issue")
+		got := issue{Number: k.number}
+		raw, err = s.gh.Run(ctx, "issue", "view", strconv.Itoa(k.number), "--repo", k.repo, "--json", fields)
+		if err == nil {
+			if err = json.Unmarshal(raw, &got); err != nil {
+				err = apierr.Unavailable("TESTING_GH_FAILED", "gh returned an unreadable linked issue")
+			}
+		} else {
+			err = ghFailure(err, "linked issue")
 		}
+		if err != nil {
+			if soft {
+				continue
+			}
+			return d, err
+		}
+		if d.issue == nil {
+			d.issue = &got
+		}
+		d.issues = append(d.issues, IssueRef{Number: k.number, Title: strings.TrimSpace(got.Title), URL: fmt.Sprintf("https://github.com/%s/issues/%d", k.repo, k.number)})
 	}
 	return d, nil
+}
+
+type issueKey struct {
+	repo   string // lowercase owner/repo
+	number int
+}
+
+var (
+	htmlComment  = regexp.MustCompile(`(?s)<!--.*?-->`)
+	issueURL     = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)`)
+	closingIssue = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(?:https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)|([\w.-]+/[\w.-]+)?#(\d+))`)
+)
+
+// bodyIssues are the issues a PR body says it closes ("Closes #N", "Fixes owner/repo#N", "Resolves <issue URL>"), or
+// its first issue URL when it has no such phrase. At most maxIssues, in order, without repeats; repo is where a bare #N lives.
+func bodyIssues(body, repo string) (out []issueKey) {
+	body = htmlComment.ReplaceAllString(body, "") // a template's commented-out "Closes #123" is not a claim
+	add := func(r, n string) bool {
+		num, err := strconv.Atoi(n)
+		k := issueKey{strings.ToLower(cmp.Or(r, repo)), num}
+		if err != nil || num <= 0 || slices.Contains(out, k) {
+			return false
+		}
+		out = append(out, k)
+		return len(out) == maxIssues
+	}
+	for _, m := range closingIssue.FindAllStringSubmatch(body, -1) {
+		if add(cmp.Or(m[1], m[3]), cmp.Or(m[2], m[4])) {
+			break
+		}
+	}
+	if m := issueURL.FindStringSubmatch(body); len(out) == 0 && m != nil {
+		add(m[1], m[2])
+	}
+	return out
 }
 
 // recipeText returns the stored recipe for repo, or "" when none exists:
@@ -468,11 +531,19 @@ func claimSentence(body string) string {
 // files without a model so the choice of checks is a rule: the headline claim (the title without its prefix, then the
 // body sentence that states it), the linked issue, then one line per touched area. Five lines at most.
 func suggestedChecks(d intakeData) string {
-	lines := []string{"- Headline claim: " + shorten(conventionalPrefix.ReplaceAllString(strings.TrimSpace(d.pr.Title), ""), 200)}
+	title := strings.TrimSpace(d.pr.Title)
+	headline := strings.TrimSpace(conventionalPrefix.ReplaceAllString(title, ""))
+	byIssue := false // the PR title is vaguer than the issue's: lead with the issue
+	if d.issue != nil {
+		if it := strings.TrimSpace(d.issue.Title); it != "" && (len([]rune(title)) < vagueTitle || headline == "") && len([]rune(it)) > len([]rune(headline)) {
+			headline, byIssue = it, true
+		}
+	}
+	lines := []string{"- Headline claim: " + shorten(headline, 200)}
 	if c := claimSentence(d.pr.Body); c != "" {
 		lines = append(lines, "- In the author's words: "+c)
 	}
-	if d.issue != nil && strings.TrimSpace(d.issue.Title) != "" {
+	if d.issue != nil && !byIssue && strings.TrimSpace(d.issue.Title) != "" {
 		lines = append(lines, fmt.Sprintf("- Linked issue #%d: %s", d.issue.Number, shorten(d.issue.Title, 200)))
 	}
 	paths := make([]string, len(d.pr.Files))
