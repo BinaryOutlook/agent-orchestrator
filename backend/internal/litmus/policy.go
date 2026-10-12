@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,17 +22,52 @@ const AwaitingTTL = 7 * 24 * time.Hour
 // SweepInterval is how often the daemon looks for runs past their deadline.
 const SweepInterval = 15 * time.Second
 
-// A testing worker may drive the browser verbs and read files; it may not edit,
-// browse the web, or run builds. The wrapper shells are denied by name because
-// a deny rule on a program does not match the same program inside `sh -c`.
+// A tester is a normal Claude Code session: any command, any file, the web, the
+// user's gh login for reading. The deny list names what must never happen:
+// publishing or changing anything on GitHub (Litmus posts the one comment
+// itself, after approval when the project asks for it), and any ao command that
+// reaches other sessions, the daemon or the desktop app. Deny beats allow. It
+// stops mistakes, not a determined agent: a prefix rule does not match the same
+// command inside `sh -c`. GuardEnv adds a git-level push block for the common
+// remotes.
 var (
-	allowedTools    = []string{"Bash(ao testing:*)", "Bash(ao report:*)", "Read", "Grep", "Glob", "LS"}
-	disallowedTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch",
-		"Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(go:*)", "Bash(make:*)", "Bash(sh:*)", "Bash(bash:*)",
-		"Bash(zsh:*)", "Bash(python:*)", "Bash(python3:*)", "Bash(git:*)", "Bash(curl:*)", "Bash(rm:*)",
-		// A tester must not spawn more testers or touch other sessions. Deny beats allow.
-		"Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)"}
+	allowedTools = []string{"Bash", "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Grep", "Glob", "LS",
+		"WebFetch", "WebSearch", "Agent", "Task", "TodoWrite"}
+	disallowedTools = []string{"Bash(git push:*)",
+		"Bash(gh pr comment:*)", "Bash(gh pr review:*)", "Bash(gh pr merge:*)", "Bash(gh pr close:*)", "Bash(gh pr edit:*)",
+		"Bash(gh pr create:*)", "Bash(gh pr ready:*)", "Bash(gh pr reopen:*)", "Bash(gh pr revert:*)", "Bash(gh pr lock:*)",
+		"Bash(gh pr unlock:*)", "Bash(gh pr update-branch:*)", "Bash(gh issue:*)", "Bash(gh api:*)", "Bash(gh release:*)",
+		"Bash(gh repo:*)", "Bash(gh workflow:*)", "Bash(gh run:*)", "Bash(gh gist:*)", "Bash(gh label:*)", "Bash(gh secret:*)",
+		"Bash(gh variable:*)", "Bash(gh ssh-key:*)", "Bash(gh gpg-key:*)", "Bash(gh cache:*)", "Bash(gh agent-task:*)",
+		"Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)",
+		"Bash(ao review:*)", "Bash(ao project:*)", "Bash(ao orchestrator:*)", "Bash(ao automation:*)", "Bash(ao cue:*)",
+		"Bash(ao stop:*)", "Bash(ao start:*)", "Bash(ao import:*)", "Bash(ao remote-host:*)", "Bash(ao browser:*)",
+		"Bash(ao preview:*)", "Bash(ao render:*)", "Bash(ao dev:*)"}
 )
+
+// TesterModel and TesterEffort are what every tester runs on, whatever the project's worker settings say.
+const (
+	TesterModel  = "sonnet"
+	TesterEffort = "high"
+)
+
+// pushPrefixes covers the common URL forms of a git remote.
+var pushPrefixes = []string{"https://", "http://", "ssh://", "git://", "git@", "file://", "/"}
+
+// GuardEnv adds to a tester's environment a git setting that sends a push to a
+// remote helper that does not exist, whether `git push` runs directly or inside
+// a script. It covers remotes in pushPrefixes form; a relative path, an explicit
+// pushurl, or a shell that clears the setting gets past it. Fetch and clone are
+// untouched. Settings already in env are kept: the block is appended after them.
+func GuardEnv(env map[string]string) {
+	base, _ := strconv.Atoi(env["GIT_CONFIG_COUNT"])
+	base = max(base, 0)
+	for i, prefix := range pushPrefixes {
+		env["GIT_CONFIG_KEY_"+strconv.Itoa(base+i)] = "url.litmus-blocks-push://.pushInsteadOf"
+		env["GIT_CONFIG_VALUE_"+strconv.Itoa(base+i)] = prefix
+	}
+	env["GIT_CONFIG_COUNT"] = strconv.Itoa(base + len(pushPrefixes))
+}
 
 // ToolPolicy returns copies of the allow and deny lists for a testing session.
 func ToolPolicy() (allowed, disallowed []string) {

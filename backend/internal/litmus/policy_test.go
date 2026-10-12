@@ -18,16 +18,20 @@ var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 func TestToolPolicyListsAndRunDir(t *testing.T) {
 	allowed, denied := ToolPolicy()
-	if want := []string{"Bash(ao testing:*)", "Bash(ao report:*)", "Read", "Grep", "Glob", "LS"}; !slices.Equal(allowed, want) {
-		t.Fatalf("allowed = %v", allowed)
+	for _, a := range []string{"Bash", "Read", "Edit", "Write", "Grep", "Glob", "WebFetch", "WebSearch"} {
+		if !slices.Contains(allowed, a) {
+			t.Errorf("%s is not allowed", a)
+		}
 	}
-	for _, d := range []string{"Edit", "Write", "WebFetch", "Bash(npm:*)", "Bash(sh:*)", "Bash(bash:*)", "Bash(zsh:*)", "Bash(python3:*)", "Bash(git:*)", "Bash(rm:*)", "Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)"} {
+	for _, d := range []string{"Bash(git push:*)", "Bash(gh pr comment:*)", "Bash(gh pr review:*)", "Bash(gh api:*)", "Bash(gh pr update-branch:*)", "Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)", "Bash(ao stop:*)"} {
 		if !slices.Contains(denied, d) {
 			t.Errorf("%s is not denied", d)
 		}
 	}
-	if len(denied) != 23 {
-		t.Fatalf("denied has %d entries: %v", len(denied), denied)
+	for _, d := range denied {
+		if !strings.HasPrefix(d, "Bash(") {
+			t.Errorf("a whole tool is denied: %s", d)
+		}
 	}
 	allowed[0], denied[0] = "x", "x" // callers get copies
 	if a, d := ToolPolicy(); a[0] == "x" || d[0] == "x" {

@@ -40,11 +40,12 @@ func createTestingWorkspace(dataDir string, id domain.SessionID, projectID domai
 	return ports.WorkspaceInfo{Path: dir, SessionID: id, ProjectID: projectID}, nil
 }
 
-// applyTestingLaunch gives a launch in a run dir the unattended permission mode and the tool lists.
+// applyTestingLaunch gives a launch in a run dir the unattended permission mode, the tool lists and the tester's model.
 func applyTestingLaunch(cfg *ports.LaunchConfig, dataDir string) {
 	if litmus.IsRunDir(dataDir, cfg.WorkspacePath) {
 		cfg.Permissions = ports.PermissionModeDontAsk
 		cfg.AllowedTools, cfg.DisallowedTools = litmus.ToolPolicy()
+		cfg.Config.Model, cfg.Config.Effort = litmus.TesterModel, litmus.TesterEffort
 	}
 }
 
@@ -53,13 +54,15 @@ func applyTestingRestore(cfg *ports.RestoreConfig, dataDir string) {
 	if litmus.IsRunDir(dataDir, cfg.Session.WorkspacePath) {
 		cfg.Permissions = ports.PermissionModeDontAsk
 		cfg.AllowedTools, cfg.DisallowedTools = litmus.ToolPolicy()
+		cfg.Config.Model, cfg.Config.Effort = litmus.TesterModel, litmus.TesterEffort
 	}
 }
 
-// applyTestingEnv names the run in the environment of a session working in its run dir.
+// applyTestingEnv names the run in the environment of a session working in its run dir and blocks git push there.
 func applyTestingEnv(env map[string]string, dataDir string, id domain.SessionID, workspacePath string) {
 	if litmus.IsRunDir(dataDir, workspacePath) {
 		env[litmus.EnvRun] = litmus.RunID(string(id))
+		litmus.GuardEnv(env)
 	}
 }
 

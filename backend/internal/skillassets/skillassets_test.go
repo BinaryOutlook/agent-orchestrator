@@ -247,7 +247,7 @@ func TestLitmusSkillFrontmatterWordCapAndInstall(t *testing.T) {
 	if n := len(strings.Fields(string(body))); n > 900 {
 		t.Fatalf("litmus SKILL.md is %d words, want at most 900", n)
 	}
-	for _, verb := range []string{"intake", "prepare", "launch", "check add", "snapshot", "compare", "submit", "ao testing test --leg head --dir backend --", "--leg base", "run it again by itself", "You have 25 minutes", "gate notes"} {
+	for _, verb := range []string{"intake", "prepare", "launch", "check add", "snapshot", "compare", "submit", "ao testing test --leg head --dir backend --", "--leg base", "only through `ao testing`", "never push or post to GitHub", "You have 25 minutes", "gate notes"} {
 		if !strings.Contains(string(body), verb) {
 			t.Fatalf("litmus SKILL.md does not mention %q", verb)
 		}

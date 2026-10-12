@@ -53,6 +53,12 @@ func TestSpawnTestingProfileLaunchesInRunDirUnderPolicy(t *testing.T) {
 	if got := rt.lastCfg.Env[litmus.EnvRun]; got != "run_"+string(rec.ID) {
 		t.Fatalf("%s = %q", litmus.EnvRun, got)
 	}
+	if c := agent.lastLaunch.Config; c.Model != litmus.TesterModel || c.Effort != litmus.TesterEffort {
+		t.Fatalf("tester runs on %q at %q, want %q at %q", c.Model, c.Effort, litmus.TesterModel, litmus.TesterEffort)
+	}
+	if rt.lastCfg.Env["GIT_CONFIG_COUNT"] == "" || rt.lastCfg.Env["GIT_CONFIG_KEY_0"] != "url.litmus-blocks-push://.pushInsteadOf" {
+		t.Fatalf("tester env has no push block: %v", rt.lastCfg.Env)
+	}
 	if info, err := os.Stat(runDir); err != nil || !info.IsDir() {
 		t.Fatalf("run dir not created: %v", err)
 	}
@@ -66,6 +72,9 @@ func TestSpawnTestingProfileLaunchesInRunDirUnderPolicy(t *testing.T) {
 	}
 	if agent.lastLaunch.Permissions == ports.PermissionModeDontAsk || len(agent.lastLaunch.AllowedTools)+len(agent.lastLaunch.DisallowedTools) != 0 || rt.lastCfg.Env[litmus.EnvRun] != "" {
 		t.Fatalf("ordinary spawn got the testing profile: %+v", agent.lastLaunch)
+	}
+	if c := agent.lastLaunch.Config; c.Model != "" || c.Effort != "" || rt.lastCfg.Env["GIT_CONFIG_COUNT"] != "" {
+		t.Fatalf("ordinary spawn got the tester's model or the push block: %q %q %v", c.Model, c.Effort, rt.lastCfg.Env)
 	}
 }
 
@@ -92,10 +101,15 @@ func TestRelaunchTestingSessionCarriesPolicyOnBothPaths(t *testing.T) {
 			if _, err := m.relaunchSession(ctx, "restore", rec, st.projects["mer"], info, nil); err != nil {
 				t.Fatal(err)
 			}
+			cfg := agent.lastLaunch.Config
 			if native != "" {
 				wantPolicy(t, agent.lastRestore.Permissions, agent.lastRestore.AllowedTools, agent.lastRestore.DisallowedTools)
+				cfg = agent.lastRestore.Config
 			} else {
 				wantPolicy(t, agent.lastLaunch.Permissions, agent.lastLaunch.AllowedTools, agent.lastLaunch.DisallowedTools)
+			}
+			if cfg.Model != litmus.TesterModel || cfg.Effort != litmus.TesterEffort {
+				t.Fatalf("relaunched tester runs on %q at %q", cfg.Model, cfg.Effort)
 			}
 			if ws.createCount != 0 || len(ws.restoreConfigs) != 0 {
 				t.Fatalf("restore went to the worktree adapter: %d creates %d restores", ws.createCount, len(ws.restoreConfigs))
