@@ -410,7 +410,7 @@ function OriginMessage({ message }: { message: Extract<ConversationItem, { kind:
 	const long = message.text.length > 600;
 	const [expanded, setExpanded] = useState(false);
 	return <View style={styles.originMessage}>
-		<View style={styles.originHeader}><Feather name="radio" size={12} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "AO")}</Text></View>
+		<View style={styles.originHeader}><Feather name="radio" size={12} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
 		{long && expanded ? <ChatMarkdown text={message.text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{message.text}</Text>}
 		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => { haptics.tap(); setExpanded((value) => !value); }} style={styles.originMore}><Feather name={expanded ? "chevron-up" : "chevron-right"} size={12} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
 	</View>;
@@ -480,7 +480,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 					{detail.arguments !== undefined ? <CodeOutput value={printable(detail.arguments)} /> : null}
 					{detail.terminalInput ? <TerminalInput text={detail.terminalInput} truncated={detail.terminalInputTruncated} /> : null}
 					{output ? <CodeOutput value={output} /> : null}
-					{detail.outputTruncated || detail.patchOutputTruncated ? <Text style={[styles.partial, { color: t.amber }]}>This output is longer than AO stores, so it stops early. Open the worktree shell for the full run.</Text> : detail.outputMayBePartial ? <Text style={styles.partial}>{detail.outputSource === "stream" ? "Streamed live; the provider may have omitted the beginning." : "The provider's rolled-up output may omit the beginning."} Open the worktree shell for the full run.</Text> : null}
+					{detail.outputTruncated || detail.patchOutputTruncated ? <Text style={[styles.partial, { color: t.amber }]}>This output is longer than Orchestrator stores, so it stops early. Open the worktree shell for the full run.</Text> : detail.outputMayBePartial ? <Text style={styles.partial}>{detail.outputSource === "stream" ? "Streamed live; the provider may have omitted the beginning." : "The provider's rolled-up output may omit the beginning."} Open the worktree shell for the full run.</Text> : null}
 					{Array.isArray(detail.files) ? <FileList files={detail.files} /> : null}
 				</View>
 			) : null}
@@ -491,7 +491,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 function TerminalInput({ text, truncated }: { text: string; truncated?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={12} color={t.textTertiary} /><Text style={styles.detailLabel}>AGENT TYPED</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>AO stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
+	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={12} color={t.textTertiary} /><Text style={styles.detailLabel}>AGENT TYPED</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>Orchestrator stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
 }
 
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
@@ -509,7 +509,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 			{detail.progress ? <Text numberOfLines={1} style={styles.activityProgress}>{lastLine(detail.progress)}</Text> : null}
 			{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}
 		</Pressable>
-		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailLabel}>PROGRESS</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than AO stores.</Text> : null}</View> : null}</View> : null}
+		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailLabel}>PROGRESS</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than Orchestrator stores.</Text> : null}</View> : null}</View> : null}
 	</View>;
 }
 
@@ -556,7 +556,7 @@ function FileChangeRow({ file, live }: { file: ReturnType<typeof fileChanges>[nu
 function PatchBlock({ patch, truncated }: { patch: string; truncated?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View><Pressable onLongPress={() => { void Clipboard.setStringAsync(patch); haptics.success(); }}><HighlightedCodeText code={patch} language="diff" style={styles.output} /></Pressable>{truncated ? <Text style={[styles.partial, { color: t.amber }]}>This patch is longer than AO stores. The complete change remains in the worktree.</Text> : null}</View>;
+	return <View><Pressable onLongPress={() => { void Clipboard.setStringAsync(patch); haptics.success(); }}><HighlightedCodeText code={patch} language="diff" style={styles.output} /></Pressable>{truncated ? <Text style={[styles.partial, { color: t.amber }]}>This patch is longer than Orchestrator stores. The complete change remains in the worktree.</Text> : null}</View>;
 }
 
 function PlanActivity({ activity }: { activity: ConversationActivity }) {
@@ -808,7 +808,7 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 			<Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{file.status[0].toUpperCase()}</Text>
 			<Text selectable style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text>
 			<Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>
-		</View>)}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>This turn changed more files than AO lists here. Open the worktree shell for the complete diff.</Text> : null}</View> : null}
+		</View>)}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>This turn changed more files than Orchestrator lists here. Open the worktree shell for the complete diff.</Text> : null}</View> : null}
 	</View>;
 }
 
@@ -855,7 +855,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 				setSubmitError(undefined);
 				void onDecide(activity.requestId ?? "", decision.id).catch((cause) => setSubmitError(userFacingError(cause))).finally(() => setSubmitting(undefined));
 			}} />;
-		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions AO can present. Open diagnostics from the host.</Text>}
+		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
 		{submitError ? <Text accessibilityRole="alert" selectable style={styles.validation}>{submitError}</Text> : null}
 	</View>;
 }
@@ -922,7 +922,7 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 					.then(() => resolve("accept"))
 					.catch(() => setValidationError("This link could not be opened on this device."));
 			}} /> : <ElicitationAction label={submitting ? "Sending…" : step.primaryLabel} primary disabled={busy || submitting} onPress={submit} />}
-		</View> : pending ? <Text style={[styles.partial, { color: t.amber }]}>This request has no provider identity, so AO cannot answer it safely. Open diagnostics on the host.</Text> : <Text style={styles.partial}>Already answered. This card is kept for the record.</Text>}
+		</View> : pending ? <Text style={[styles.partial, { color: t.amber }]}>This request has no provider identity, so Orchestrator cannot answer it safely. Open diagnostics on the host.</Text> : <Text style={styles.partial}>Already answered. This card is kept for the record.</Text>}
 	</View>;
 }
 
@@ -1010,7 +1010,7 @@ function truncationNote(value: unknown): string | undefined {
 	const record = value as { truncated?: unknown; bytes?: unknown };
 	if (record.truncated !== true) return undefined;
 	const bytes = typeof record.bytes === "number" ? ` (${formatBytes(record.bytes)})` : "";
-	return `This payload${bytes} was larger than AO stores, so it was not kept.`;
+	return `This payload${bytes} was larger than Orchestrator stores, so it was not kept.`;
 }
 
 function formatBytes(bytes: number): string {
