@@ -216,9 +216,6 @@ type SessionMetadata struct {
 	// ArtifactDir is the session-owned artifact directory under AO's data dir.
 	// It is outside the git workspace and is never exposed directly on the API.
 	ArtifactDir string `json:"-"`
-	// OutputKind is the deliverable requested at spawn. It is fixed after
-	// insertion so restore and agent switching rebuild the same worker prompt.
-	OutputKind SpawnOutputKind `json:"-"`
 	// BrowserCapabilityVerifier is a one-way verifier for the random browser
 	// capability held by this session's worker process. The bearer token itself
 	// is never persisted, so reading the database cannot grant access to another
@@ -277,7 +274,10 @@ type SessionRecord struct {
 	AutoInjectReview   bool              `json:"autoInjectReview"`
 	AutoInjectCI       bool              `json:"autoInjectCI"`
 	OutputType         SessionOutputType `json:"outputType" enum:"none,pr,artifact,pr_artifact"`
-	Metadata           SessionMetadata   `json:"-"`
+	// OutputKind is the deliverable requested at spawn. It is fixed after
+	// insertion so restore and agent switching rebuild the same worker prompt.
+	OutputKind SpawnOutputKind `json:"outputKind,omitempty" enum:"artifact"`
+	Metadata   SessionMetadata `json:"-"`
 	// CleanupGeneration is a monotonic counter bumped each time the session is
 	// un-terminated (spawn/restore). The terminal-resource reconciler stamps its
 	// durable cleanup facts with the generation they were written for so a

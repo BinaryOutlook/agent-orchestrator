@@ -1422,7 +1422,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		LatestUserPrompt:          prompt,
 		BrowserCapabilityVerifier: rec.Metadata.BrowserCapabilityVerifier,
 		ArtifactDir:               rec.Metadata.ArtifactDir,
-		OutputKind:                rec.Metadata.OutputKind,
 		// The user-visible resolved selection is Model for regular harnesses and
 		// Mode for adapters whose catalog is a mode list (e.g. Amp). If an explicit
 		// Model override exists it wins; otherwise fall back to the resolved Mode.
@@ -3242,7 +3241,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	// Recompute standing instructions, then reapply the durable finalized inbound
 	// handoff for this exact native conversation when one exists.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.Metadata.OutputKind, false)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.OutputKind, false)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
@@ -5184,7 +5183,8 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
 		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
-		Metadata:          domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions, OutputKind: cfg.OutputKind},
+		Metadata:          domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
+		OutputKind:        cfg.OutputKind,
 		OutputType:        domain.SessionOutputNone,
 		AutoReviewEnabled: projectConfig.AutoReview,
 		AutoInjectReview:  true,

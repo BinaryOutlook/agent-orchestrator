@@ -12069,6 +12069,10 @@ components:
           type: string
         model:
           type: string
+        outputKind:
+          enum:
+          - artifact
+          type: string
         outputType:
           enum:
           - none

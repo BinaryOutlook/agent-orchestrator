@@ -2294,7 +2294,7 @@ func TestSessionOutputKindRoundTripsAndSurvivesUpdate(t *testing.T) {
 	ctx := context.Background()
 	seedProject(t, s, "outputs")
 	rec := sampleRecord("outputs")
-	rec.Metadata.OutputKind = domain.SpawnOutputArtifact
+	rec.OutputKind = domain.SpawnOutputArtifact
 	created, err := s.CreateSession(ctx, rec)
 	if err != nil {
 		t.Fatal(err)
@@ -2303,11 +2303,11 @@ func TestSessionOutputKindRoundTripsAndSurvivesUpdate(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("load: %v %v", ok, err)
 	}
-	if got.Metadata.OutputKind != domain.SpawnOutputArtifact {
-		t.Fatalf("OutputKind = %q, want artifact", got.Metadata.OutputKind)
+	if got.OutputKind != domain.SpawnOutputArtifact {
+		t.Fatalf("OutputKind = %q, want artifact", got.OutputKind)
 	}
 	// A generic update from a record without the field must not clear it.
-	got.Metadata.OutputKind = ""
+	got.OutputKind = ""
 	got.DisplayName = "renamed"
 	if err := s.UpdateSession(ctx, got); err != nil {
 		t.Fatal(err)
@@ -2316,15 +2316,15 @@ func TestSessionOutputKindRoundTripsAndSurvivesUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.Metadata.OutputKind != domain.SpawnOutputArtifact {
-		t.Fatalf("OutputKind after update = %q, want artifact", reloaded.Metadata.OutputKind)
+	if reloaded.OutputKind != domain.SpawnOutputArtifact {
+		t.Fatalf("OutputKind after update = %q, want artifact", reloaded.OutputKind)
 	}
 	plain, err := s.CreateSession(ctx, sampleRecord("outputs"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plain.Metadata.OutputKind != "" {
-		t.Fatalf("default OutputKind = %q, want empty", plain.Metadata.OutputKind)
+	if plain.OutputKind != "" {
+		t.Fatalf("default OutputKind = %q, want empty", plain.OutputKind)
 	}
 }
 

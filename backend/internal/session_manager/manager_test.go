@@ -6091,8 +6091,8 @@ func TestSpawnWorker_ArtifactOutputKindPersistsAndReachesPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Metadata.OutputKind != domain.SpawnOutputArtifact {
-		t.Fatalf("OutputKind = %q, want artifact", rec.Metadata.OutputKind)
+	if rec.OutputKind != domain.SpawnOutputArtifact {
+		t.Fatalf("OutputKind = %q, want artifact", rec.OutputKind)
 	}
 	if !strings.Contains(agent.lastLaunch.SystemPrompt, "## Artifact Output") {
 		t.Fatalf("spawn system prompt missing artifact output section:\n%s", agent.lastLaunch.SystemPrompt)
@@ -6107,7 +6107,8 @@ func TestRestore_WorkerKeepsArtifactOutputPrompt(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
-		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", OutputKind: domain.SpawnOutputArtifact},
+		OutputKind: domain.SpawnOutputArtifact,
+		Metadata:   domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
 	}
 	agent := &recordingAgent{}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
