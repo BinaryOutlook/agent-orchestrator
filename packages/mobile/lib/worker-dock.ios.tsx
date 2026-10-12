@@ -17,7 +17,7 @@ import {
 	textFieldStyle,
 	tint,
 } from "@expo/ui/swift-ui/modifiers";
-import { memo, startTransition, useEffect } from "react";
+import { memo, startTransition, useLayoutEffect, useRef } from "react";
 import { glassCircle, glassField } from "./glass";
 import { GLASS_CIRCLE_SIZE } from "./native-header-button.ios";
 import { haptics } from "./haptics";
@@ -48,13 +48,17 @@ export const WorkerDock = memo(function WorkerDock({
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const text = useNativeState(query);
+	const lastQueryChange = useRef(query);
 	const clear = workerSearchClearState(query);
 	const environmentOptions = workerEnvironmentOptions(environments);
 	const projectOptions = workerProjectOptions(projects, selectedEnvironmentId);
 	const selectedProjectLabel = workerProjectLabel(projects, selectedProjectId, selectedEnvironmentId);
 	const visibility = workerDockVisibility(searchOpen);
 
-	useEffect(() => {
+	useLayoutEffect(() => {
+		// Native typing can advance before React acknowledges an earlier change.
+		if (query === lastQueryChange.current) return;
+		lastQueryChange.current = query;
 		if (text.get() !== query) text.set(query);
 	}, [query, text]);
 
@@ -153,7 +157,10 @@ export const WorkerDock = memo(function WorkerDock({
 						<TextField
 							text={text}
 							autoFocus
-							onTextChange={onQueryChange}
+							onTextChange={(next) => {
+								lastQueryChange.current = next;
+								onQueryChange(next);
+							}}
 							onFocusChange={(focused) => {
 								if (!focused && !text.get().trim()) onSearchClose();
 							}}

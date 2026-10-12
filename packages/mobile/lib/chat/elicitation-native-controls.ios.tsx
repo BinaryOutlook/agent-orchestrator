@@ -13,7 +13,7 @@ import {
 	textFieldStyle,
 	tint,
 } from "@expo/ui/swift-ui/modifiers";
-import { useEffect } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { glassPanel } from "../glass";
 import { haptics } from "../haptics";
 import { useTheme, useThemeState } from "../ThemeProvider";
@@ -52,8 +52,12 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const text = useNativeState(value === undefined ? "" : String(value));
-	useEffect(() => {
+	const lastChange = useRef(value === undefined ? "" : String(value));
+	useLayoutEffect(() => {
 		const next = value === undefined ? "" : String(value);
+		// Native typing can advance before React acknowledges an earlier change.
+		if (next === lastChange.current) return;
+		lastChange.current = next;
 		if (text.get() !== next) text.set(next);
 	}, [text, value]);
 	return <Host style={{ width: "100%", height: 46 }} colorScheme={scheme} seedColor={t.accent}>
@@ -61,7 +65,11 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 			text={text}
 			placeholder={label}
 			maxLength={maxLength}
-			onTextChange={(next) => onChange(numeric ? (next === "" ? "" : Number(next)) : next)}
+			onTextChange={(next) => {
+				const changed = numeric ? (next === "" ? "" : Number(next)) : next;
+				lastChange.current = String(changed);
+				onChange(changed);
+			}}
 			modifiers={[
 				textFieldStyle("plain"),
 				frame({ maxWidth: 1000, height: 44, alignment: "leading" }),
