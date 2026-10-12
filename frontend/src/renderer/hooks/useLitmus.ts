@@ -20,18 +20,28 @@ export function isLitmusRunActive(run: Pick<LitmusRunSummary, "state">): boolean
 	return run.state === "intake" || run.state === "prepared" || run.state === "running";
 }
 
-export function useLitmusRuns(projectId: string) {
-	return useQuery({
+function litmusRunsQuery(projectId: string) {
+	return {
 		queryKey: litmusRunsQueryKey(projectId),
 		queryFn: async () => {
 			const { data, error } = await apiClient.GET("/api/v1/testing/runs", {
 				params: { query: { projectId, limit: RUNS_LIMIT } },
 			});
 			if (error) throw new Error(apiErrorMessage(error));
-			return data?.runs ?? [];
+			return { runs: data?.runs ?? [], repo: data?.repo };
 		},
-		refetchInterval: (query) => (query.state.data?.some(isLitmusRunActive) ? ACTIVE_POLL_MS : IDLE_POLL_MS),
-	});
+		refetchInterval: (query: { state: { data?: { runs: LitmusRunSummary[] } } }) =>
+			query.state.data?.runs.some(isLitmusRunActive) ? ACTIVE_POLL_MS : IDLE_POLL_MS,
+	};
+}
+
+export function useLitmusRuns(projectId: string) {
+	return useQuery({ ...litmusRunsQuery(projectId), select: (data) => data.runs });
+}
+
+/** The project's own GitHub repo (owner/repo), the one a bare PR number means; undefined when it has none. */
+export function useLitmusProjectRepo(projectId: string) {
+	return useQuery({ ...litmusRunsQuery(projectId), select: (data) => data.repo || undefined }).data;
 }
 
 export function useLitmusRun(runId: string | null) {
@@ -81,7 +91,8 @@ export function useSetLitmusSettings(projectId: string) {
 			return { previous };
 		},
 		onError: (_error, _body, context) => client.setQueryData(litmusSettingsQueryKey(projectId), context?.previous),
-		onSuccess: (settings) => client.setQueryData<LitmusSettings>(litmusSettingsQueryKey(projectId), settings),
+		// The server's value wins once the writes settle, however many toggles were in flight.
+		onSettled: () => client.invalidateQueries({ queryKey: litmusSettingsQueryKey(projectId) }),
 	});
 }
 

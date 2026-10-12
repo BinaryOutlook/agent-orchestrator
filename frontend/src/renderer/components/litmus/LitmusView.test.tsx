@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 	runs: { data: [] as unknown[], isLoading: false, error: null as Error | null },
 	detail: { data: undefined as unknown, isLoading: false, error: null as Error | null },
 	settings: { data: { askBeforePosting: false }, isLoading: false },
+	repo: "acme/widgets" as string | undefined,
 	setSettings: vi.fn(),
 	start: vi.fn(),
 	rerun: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("../../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ da
 vi.mock("../../hooks/useLitmus", async (importOriginal) => ({
 	...await importOriginal<typeof import("../../hooks/useLitmus")>(),
 	useLitmusRuns: () => mocks.runs,
+	useLitmusProjectRepo: () => mocks.repo,
 	useLitmusRun: (id: string | null) => (id ? mocks.detail : { data: undefined, isLoading: false, error: null }),
 	useLitmusSettings: () => mocks.settings,
 	useSetLitmusSettings: () => ({ mutate: mocks.setSettings, isPending: false, error: null }),
@@ -70,6 +72,7 @@ describe("LitmusView", () => {
 		mocks.runs = { data: [], isLoading: false, error: null };
 		mocks.detail = { data: undefined, isLoading: false, error: null };
 		mocks.settings = { data: { askBeforePosting: false }, isLoading: false };
+		mocks.repo = "acme/widgets";
 		mocks.hideShellTopbar = false;
 		for (const fn of [mocks.setSettings, mocks.start, mocks.rerun, mocks.post, mocks.discard]) fn.mockReset();
 	});
@@ -147,22 +150,25 @@ describe("LitmusView", () => {
 		expect(within(screen.getByTestId("litmus-run-r2")).getByRole("button", { name: "Rerun PR #12" })).toBeDisabled();
 	});
 
-	it("starts a run from a PR URL and from a bare number using the latest run's repo", async () => {
+	it("starts a run from a PR URL and from a bare number using the project's own repo", async () => {
 		const user = userEvent.setup();
-		mocks.runs = { isLoading: false, error: null, data: [run({ id: "r1" })] };
+		mocks.repo = "acme/own";
+		mocks.runs = { isLoading: false, error: null, data: [run({ id: "r1" })] }; // a listed run's repo is not the project's
 		renderView();
 		const input = screen.getByRole("textbox", { name: "Test a PR" });
 		await user.type(input, "34");
 		await user.click(screen.getByRole("button", { name: "Run" }));
-		expect(mocks.start).toHaveBeenCalledWith("https://github.com/acme/widgets/pull/34", expect.anything());
+		expect(mocks.start).toHaveBeenCalledWith("https://github.com/acme/own/pull/34", expect.anything());
 		await user.clear(input);
 		await user.type(input, "https://github.com/acme/widgets/pull/35");
 		await user.click(screen.getByRole("button", { name: "Run" }));
 		expect(mocks.start).toHaveBeenLastCalledWith("https://github.com/acme/widgets/pull/35", expect.anything());
 	});
 
-	it("asks for a full URL when a bare number cannot be resolved", async () => {
+	it("asks for a full URL when a bare number cannot be resolved, even if a listed run has a repo", async () => {
 		const user = userEvent.setup();
+		mocks.repo = undefined;
+		mocks.runs = { isLoading: false, error: null, data: [run({ id: "r1" })] };
 		renderView();
 		await user.type(screen.getByRole("textbox", { name: "Test a PR" }), "34");
 		await user.click(screen.getByRole("button", { name: "Run" }));
@@ -203,5 +209,52 @@ describe("LitmusView", () => {
 		expect(mocks.post).toHaveBeenCalledWith("run_1");
 		await user.click(within(drawer).getByRole("button", { name: "Discard" }));
 		expect(mocks.discard).toHaveBeenCalledWith("run_1");
+	});
+
+	it("shows why a post failed next to the Post button", async () => {
+		const user = userEvent.setup();
+		mocks.runs = { isLoading: false, error: null, data: [run({ id: "run_1", state: "awaiting-approval" })] };
+		mocks.detail = { data: detail({ state: "awaiting-approval", commentState: "failed:HTTP 403: Resource not accessible" }), isLoading: false, error: null };
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Fix the widget" }));
+		const approval = within(await screen.findByRole("dialog")).getByTestId("litmus-approval");
+		expect(within(approval).getByRole("alert")).toHaveTextContent("Could not post: HTTP 403: Resource not accessible");
+		expect(within(approval).getByRole("button", { name: "Post comment" })).toBeEnabled();
+	});
+
+	it("shows no post failure for a run that is only waiting", async () => {
+		const user = userEvent.setup();
+		mocks.runs = { isLoading: false, error: null, data: [run({ id: "run_1", state: "awaiting-approval" })] };
+		mocks.detail = { data: detail({ state: "awaiting-approval", commentState: "awaiting-approval" }), isLoading: false, error: null };
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Fix the widget" }));
+		const approval = within(await screen.findByRole("dialog")).getByTestId("litmus-approval");
+		expect(within(approval).queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("names the builds a check ran on in plain words and uses a hyphen for an empty cell", async () => {
+		mocks.runs = { isLoading: false, error: null, data: [run({ id: "run_1" })] };
+		mocks.detail = {
+			data: detail({
+				run: { baseRef: "develop" },
+				checks: [
+					{ id: "c1", name: "Widget renders", expect: "", leg: "head", state: "pass" },
+					{ id: "c2", name: "Widget renders", expect: "", leg: "base", state: "fail", note: "missing" },
+					{ id: "c3", name: "Menu opens", expect: "", state: "pass" },
+				],
+			} as unknown as Partial<LitmusRunDetail>),
+			isLoading: false,
+			error: null,
+		};
+		renderView();
+		await userEvent.click(screen.getByRole("button", { name: "Fix the widget" }));
+		const drawer = await screen.findByRole("dialog");
+		expect(within(drawer).getByRole("columnheader", { name: "Build" })).toBeInTheDocument();
+		expect(within(drawer).queryByText("Leg")).not.toBeInTheDocument();
+		expect(within(drawer).getAllByText("PR build")).toHaveLength(2); // a check with no leg ran on the PR build
+		expect(within(drawer).getByText("develop")).toBeInTheDocument();
+		expect(within(drawer).queryByText("head")).not.toBeInTheDocument();
+		expect(within(drawer).getAllByText("-").length).toBeGreaterThan(0);
+		expect(drawer.textContent).not.toContain("\u2014");
 	});
 });

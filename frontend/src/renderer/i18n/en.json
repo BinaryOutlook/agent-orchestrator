@@ -2665,7 +2665,7 @@
 	"litmus.start.placeholder": "PR number or URL",
 	"litmus.start.run": "Run",
 	"litmus.start.empty": "Enter a PR number or URL.",
-	"litmus.start.needsUrl": "Enter the full PR URL. A bare number works once this project has a run.",
+	"litmus.start.needsUrl": "Enter the full PR URL. A bare number works for a project hosted on GitHub.",
 	"litmus.chat.started": "Litmus started on #{{number}} (session {{session}})",
 	"litmus.chat.open": "Open Litmus",
 	"litmus.chat.failed": "Could not start Litmus.",
@@ -2699,6 +2699,7 @@
 	"litmus.drawer.openComment": "Open comment",
 	"litmus.drawer.awaitingHint": "This comment has not been posted. Post it to the PR or discard the run.",
 	"litmus.drawer.post": "Post comment",
+	"litmus.drawer.postFailed": "Could not post: {{reason}}",
 	"litmus.drawer.discard": "Discard",
 	"litmus.drawer.comment": "Comment preview",
 	"litmus.drawer.noComment": "No comment was written.",
@@ -2706,7 +2707,8 @@
 	"litmus.drawer.noChecks": "No checks were recorded.",
 	"litmus.drawer.verdict": "Verdict details",
 	"litmus.checks.name": "Check",
-	"litmus.checks.leg": "Leg",
+	"litmus.checks.leg": "Build",
+	"litmus.checks.legHead": "PR build",
 	"litmus.checks.state": "State",
 	"litmus.checks.note": "Note"
 }

@@ -110,3 +110,12 @@ func newRepoResolver(gh GH, list func(context.Context) ([]Registered, error)) Re
 		return "", fmt.Errorf("no registered AO project matches %s (registered: %s); add the checkout with `ao project add`", strings.Join(looked, " or "), strings.Join(registered, ", "))
 	}
 }
+
+// RepoSlug is the lowercase owner/repo of a GitHub repository URL (https, ssh or git@), or "" for anything else.
+func RepoSlug(url string) string {
+	id, err := domain.ParseRepositoryIdentity(url)
+	if err != nil || id.Provider != "github" {
+		return ""
+	}
+	return strings.ToLower(id.Namespace + "/" + id.Name)
+}

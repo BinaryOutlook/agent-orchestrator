@@ -31,6 +31,7 @@ export function LitmusRunDrawer({
 	const awaiting = run?.state === "awaiting-approval";
 	const busy = post.isPending || discard.isPending;
 	const actionError = post.error ?? discard.error;
+	const postFailure = awaiting ? failureReason(run?.commentState) : null;
 
 	return (
 		<Sheet open={runId !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -59,6 +60,7 @@ export function LitmusRunDrawer({
 							{awaiting ? (
 								<div className="flex flex-wrap items-center gap-2 rounded-md border border-border p-3" data-testid="litmus-approval">
 									<p className="mr-auto text-xs text-muted-foreground">{t("litmus.drawer.awaitingHint")}</p>
+									{postFailure ? <p role="alert" className="w-full text-xs text-destructive">{t("litmus.drawer.postFailed", { reason: postFailure })}</p> : null}
 									<Button size="sm" variant="primary" disabled={busy} onClick={() => post.mutate(run.id)}>{t("litmus.drawer.post")}</Button>
 									<Button size="sm" variant="outline" disabled={busy} onClick={() => discard.mutate(run.id)}>{t("litmus.drawer.discard")}</Button>
 								</div>
@@ -74,7 +76,7 @@ export function LitmusRunDrawer({
 							</section>
 							<section aria-labelledby="litmus-checks-heading">
 								<h3 id="litmus-checks-heading" className="mb-2 text-xs font-medium text-muted-foreground">{t("litmus.drawer.checks")}</h3>
-								<ChecksTable checks={run.checks} />
+								<ChecksTable checks={run.checks} baseName={run.run.baseRef || "main"} />
 							</section>
 							{run.verdictMd.trim() !== "" ? (
 								<details className="rounded-md border border-border">
@@ -90,7 +92,13 @@ export function LitmusRunDrawer({
 	);
 }
 
-function ChecksTable({ checks }: { checks: LitmusCheck[] }) {
+/** The reason a failed post gave, in the words the daemon wrote it; null for any other comment state. */
+function failureReason(commentState: string | undefined): string | null {
+	const reason = commentState?.startsWith("failed:") ? commentState.slice("failed:".length).trim() : null;
+	return reason ? reason : null;
+}
+
+function ChecksTable({ checks, baseName }: { checks: LitmusCheck[]; baseName: string }) {
 	const { t } = useTranslation();
 	if (checks.length === 0) return <p className="text-sm text-muted-foreground">{t("litmus.drawer.noChecks")}</p>;
 	return (
@@ -111,9 +119,9 @@ function ChecksTable({ checks }: { checks: LitmusCheck[] }) {
 								<div className="font-medium">{check.name}</div>
 								{check.expect ? <div className="text-muted-foreground">{check.expect}</div> : null}
 							</TableCell>
-							<TableCell>{check.leg ?? "—"}</TableCell>
+							<TableCell>{check.leg === "base" ? baseName : t("litmus.checks.legHead")}</TableCell>
 							<TableCell>{check.state}</TableCell>
-							<TableCell className="whitespace-normal text-muted-foreground">{check.note ?? "—"}</TableCell>
+							<TableCell className="whitespace-normal text-muted-foreground">{check.note ?? "-"}</TableCell>
 						</TableRow>
 					))}
 				</TableBody>

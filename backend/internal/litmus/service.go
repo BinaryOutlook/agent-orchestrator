@@ -52,6 +52,8 @@ type Service struct {
 	keepCheckouts int             // retention after every run: finished runs whose checkouts are kept
 	transcripts   string          // where Claude keeps session transcripts, for a run's token count; empty reads none
 	tokenCache    map[tokenKey]int64
+	tokenOrder    []tokenKey                                         // the cache's keys, oldest first
+	projectRepo   func(ctx context.Context, projectID string) string // the project's own owner/repo; nil reads none
 }
 
 // New builds a service over store. A nil clock uses time.Now.
@@ -100,6 +102,13 @@ func (s *Service) WithGH(gh GH) *Service {
 // WithRepos sets how owner/repo is mapped to the local checkout that clones are made from.
 func (s *Service) WithRepos(resolve RepoResolver) *Service {
 	s.resolve = resolve
+	return s
+}
+
+// WithProjectRepo sets how a project's own GitHub repo (lowercase owner/repo, "" when it has none) is looked up, so the
+// runs list can tell the UI which repo a bare PR number means.
+func (s *Service) WithProjectRepo(repo func(ctx context.Context, projectID string) string) *Service {
+	s.projectRepo = repo
 	return s
 }
 

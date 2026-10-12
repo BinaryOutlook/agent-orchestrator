@@ -35,7 +35,10 @@ type commentGH struct {
 
 const upload = "api --method POST -H Content-Type: video/mp4 https://uploads.github.com/"
 
-func (g *commentGH) Run(_ context.Context, args ...string) ([]byte, error) {
+func (g *commentGH) Run(ctx context.Context, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil { // like gh, which is killed with its context
+		return nil, err
+	}
 	line := strings.Join(args, " ")
 	g.calls = append(g.calls, line)
 	g.argv = append(g.argv, args)

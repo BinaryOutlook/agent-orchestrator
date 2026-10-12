@@ -32,11 +32,11 @@ export function useLitmusChatCommand(session: WorkspaceSession, hostId?: string)
 			try {
 				let prUrl: string | null = command.ref;
 				if (/^\d+$/.test(command.ref)) {
-					// The daemon needs a repo; a bare number borrows it from the project's latest run.
+					// The daemon needs a repo; a bare number means the project's own.
 					const { data } = await apiClient.GET("/api/v1/testing/runs", {
 						params: { query: { projectId, limit: 1 } },
 					});
-					prUrl = resolvePrInput(command.ref, data?.runs?.[0]?.repo);
+					prUrl = resolvePrInput(command.ref, data?.repo);
 				}
 				if (!prUrl) {
 					setNotice({ kind: "error", message: t("litmus.start.needsUrl") });

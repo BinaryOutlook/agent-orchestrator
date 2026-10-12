@@ -20,20 +20,20 @@ export function formatDuration(totalSeconds: number): string {
 
 export function formatStarted(value: string, locale?: string): string {
 	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) return "—";
+	if (Number.isNaN(date.getTime())) return "-";
 	return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
 /**
  * Turns what the user typed into something the daemon's start route accepts: a
  * PR URL or owner/repo#N goes through as is; a bare number (or #N) is resolved
- * against the repo of the project's latest run. Returns null when a bare number
- * cannot be resolved because the project has no run to take the repo from.
+ * against the project's own repo. Returns null when a bare number cannot be
+ * resolved because the project has no GitHub repo.
  */
-export function resolvePrInput(input: string, knownRepo: string | undefined): string | null {
+export function resolvePrInput(input: string, projectRepo: string | undefined): string | null {
 	const value = input.trim();
 	const bare = /^#?(\d+)$/.exec(value);
 	if (!bare) return value === "" ? null : value;
-	if (!knownRepo) return null;
-	return `https://github.com/${knownRepo}/pull/${bare[1]}`;
+	if (!projectRepo) return null;
+	return `https://github.com/${projectRepo}/pull/${bare[1]}`;
 }

@@ -221,6 +221,7 @@ func (s *Service) Intake(ctx context.Context, sessionID, prRef string) (Run, err
 		paths[i] = f.Path
 	}
 	run.Areas, run.Issues = areasOf(paths), d.issues
+	run.Title = clip(strings.TrimSpace(d.pr.Title), 200)
 	run.Repo, run.BaseSHA, run.HeadSHA, run.BaseRef, run.Error = d.repo, d.pr.BaseRefOid, d.pr.HeadRefOid, d.pr.BaseRefName, blocked
 	return run, s.store.Save(run)
 }

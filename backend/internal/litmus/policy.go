@@ -15,6 +15,9 @@ import (
 // EnvRun is set in a testing session's environment to the id of the run it owns.
 const EnvRun = "AO_LITMUS_RUN"
 
+// AwaitingTTL is how long a run may wait for approval, from when it started: past it the sweep discards the run.
+const AwaitingTTL = 7 * 24 * time.Hour
+
 // SweepInterval is how often the daemon looks for runs past their deadline.
 const SweepInterval = 15 * time.Second
 
@@ -77,6 +80,13 @@ func (s *Service) SweepExpired(ctx context.Context, kill func(ctx context.Contex
 		}
 	}
 	for _, run := range runs {
+		if run.State == RunAwaitingApproval && s.clock().Sub(run.CreatedAt) > AwaitingTTL {
+			why := "discarded: nobody approved or discarded this comment within 7 days"
+			if _, err := s.discard(ctx, run.ID, why); err != nil {
+				log.Warn("litmus: could not discard a run that waited too long for approval", "run", run.ID, "error", err)
+			}
+			continue
+		}
 		if run.State == RunSubmitted || run.State == RunCleaned || run.State == RunAwaitingApproval || s.reaped(run.ID) {
 			continue
 		}

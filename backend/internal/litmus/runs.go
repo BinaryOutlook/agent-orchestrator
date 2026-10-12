@@ -51,7 +51,7 @@ type ProjectSettings struct {
 type RunPR struct {
 	Number int    `json:"number"`
 	URL    string `json:"url"`
-	Title  string `json:"title,omitempty"` // from the run's context pack; empty before intake finished
+	Title  string `json:"title,omitempty"` // empty before intake finished
 }
 
 // RunSummary is one row of the runs list.
@@ -72,14 +72,19 @@ type RunSummary struct {
 	CommentURL      string `json:"commentUrl,omitempty"`
 	CommentState    string `json:"commentState,omitempty"` // posted | updated | off | awaiting-approval | discarded | failed:<reason>
 	VideoState      string `json:"videoState,omitempty"`
-	// Tokens is the tester's input, output and cache-write tokens, read from its Claude transcript; 0 when unreadable.
-	Tokens int64  `json:"tokens"`
-	Error  string `json:"error,omitempty"`
+	// Tokens is the tester's input, output and cache-write tokens, read from its Claude transcript once the run is
+	// closed; 0 when unreadable. A run still in flight reports 0 and TokensPending.
+	Tokens        int64  `json:"tokens"`
+	TokensPending bool   `json:"tokensPending,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 // RunList is the answer of the runs list.
 type RunList struct {
 	Runs []RunSummary `json:"runs"`
+	// Repo is the project's own GitHub repo (lowercase owner/repo), which a bare PR number is read against; empty when
+	// the project has none on GitHub or the listing is not for one project.
+	Repo string `json:"repo,omitempty"`
 }
 
 // RunDetail is a run row with the texts and checks a detail view renders.
@@ -200,7 +205,7 @@ func (s *Service) summarize(run Run) RunSummary {
 	dir := filepath.Join(s.store.root, run.ID)
 	row := RunSummary{
 		ID: run.ID, SessionID: run.SessionID, ProjectID: run.ProjectID, Repo: run.Repo,
-		PR:    RunPR{Number: run.PRNumber, URL: fmt.Sprintf("https://github.com/%s/pull/%d", run.Repo, run.PRNumber), Title: packTitle(dir)},
+		PR:    RunPR{Number: run.PRNumber, URL: fmt.Sprintf("https://github.com/%s/pull/%d", run.Repo, run.PRNumber), Title: s.title(run, dir)},
 		State: run.State, Verdict: verdictNone, StartedAt: run.CreatedAt,
 		CommentURL: run.CommentURL, CommentState: run.CommentState, VideoState: run.VideoState, Error: run.Error,
 	}
@@ -222,8 +227,25 @@ func (s *Service) summarize(run Run) RunSummary {
 	if row.Verdict == verdictNone && run.State == RunExpired {
 		row.Verdict = verdictExpired
 	}
-	row.Tokens = s.tokens(dir)
+	if run.State.Closed() {
+		row.Tokens = s.tokens(dir)
+	} else {
+		row.TokensPending = true // a live run's transcript is still growing; reading it on every poll is not worth it
+	}
 	return row
+}
+
+// title is the PR title a row shows: the one intake stored on the run. A run from before intake stored it takes it from
+// its context pack once and, when it is closed, keeps it in run.json so later polls do not read the pack again.
+func (s *Service) title(run Run, dir string) string {
+	if run.Title != "" {
+		return run.Title
+	}
+	title := packTitle(dir)
+	if title != "" && run.State.Closed() {
+		_, _ = s.update(run.ID, func(cur *Run) { cur.Title = cmp.Or(cur.Title, title) })
+	}
+	return title
 }
 
 // readHead returns the first n bytes of a file as text, or "".
@@ -246,9 +268,26 @@ func packTitle(runDir string) string {
 	return ""
 }
 
-// Runs lists the runs of a project, newest first. A run recorded without a project (one older than project tracking)
-// belongs to every project. An empty projectID lists every run.
-func (s *Service) Runs(_ context.Context, projectID string, limit int) (RunList, error) {
+// projectOf is the project a run belongs to. A run recorded without one (older than project tracking) takes it from the
+// marker of the session that made it, once, and keeps it in run.json; with no marker it belongs to no project.
+func (s *Service) projectOf(run Run) Run {
+	if run.ProjectID != "" {
+		return run
+	}
+	project := s.store.sessionProject(run.SessionID)
+	if project == "" {
+		return run
+	}
+	run.ProjectID = project
+	if cur, err := s.update(run.ID, func(cur *Run) { cur.ProjectID = cmp.Or(cur.ProjectID, project) }); err == nil {
+		run = cur
+	}
+	return run
+}
+
+// Runs lists the runs of a project, newest first; a run that cannot be tied to the project is not listed. An empty
+// projectID lists every run.
+func (s *Service) Runs(ctx context.Context, projectID string, limit int) (RunList, error) {
 	if limit <= 0 {
 		limit = DefaultRunsLimit
 	}
@@ -259,9 +298,14 @@ func (s *Service) Runs(_ context.Context, projectID string, limit int) (RunList,
 		return RunList{}, err
 	}
 	out := RunList{Runs: []RunSummary{}}
+	if projectID != "" && s.projectRepo != nil {
+		out.Repo = s.projectRepo(ctx, projectID)
+	}
 	for _, run := range slices.Backward(runs) {
-		if projectID != "" && run.ProjectID != "" && run.ProjectID != projectID {
-			continue
+		if projectID != "" {
+			if run = s.projectOf(run); run.ProjectID != projectID {
+				continue
+			}
 		}
 		out.Runs = append(out.Runs, s.summarize(run))
 		if len(out.Runs) == limit {
@@ -310,7 +354,7 @@ func (s *Service) Rerun(ctx context.Context, id, projectID string) (Rerun, error
 	}
 	started, err := s.Start(ctx, StartRequest{
 		ProjectID: project, PRURL: fmt.Sprintf("https://github.com/%s/pull/%d", run.Repo, run.PRNumber),
-		NoComment: run.Comment == CommentOff, NoEvidence: run.Evidence != EvidencePost,
+		NoComment: run.Comment != CommentPost, NoEvidence: run.Evidence != EvidencePost,
 	})
 	if err != nil {
 		return Rerun{}, err
@@ -328,6 +372,9 @@ func (s *Service) awaiting(id string) (Run, func(), error) {
 	}
 	if run.State != RunAwaitingApproval {
 		return Run{}, nil, conflict("TESTING_NOT_AWAITING", fmt.Sprintf("run %s is %s; only a run awaiting approval can be posted or discarded", run.ID, run.State))
+	}
+	if run.CommentState == CommentDiscarded {
+		return Run{}, nil, conflict("TESTING_DISCARDED", fmt.Sprintf("run %s was discarded; its comment will not be posted", run.ID))
 	}
 	done, err := s.markBusy(run.ID, "post") // post and discard share the key
 	return run, done, err
@@ -362,7 +409,9 @@ func (s *Service) Post(ctx context.Context, id string) (Run, error) {
 	if err != nil {
 		return Run{}, fmt.Errorf("read comment.md of %s: %w", run.ID, err)
 	}
-	url, state, ev := s.publishComment(ctx, run, v, existingVideos(runDir), string(body))
+	// The publish runs on its own context: a client that hangs up between the evidence push and the comment would leave
+	// the post half done. Every step has its own timeout, as in submit.
+	url, state, ev := s.publishComment(context.WithoutCancel(ctx), run, v, existingVideos(runDir), string(body))
 	return s.update(run.ID, func(cur *Run) {
 		cur.CommentURL, cur.CommentState, cur.EvidenceState, cur.EvidenceCommit = url, state, ev.state, ev.commit
 		cur.VideoState, cur.VideoURLs = ev.videoState, ev.videoURLs()
@@ -374,23 +423,29 @@ func (s *Service) Post(ctx context.Context, id string) (Run, error) {
 
 // Discard closes a run awaiting approval without posting: its targets are cleaned up and its comment is kept in the
 // run folder, unposted.
-func (s *Service) Discard(ctx context.Context, id string) (Run, error) {
+func (s *Service) Discard(ctx context.Context, id string) (Run, error) { return s.discard(ctx, id, "") }
+
+// discard is Discard; why, when set, is written to the run's comment.log. When the teardown fails the run stays as it
+// was, awaiting approval with a comment that can still be posted or discarded again.
+func (s *Service) discard(ctx context.Context, id, why string) (Run, error) {
 	run, done, err := s.awaiting(id)
 	if err != nil {
 		return Run{}, err
 	}
 	defer done()
-	failed := s.teardown(ctx, run) // submit already tore the targets down; this makes sure
+	if failed := s.teardown(ctx, run); failed != nil { // submit already tore the targets down; this makes sure
+		return run, failed
+	}
 	out, err := s.update(run.ID, func(cur *Run) {
-		cur.CommentState = CommentDiscarded
-		if failed == nil {
-			cur.State = RunCleaned
-			for i := range cur.Legs {
-				cur.Legs[i].State = "cleaned"
-			}
+		cur.State, cur.CommentState = RunCleaned, CommentDiscarded
+		for i := range cur.Legs {
+			cur.Legs[i].State = "cleaned"
 		}
 	})
-	return out, errors.Join(failed, err)
+	if err == nil && why != "" {
+		s.commentLogf(run, "%s", why)
+	}
+	return out, err
 }
 
 // tokenKey caches a transcript's token count until the file changes.
@@ -426,13 +481,27 @@ func (s *Service) tokens(runDir string) (total int64) {
 		s.mu.Unlock()
 		if !hit {
 			n = transcriptTokens(f)
-			s.mu.Lock()
-			s.tokenCache[key] = n
-			s.mu.Unlock()
+			s.cacheTokens(key, n)
 		}
 		total += n
 	}
 	return total
+}
+
+// tokenCacheMax bounds the token cache; the oldest entry goes first.
+const tokenCacheMax = 256
+
+func (s *Service) cacheTokens(key tokenKey, n int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tokenCache[key]; !ok {
+		if len(s.tokenOrder) >= tokenCacheMax {
+			delete(s.tokenCache, s.tokenOrder[0])
+			s.tokenOrder = s.tokenOrder[1:]
+		}
+		s.tokenOrder = append(s.tokenOrder, key)
+	}
+	s.tokenCache[key] = n
 }
 
 // transcriptTokens sums the usage of every assistant message in a transcript once (a message is written again for each

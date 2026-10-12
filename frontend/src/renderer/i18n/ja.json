@@ -2685,7 +2685,7 @@
 	"litmus.start.placeholder": "PR 番号または URL",
 	"litmus.start.run": "実行",
 	"litmus.start.empty": "PR 番号または URL を入力してください。",
-	"litmus.start.needsUrl": "完全な PR の URL を入力してください。このプロジェクトに実行履歴があれば番号だけで指定できます。",
+	"litmus.start.needsUrl": "PRのURL全体を入力してください。番号だけの入力は、GitHubにあるプロジェクトで使えます。",
 	"litmus.chat.started": "#{{number}} で Litmus を開始しました（セッション {{session}}）",
 	"litmus.chat.open": "Litmus を開く",
 	"litmus.chat.failed": "Litmus を開始できませんでした。",
@@ -2719,6 +2719,7 @@
 	"litmus.drawer.openComment": "コメントを開く",
 	"litmus.drawer.awaitingHint": "このコメントはまだ投稿されていません。PR に投稿するか、実行を破棄してください。",
 	"litmus.drawer.post": "コメントを投稿",
+	"litmus.drawer.postFailed": "投稿できませんでした: {{reason}}",
 	"litmus.drawer.discard": "破棄",
 	"litmus.drawer.comment": "コメントのプレビュー",
 	"litmus.drawer.noComment": "コメントは作成されませんでした。",
@@ -2726,7 +2727,8 @@
 	"litmus.drawer.noChecks": "チェックは記録されていません。",
 	"litmus.drawer.verdict": "判定の詳細",
 	"litmus.checks.name": "チェック",
-	"litmus.checks.leg": "対象",
+	"litmus.checks.leg": "ビルド",
+	"litmus.checks.legHead": "PRのビルド",
 	"litmus.checks.state": "状態",
 	"litmus.checks.note": "メモ"
 }

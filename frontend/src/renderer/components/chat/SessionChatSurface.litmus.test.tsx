@@ -107,7 +107,7 @@ function renderSurface(session: WorkspaceSession, onOpenLitmus = vi.fn(), hostId
 }
 
 beforeEach(() => {
-	getMock.mockReset().mockResolvedValue({ data: { runs: [{ repo: "acme/app" }] }, error: undefined });
+	getMock.mockReset().mockResolvedValue({ data: { runs: [{ repo: "other/project" }], repo: "acme/app" }, error: undefined });
 	postMock.mockReset().mockResolvedValue({ data: { name: "litmus-6473", sessionId: "ao-9" }, error: undefined });
 	sendMock.mockReset().mockResolvedValue(undefined);
 });
@@ -128,7 +128,7 @@ describe("Litmus chat command intercept", () => {
 		expect(onOpenLitmus).toHaveBeenCalledWith("proj-1");
 	});
 
-	it("resolves a bare PR number against the repo of the project's latest run", async () => {
+	it("resolves a bare PR number against the project's own repo, not a listed run's", async () => {
 		renderSurface(orchestrator);
 		await userEvent.click(screen.getByText("send test PR number"));
 
@@ -140,7 +140,7 @@ describe("Litmus chat command intercept", () => {
 	});
 
 	it("explains a bare number it cannot resolve instead of sending it to the agent", async () => {
-		getMock.mockResolvedValue({ data: { runs: [] }, error: undefined });
+		getMock.mockResolvedValue({ data: { runs: [{ repo: "other/project" }] }, error: undefined }); // the project has no repo of its own
 		renderSurface(orchestrator);
 		await userEvent.click(screen.getByText("send litmus bare"));
 

@@ -2667,7 +2667,7 @@
 	"litmus.start.placeholder": "PR 编号或链接",
 	"litmus.start.run": "运行",
 	"litmus.start.empty": "请输入 PR 编号或链接。",
-	"litmus.start.needsUrl": "请输入完整的 PR 链接。项目已有运行记录后，可以只输入编号。",
+	"litmus.start.needsUrl": "请输入完整的 PR URL。仅输入编号适用于托管在 GitHub 上的项目。",
 	"litmus.chat.started": "已在 #{{number}} 上启动 Litmus（会话 {{session}}）",
 	"litmus.chat.open": "打开 Litmus",
 	"litmus.chat.failed": "无法启动 Litmus。",
@@ -2701,6 +2701,7 @@
 	"litmus.drawer.openComment": "打开评论",
 	"litmus.drawer.awaitingHint": "此评论尚未发布。可将其发布到 PR，或放弃本次运行。",
 	"litmus.drawer.post": "发布评论",
+	"litmus.drawer.postFailed": "无法发布: {{reason}}",
 	"litmus.drawer.discard": "放弃",
 	"litmus.drawer.comment": "评论预览",
 	"litmus.drawer.noComment": "未生成评论。",
@@ -2708,7 +2709,8 @@
 	"litmus.drawer.noChecks": "未记录检查项。",
 	"litmus.drawer.verdict": "结论详情",
 	"litmus.checks.name": "检查",
-	"litmus.checks.leg": "分支",
+	"litmus.checks.leg": "构建",
+	"litmus.checks.legHead": "PR 构建",
 	"litmus.checks.state": "状态",
 	"litmus.checks.note": "备注"
 }

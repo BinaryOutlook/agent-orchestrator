@@ -4915,6 +4915,11 @@ export interface components {
             name: string;
             stems?: string[];
         };
+        LitmusIssueRef: {
+            number: number;
+            title?: string;
+            url?: string;
+        };
         LitmusPruneReport: {
             /** Format: int64 */
             bytesFreed: number;
@@ -6129,6 +6134,7 @@ export interface components {
             evidenceState?: string;
             headSha?: string;
             id: string;
+            issues?: components["schemas"]["LitmusIssueRef"][];
             legs?: components["schemas"]["TestingLeg"][];
             prNumber: number;
             projectId?: string;
@@ -6139,6 +6145,7 @@ export interface components {
             requestedRepo?: string;
             sessionId: string;
             state: string;
+            title?: string;
             videoState?: string;
             videoUrls?: {
                 [key: string]: string;
@@ -6163,12 +6170,14 @@ export interface components {
             state: string;
             /** Format: int64 */
             tokens: number;
+            tokensPending?: boolean;
             /** @enum {string} */
             verdict: "pass" | "fail" | "partial" | "blocked" | "expired" | "none";
             verdictMd: string;
             videoState?: string;
         };
         TestingRunList: {
+            repo?: string;
             runs: components["schemas"]["TestingRunSummary"][];
         };
         TestingRunPr: {
@@ -6196,6 +6205,7 @@ export interface components {
             state: string;
             /** Format: int64 */
             tokens: number;
+            tokensPending?: boolean;
             /** @enum {string} */
             verdict: "pass" | "fail" | "partial" | "blocked" | "expired" | "none";
             videoState?: string;

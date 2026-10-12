@@ -14428,6 +14428,17 @@ components:
       - name
       - files
       type: object
+    LitmusIssueRef:
+      properties:
+        number:
+          type: integer
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - number
+      type: object
     LitmusPruneReport:
       properties:
         bytesFreed:
@@ -17438,6 +17449,10 @@ components:
           type: string
         id:
           type: string
+        issues:
+          items:
+            $ref: '#/components/schemas/LitmusIssueRef'
+          type: array
         legs:
           items:
             $ref: '#/components/schemas/TestingLeg'
@@ -17458,6 +17473,8 @@ components:
         sessionId:
           type: string
         state:
+          type: string
+        title:
           type: string
         videoState:
           type: string
@@ -17511,6 +17528,8 @@ components:
         tokens:
           format: int64
           type: integer
+        tokensPending:
+          type: boolean
         verdict:
           enum:
           - pass
@@ -17541,6 +17560,8 @@ components:
       type: object
     TestingRunList:
       properties:
+        repo:
+          type: string
         runs:
           items:
             $ref: '#/components/schemas/TestingRunSummary'
@@ -17601,6 +17622,8 @@ components:
         tokens:
           format: int64
           type: integer
+        tokensPending:
+          type: boolean
         verdict:
           enum:
           - pass

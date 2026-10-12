@@ -48,6 +48,7 @@ type Run struct {
 	Repo          string     `json:"repo"`                    // as gh resolved the PR (follows renames), lowercase owner/repo
 	RequestedRepo string     `json:"requestedRepo,omitempty"` // owner/repo from the URL the user gave
 	PRNumber      int        `json:"prNumber"`
+	Title         string     `json:"title,omitempty"` // the PR's title at intake; runs from before it was stored take it from context-pack.md
 	BaseSHA       string     `json:"baseSha,omitempty"`
 	HeadSHA       string     `json:"headSha,omitempty"`
 	Issues        []IssueRef `json:"issues,omitempty"`  // the issues the PR closes (at most three), so the comment can say what the PR is for

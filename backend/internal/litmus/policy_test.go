@@ -200,3 +200,30 @@ func TestSweepReapsAnIntakeOnlyRunAfterSpawnBudgetWithoutActivitySeam(t *testing
 		t.Fatalf("an existing intake run lost its pins or missed the reason: %+v", run)
 	}
 }
+
+func TestSweepDiscardsARunThatWaitedAWeekForApproval(t *testing.T) {
+	svc, runDir, g := askSvc(t, true)
+	_, err := svc.Submit(ctx, "s1", "", "")
+	is(t, "")(nil, err)
+	run, _ := svc.store.Get("run_s1")
+
+	svc.clock = func() time.Time { return run.CreatedAt.Add(AwaitingTTL) }
+	if killed := sweep(svc, nil); len(killed) != 0 {
+		t.Fatalf("killed %v", killed)
+	}
+	if got, _ := svc.store.Get("run_s1"); got.State != RunAwaitingApproval {
+		t.Fatalf("a run exactly at the limit was discarded: %s", got.State)
+	}
+
+	svc.clock = func() time.Time { return run.CreatedAt.Add(AwaitingTTL + time.Second) }
+	sweep(svc, nil)
+	got, _ := svc.store.Get("run_s1")
+	if got.State != RunCleaned || got.CommentState != CommentDiscarded || len(g.calls) != 0 {
+		t.Fatalf("after a week: %s %q, gh calls %q", got.State, got.CommentState, g.calls)
+	}
+	log, _ := os.ReadFile(filepath.Join(runDir, "comment.log"))
+	if !strings.Contains(string(log), "discarded: nobody approved or discarded this comment within 7 days") {
+		t.Fatalf("comment.log = %q", log)
+	}
+	is(t, "TESTING_NOT_AWAITING")(svc.Post(ctx, "run_s1"))
+}

@@ -3,9 +3,11 @@ package litmus
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -229,7 +231,7 @@ func TestRunsListAndDetail(t *testing.T) {
 	is(t, "")(nil, os.Chtimes(filepath.Join(svc.store.root, "run_s0", "run.json"), expiredAt, expiredAt))
 
 	list, err := svc.Runs(ctx, "p1", 0)
-	if err != nil || len(list.Runs) != 2 {
+	if err != nil || len(list.Runs) != 1 {
 		t.Fatalf("p1 list = %+v err %v", list, err)
 	}
 	row := list.Runs[0]
@@ -238,18 +240,21 @@ func TestRunsListAndDetail(t *testing.T) {
 		row.ProjectID != "p1" || row.CommentState != "posted" || row.CommentURL == "" {
 		t.Fatalf("row = %+v", row)
 	}
-	if exp := list.Runs[1]; exp.ID != "run_s0" || exp.Verdict != "expired" || exp.Error != ReasonNoIntake || exp.DurationSeconds != 90 {
-		t.Fatalf("a run with no project is listed for every project; expired row = %+v", exp)
-	}
 	all, _ := svc.Runs(ctx, "", 0)
 	if len(all.Runs) != 3 || all.Runs[0].ID != "run_s2" || all.Runs[0].Verdict != "none" || all.Runs[0].DurationSeconds != 0 {
 		t.Fatalf("all = %+v", all.Runs)
 	}
+	if exp := all.Runs[2]; exp.ID != "run_s0" || exp.Verdict != "expired" || exp.Error != ReasonNoIntake || exp.DurationSeconds != 90 {
+		t.Fatalf("expired row = %+v", exp)
+	}
+	if other := all.Runs[0]; other.Tokens != 0 || !other.TokensPending {
+		t.Fatalf("a live run reports no tokens yet: %+v", other)
+	}
 	if one, _ := svc.Runs(ctx, "", 1); len(one.Runs) != 1 || one.Runs[0].ID != "run_s2" {
 		t.Fatalf("limit 1 = %+v", one.Runs)
 	}
-	if none, err := svc.Runs(ctx, "p3", 0); err != nil || none.Runs == nil || len(none.Runs) != 1 {
-		t.Fatalf("p3 sees only the run without a project: %+v err %v", none, err)
+	if none, err := svc.Runs(ctx, "p3", 0); err != nil || none.Runs == nil || len(none.Runs) != 0 {
+		t.Fatalf("p3 sees no run of another project, nor one without a project: %+v err %v", none, err)
 	}
 
 	d, err := svc.RunDetail(ctx, "run_s1")
@@ -300,5 +305,173 @@ func TestPruneIgnoresARunThatIsStarting(t *testing.T) {
 	rep, err = svc.Prune(ctx, 1, 1)
 	if err != nil || !strings.Contains(strings.Join(rep.Lines, "\n"), "(run_ao-25)") {
 		t.Fatalf("no marker: %+v err %v", rep, err)
+	}
+}
+
+func TestRunsListsOnlyTheProjectsOwnRuns(t *testing.T) {
+	svc, _ := newSvc(t)
+	svc.WithProjectRepo(func(_ context.Context, id string) string {
+		return map[string]string{"p1": "acme/one", "p2": "acme/two"}[id]
+	})
+	at := svc.clock()
+	save := func(id, project string, n int) {
+		is(t, "")(nil, svc.store.Save(Run{ID: "run_" + id, SessionID: id, ProjectID: project, Repo: "acme/" + id, PRNumber: n, State: RunSubmitted, CreatedAt: at.Add(time.Duration(n) * time.Minute)}))
+	}
+	save("a", "p1", 1)
+	save("b", "p2", 2)
+	save("marked", "", 3) // started before runs recorded their project, but its session was marked
+	save("lost", "", 4)   // no project anywhere
+	is(t, "")(nil, svc.store.setSessionProject("marked", "p2"))
+
+	ids := func(project string) (out []string) {
+		list, err := svc.Runs(ctx, project, 0)
+		is(t, "")(nil, err)
+		for _, r := range list.Runs {
+			out = append(out, r.ID)
+		}
+		return out
+	}
+	if got := ids("p1"); !slices.Equal(got, []string{"run_a"}) {
+		t.Fatalf("p1 = %v", got)
+	}
+	if got := ids("p2"); !slices.Equal(got, []string{"run_marked", "run_b"}) {
+		t.Fatalf("p2 = %v", got)
+	}
+	if got := ids("p3"); len(got) != 0 {
+		t.Fatalf("p3 = %v", got)
+	}
+	if run, _ := svc.store.Get("run_marked"); run.ProjectID != "p2" {
+		t.Fatalf("the marker was not written into run.json: %+v", run)
+	}
+	if run, _ := svc.store.Get("run_lost"); run.ProjectID != "" {
+		t.Fatalf("a run with no marker gained a project: %+v", run)
+	}
+	if list, _ := svc.Runs(ctx, "p1", 0); list.Repo != "acme/one" {
+		t.Fatalf("repo = %q: the list names the project's own repo, not a run's", list.Repo)
+	}
+	if list, _ := svc.Runs(ctx, "", 0); list.Repo != "" || len(list.Runs) != 4 {
+		t.Fatalf("an unscoped list has no repo and every run: %+v", list)
+	}
+}
+
+func TestRunTitleComesFromRunJSONAndTokensOnlyForClosedRuns(t *testing.T) {
+	svc, runDir, _ := askSvc(t, false)
+	run, _ := svc.store.Get("run_s1")
+	if run.Title == "" {
+		t.Fatalf("intake did not store the title: %+v", run)
+	}
+	is(t, "")(nil, os.WriteFile(filepath.Join(runDir, "context-pack.md"), []byte("- #6394 changed in the pack\n"), 0o600))
+	if row := svc.summarize(run); row.PR.Title != run.Title {
+		t.Fatalf("title = %q, want the stored %q (not a re-read of the pack)", row.PR.Title, run.Title)
+	}
+	// A run from before titles were stored takes it from the pack once, and keeps it.
+	_, err := svc.update(run.ID, func(r *Run) { r.Title, r.State = "", RunSubmitted })
+	is(t, "")(nil, err)
+	old, _ := svc.store.Get(run.ID)
+	if row := svc.summarize(old); row.PR.Title != "changed in the pack" {
+		t.Fatalf("legacy title = %q", row.PR.Title)
+	}
+	is(t, "")(nil, os.Remove(filepath.Join(runDir, "context-pack.md")))
+	again, _ := svc.store.Get(run.ID)
+	if row := svc.summarize(again); row.PR.Title != "changed in the pack" || again.Title != "changed in the pack" {
+		t.Fatalf("the backfilled title was lost: %q", row.PR.Title)
+	}
+
+	transcripts := t.TempDir()
+	svc.WithTranscripts(transcripts)
+	dir := filepath.Join(transcripts, regexp.MustCompile(`[^a-zA-Z0-9]`).ReplaceAllString(runDir, "-"))
+	is(t, "")(nil, os.MkdirAll(dir, 0o750))
+	is(t, "")(nil, os.WriteFile(filepath.Join(dir, "a.jsonl"), []byte(`{"message":{"id":"m1","usage":{"input_tokens":7,"output_tokens":3}}}`+"\n"), 0o600))
+	for _, c := range []struct {
+		state   RunState
+		tokens  int64
+		pending bool
+	}{{RunRunning, 0, true}, {RunIntake, 0, true}, {RunSubmitted, 10, false}, {RunAwaitingApproval, 10, false}, {RunExpired, 10, false}, {RunCleaned, 10, false}} {
+		got, _ := svc.update("run_s1", func(r *Run) { r.State = c.state })
+		if row := svc.summarize(got); row.Tokens != c.tokens || row.TokensPending != c.pending {
+			t.Errorf("%s: tokens %d pending %v, want %d %v", c.state, row.Tokens, row.TokensPending, c.tokens, c.pending)
+		}
+	}
+}
+
+func TestTokenCacheIsBounded(t *testing.T) {
+	svc, _ := newSvc(t)
+	for i := range tokenCacheMax + 10 {
+		svc.cacheTokens(tokenKey{path: fmt.Sprintf("f%d", i)}, int64(i))
+	}
+	if len(svc.tokenCache) != tokenCacheMax || len(svc.tokenOrder) != tokenCacheMax {
+		t.Fatalf("cache holds %d entries (order %d), want %d", len(svc.tokenCache), len(svc.tokenOrder), tokenCacheMax)
+	}
+	if _, ok := svc.tokenCache[tokenKey{path: "f0"}]; ok {
+		t.Fatal("the oldest entry was kept")
+	}
+	if _, ok := svc.tokenCache[tokenKey{path: fmt.Sprintf("f%d", tokenCacheMax+9)}]; !ok {
+		t.Fatal("the newest entry was dropped")
+	}
+	svc.cacheTokens(tokenKey{path: "f20"}, 99) // an update in place does not grow the cache
+	if len(svc.tokenOrder) != tokenCacheMax {
+		t.Fatalf("order grew to %d", len(svc.tokenOrder))
+	}
+}
+
+func TestDiscardThatCannotCleanUpDoesNotMarkTheCommentDiscarded(t *testing.T) {
+	svc, runDir, g := askSvc(t, true)
+	_, err := svc.Submit(ctx, "s1", "", "")
+	is(t, "")(nil, err)
+	is(t, "")(nil, os.MkdirAll(filepath.Join(runDir, "head"), 0o750))
+	is(t, "")(nil, os.WriteFile(filepath.Join(runDir, "head", "owned.json"), []byte("{broken"), 0o600)) // teardown cannot read it
+	run, err := svc.Discard(ctx, "run_s1")
+	if err == nil {
+		t.Fatalf("discard succeeded: %+v", run)
+	}
+	got, _ := svc.store.Get("run_s1")
+	if got.State != RunAwaitingApproval || got.CommentState != CommentAwaiting {
+		t.Fatalf("after a failed discard: %s %q", got.State, got.CommentState)
+	}
+	// The comment can still be posted once the leftovers are gone.
+	is(t, "")(nil, os.Remove(filepath.Join(runDir, "head", "owned.json")))
+	if posted, err := svc.Post(ctx, "run_s1"); err != nil || posted.CommentState != "posted" || !g.has("api --method POST") {
+		t.Fatalf("post after a failed discard: %+v err %v", posted, err)
+	}
+}
+
+func TestADiscardedCommentIsNeverPosted(t *testing.T) {
+	svc, _, g := askSvc(t, true)
+	_, err := svc.Submit(ctx, "s1", "", "")
+	is(t, "")(nil, err)
+	_, err = svc.update("run_s1", func(r *Run) { r.CommentState = CommentDiscarded }) // state still awaiting: a discard that stopped half way
+	is(t, "")(nil, err)
+	is(t, "TESTING_DISCARDED")(svc.Post(ctx, "run_s1"))
+	is(t, "TESTING_DISCARDED")(svc.Discard(ctx, "run_s1"))
+	if len(g.calls) != 0 {
+		t.Fatalf("gh was called: %q", g.calls)
+	}
+}
+
+func TestRerunPostsOnlyWhenTheRunPosted(t *testing.T) {
+	for mode, wantNoComment := range map[string]bool{CommentPost: false, CommentOff: true, "": true} {
+		svc, _ := newSvc(t)
+		svc.WithSpawner(func(_ context.Context, req SpawnRequest) (string, error) { return "s2", nil })
+		is(t, "")(svc.Intake(ctx, "s1", prURL))
+		_, err := svc.update("run_s1", func(r *Run) { r.ProjectID, r.Comment = "p1", mode })
+		is(t, "")(nil, err)
+		if _, err := svc.Rerun(ctx, "run_s1", ""); err != nil {
+			t.Fatal(err)
+		}
+		if got := svc.store.commentMode("s2") == CommentOff; got != wantNoComment {
+			t.Errorf("comment mode %q: the rerun's no-comment = %v, want %v", mode, got, wantNoComment)
+		}
+	}
+}
+
+func TestPostSurvivesAHungUpClient(t *testing.T) {
+	svc, _, g := askSvc(t, true)
+	_, err := svc.Submit(ctx, "s1", "", "")
+	is(t, "")(nil, err)
+	gone, cancel := context.WithCancel(ctx)
+	cancel()
+	posted, err := svc.Post(gone, "run_s1")
+	if err != nil || posted.State != RunSubmitted || posted.CommentState != "posted" || !g.has("api --method POST") {
+		t.Fatalf("post with a cancelled request: %+v err %v", posted, err)
 	}
 }

@@ -4,6 +4,7 @@ import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
 import {
 	isLitmusRunActive,
+	useLitmusProjectRepo,
 	useLitmusRuns,
 	useLitmusSettings,
 	useRerunLitmusRun,
@@ -29,6 +30,7 @@ export function LitmusView({ projectId }: { projectId: string }) {
 	const showPageTitle = hidesShellTopbar();
 	const projectName = useWorkspaceQuery().data?.find((workspace) => workspace.id === projectId)?.name ?? projectId;
 	const runs = useLitmusRuns(projectId);
+	const projectRepo = useLitmusProjectRepo(projectId);
 	const settings = useLitmusSettings(projectId);
 	const setSettings = useSetLitmusSettings(projectId);
 	const start = useStartLitmusRun(projectId);
@@ -40,7 +42,7 @@ export function LitmusView({ projectId }: { projectId: string }) {
 
 	const submit = (event: FormEvent) => {
 		event.preventDefault();
-		const prUrl = resolvePrInput(prInput, rows[0]?.repo);
+		const prUrl = resolvePrInput(prInput, projectRepo);
 		if (!prUrl) {
 			setInputError(t(prInput.trim() === "" ? "litmus.start.empty" : "litmus.start.needsUrl"));
 			return;
@@ -169,10 +171,10 @@ function RunRow({
 				{run.commentUrl ? (
 					<AppLink href={run.commentUrl} className="underline-offset-2 hover:underline">{t("litmus.comment.view")}</AppLink>
 				) : (
-					<span className="text-muted-foreground">{commentState ?? "—"}</span>
+					<span className="text-muted-foreground">{commentState ?? "-"}</span>
 				)}
 			</TableCell>
-			<TableCell className="text-right tabular-nums">{run.tokens > 0 ? run.tokens.toLocaleString(i18n.language) : "—"}</TableCell>
+			<TableCell className="text-right tabular-nums">{run.tokens > 0 ? run.tokens.toLocaleString(i18n.language) : "-"}</TableCell>
 			<TableCell className="text-right">
 				<Button size="sm" variant="outline" disabled={rerunPending || isLitmusRunActive(run)} onClick={onRerun} aria-label={t("litmus.rerunLabel", { number: run.pr.number })}>
 					<RotateCw aria-hidden="true" />{t("litmus.rerun")}

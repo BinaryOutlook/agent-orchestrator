@@ -2725,7 +2725,7 @@
 	"litmus.start.placeholder": "Número ou URL do PR",
 	"litmus.start.run": "Executar",
 	"litmus.start.empty": "Informe um número ou uma URL de PR.",
-	"litmus.start.needsUrl": "Informe a URL completa do PR. Um número sozinho funciona depois que o projeto tiver uma execução.",
+	"litmus.start.needsUrl": "Digite a URL completa do PR. Só o número funciona em um projeto hospedado no GitHub.",
 	"litmus.chat.started": "Litmus iniciado em #{{number}} (sessão {{session}})",
 	"litmus.chat.open": "Abrir Litmus",
 	"litmus.chat.failed": "Não foi possível iniciar o Litmus.",
@@ -2759,6 +2759,7 @@
 	"litmus.drawer.openComment": "Abrir comentário",
 	"litmus.drawer.awaitingHint": "Este comentário não foi publicado. Publique-o no PR ou descarte a execução.",
 	"litmus.drawer.post": "Publicar comentário",
+	"litmus.drawer.postFailed": "Não foi possível publicar: {{reason}}",
 	"litmus.drawer.discard": "Descartar",
 	"litmus.drawer.comment": "Prévia do comentário",
 	"litmus.drawer.noComment": "Nenhum comentário foi escrito.",
@@ -2766,7 +2767,8 @@
 	"litmus.drawer.noChecks": "Nenhuma verificação registrada.",
 	"litmus.drawer.verdict": "Detalhes do veredito",
 	"litmus.checks.name": "Verificação",
-	"litmus.checks.leg": "Branch",
+	"litmus.checks.leg": "Build",
+	"litmus.checks.legHead": "Build do PR",
 	"litmus.checks.state": "Estado",
 	"litmus.checks.note": "Observação"
 }
