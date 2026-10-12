@@ -2602,6 +2602,7 @@
 	"chat.draftDiscard.nativeMessage": "このチャットの下書きはまだ安全に保存されていません。",
 	"chat.draftDiscard.stay": "留まる",
 	"chat.draftDiscard.leaveAnyway": "離れる",
+	"chat.promptSuggestion.description": "次のメッセージの提案: {{prompt}}。Tab キーで使用、Escape キーで閉じます。",
 	"chat.edit.abandonRecovery": "編集の復旧を中止",
 	"chat.welcome.heading": "何に取り組みますか？",
 	"chat.mcpNotice.unavailable_one": "{{names}} を起動できませんでした。使わずに続行します。",

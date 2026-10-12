@@ -28,6 +28,8 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 	cfg.ProviderScopeID = s.newID()
 	cfg.ProviderIDsScoped = true
 	cfg.Ephemeral = true
+	// shortcut: ACP ignores ReadOnly; enforce tool restrictions when those providers support them.
+	cfg.ReadOnly = true
 	conversation, err := driver.Start(ctx, cfg)
 	if err != nil {
 		return "", fmt.Errorf("start background %s task: %w", harness, err)

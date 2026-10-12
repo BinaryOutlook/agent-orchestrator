@@ -2602,6 +2602,7 @@
 	"chat.draftDiscard.nativeMessage": "Dieser Chatentwurf ist noch nicht sicher gespeichert.",
 	"chat.draftDiscard.stay": "Bleiben",
 	"chat.draftDiscard.leaveAnyway": "Trotzdem verlassen",
+	"chat.promptSuggestion.description": "Vorschlag für die nächste Nachricht: {{prompt}}. Mit Tab übernehmen oder mit Escape verwerfen.",
 	"chat.edit.abandonRecovery": "Bearbeitungswiederherstellung aufgeben",
 	"chat.welcome.heading": "Woran möchten Sie arbeiten?",
 	"chat.mcpNotice.unavailable_one": "{{names}} konnte nicht starten. Der Agent macht ohne weiter.",

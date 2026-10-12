@@ -2590,6 +2590,7 @@
 	"chat.draftDiscard.nativeMessage": "This Chat draft is not safely saved yet.",
 	"chat.draftDiscard.stay": "Stay",
 	"chat.draftDiscard.leaveAnyway": "Leave anyway",
+	"chat.promptSuggestion.description": "Suggested next message: {{prompt}}. Press Tab to use it, or Escape to dismiss.",
 	"chat.edit.abandonRecovery": "Abandon edit recovery",
 	"chat.welcome.heading": "What do you want to work on?",
 	"chat.mcpNotice.unavailable_one": "{{names}} didn’t start. Continuing without it.",
