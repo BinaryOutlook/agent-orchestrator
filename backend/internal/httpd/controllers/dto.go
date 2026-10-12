@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
@@ -390,6 +391,10 @@ type SessionArtifactView struct {
 	// one. Set for every kind, unlike PreviewURL (html only, meant for
 	// Browser navigation rather than a raw fetch).
 	RawURL string `json:"rawUrl,omitempty"`
+	// InlineURL frames this page inside the chat thread, from its own origin:
+	// its files load same-origin there, but the daemon refuses that origin, so
+	// unlike PreviewURL the page cannot call the daemon. HTML only.
+	InlineURL string `json:"inlineUrl,omitempty"`
 }
 
 // ListSessionsResponse is the body of GET /api/v1/sessions.
@@ -408,7 +413,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code"`
 	Branch          string                 `json:"branch,omitempty"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
@@ -987,9 +992,10 @@ type InterfaceTransitionNoticeAckResponse struct {
 
 // KillSessionResponse is the body of POST /api/v1/sessions/{sessionId}/kill.
 type KillSessionResponse struct {
-	OK        bool             `json:"ok"`
-	SessionID domain.SessionID `json:"sessionId"`
-	Freed     bool             `json:"freed,omitempty"`
+	OK             bool             `json:"ok"`
+	SessionID      domain.SessionID `json:"sessionId"`
+	Freed          bool             `json:"freed,omitempty"`
+	CleanupPending bool             `json:"cleanupPending,omitempty"`
 }
 
 // RollbackSessionResponse is the body of POST /api/v1/sessions/{sessionId}/rollback.
@@ -1048,7 +1054,7 @@ type DelegateTaskRequest struct {
 	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
 	ProjectID       domain.ProjectID    `json:"projectId"`
 	Brief           string              `json:"brief" maxLength:"16384"`
-	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness,fake"`
+	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,fake"`
 	Model           string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
@@ -1363,6 +1369,29 @@ type SetActivityResponse struct {
 	OK        bool             `json:"ok"`
 	SessionID domain.SessionID `json:"sessionId"`
 	State     string           `json:"state"`
+}
+
+// CodewhaleLifecycleWebhookRequest is Codewhale v0.10's lifecycle webhook
+// envelope. The thread id is process-local correlation, not the durable saved
+// conversation UUID used for restore.
+type CodewhaleLifecycleWebhookRequest struct {
+	At    time.Time               `json:"at,omitempty"`
+	Event CodewhaleLifecycleEvent `json:"event"`
+}
+
+// CodewhaleLifecycleEvent is the provider-owned RuntimeEventEnvelope nested in
+// a lifecycle webhook delivery.
+type CodewhaleLifecycleEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	Sequence      uint64    `json:"seq"`
+	Event         string    `json:"event"`
+	Kind          string    `json:"kind" enum:"session.started,turn.started,turn.completed,turn.failed,turn.interrupted,turn.stalled,session.ended,subagent.spawned,subagent.completed"`
+	ThreadID      string    `json:"thread_id"`
+	TurnID        string    `json:"turn_id,omitempty"`
+	ItemID        *string   `json:"item_id,omitempty"`
+	Timestamp     time.Time `json:"timestamp,omitempty"`
+	CreatedAt     time.Time `json:"created_at,omitempty"`
+	Payload       any       `json:"payload,omitempty"`
 }
 
 // SetReviewActivityRequest is the body of POST /api/v1/reviews/{reviewSessionID}/activity.
@@ -2293,6 +2322,8 @@ type MobileStatusResponse struct {
 	Enabled bool `json:"enabled"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`
+	// NoPublicTunnel means the user disabled the managed public connector.
+	NoPublicTunnel bool `json:"noPublicTunnel"`
 	// Endpoints is every way the phone can reach this daemon, in the client's
 	// preference order. The phone races them; Host/TailscaleHost below are the
 	// head of each kind, kept for the existing renderer.
@@ -2433,9 +2464,19 @@ type SendConversationMessageRequest struct {
 	Text string `json:"text"`
 	// ClientMessageID makes delivery idempotent. A retry carrying the same value
 	// must not produce a second provider turn.
-	ClientMessageID string                               `json:"clientMessageId,omitempty"`
-	Attachments     []ConversationImageContentRequest    `json:"attachments,omitempty"`
-	Resources       []ConversationResourceContentRequest `json:"resources,omitempty"`
+	ClientMessageID string                                `json:"clientMessageId,omitempty"`
+	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
+	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
+	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
+}
+
+// ConversationExcerptReferenceRequest attaches verified selected transcript
+// text to the next message.
+type ConversationExcerptReferenceRequest struct {
+	ConversationID string `json:"conversationId"`
+	MessageID      string `json:"messageId"`
+	Revision       int64  `json:"revision"`
+	Text           string `json:"text"`
 }
 
 // ConversationImageContentRequest is a native raster image prompt block.
@@ -2535,6 +2576,14 @@ type ConversationContentSummaryResponse struct {
 	MIMEType string `json:"mimeType,omitempty"`
 	URI      string `json:"uri,omitempty"`
 	Name     string `json:"name,omitempty"`
+	// Text is exposed only for verified chat excerpts, so the timeline can show
+	// what the user referred to without exposing internal resource URIs.
+	Text string `json:"text,omitempty"`
+	// SourceMessageID and SourceRevision let the renderer navigate back to the
+	// verified transcript message without exposing the internal excerpt URI.
+	SourceConversationID string `json:"sourceConversationId,omitempty"`
+	SourceMessageID      string `json:"sourceMessageId,omitempty"`
+	SourceRevision       int64  `json:"sourceRevision,omitempty"`
 }
 
 // EditConversationMessageResponse identifies the newly selected branch and its
@@ -2774,7 +2823,10 @@ type ConversationMessageResponse struct {
 	SenderSessionID   string                               `json:"senderSessionId,omitempty"`
 	SenderProjectID   string                               `json:"senderProjectId,omitempty"`
 	SenderDisplayName string                               `json:"senderDisplayName,omitempty"`
-	EditAvailable     bool                                 `json:"editAvailable"`
+	// ClientMessageID echoes the sender's idempotency key so a client can match its
+	// local echo to this row without comparing text or clocks.
+	ClientMessageID string `json:"clientMessageId,omitempty"`
+	EditAvailable   bool   `json:"editAvailable"`
 	// Streaming is true while more deltas are expected for this message.
 	Streaming bool   `json:"streaming"`
 	CreatedAt string `json:"createdAt"`
@@ -3030,6 +3082,72 @@ type ConversationTurnIDParam struct {
 	TurnID string `path:"turnId" description:"AO conversation turn identifier, from the snapshot's turns array."`
 }
 
+// PublishRenderRequest is a self-contained HTML page an agent shows inline in
+// its chat thread.
+type PublishRenderRequest struct {
+	HTML   string `json:"html" description:"A complete, self-contained HTML document, at most 25 MiB."`
+	Title  string `json:"title" description:"Short name for the page."`
+	Height int    `json:"height,omitempty" description:"First-paint frame height in CSS pixels, clamped to 80-2000; the frame then fits the page."`
+	// Artifact keeps the page as a session artifact too. A failed save does not fail the publish.
+	Artifact bool `json:"artifact,omitempty" description:"Also keep the page as a session artifact, a deliverable the user keeps."`
+}
+
+// PublishRenderResponse names the stored page and the timeline row showing it.
+type PublishRenderResponse struct {
+	RenderID      string `json:"renderId"`
+	ActivityID    string `json:"activityId"`
+	Path          string `json:"path"`
+	ArtifactPath  string `json:"artifactPath,omitempty" description:"With artifact: the absolute path of the kept page."`
+	ArtifactError string `json:"artifactError,omitempty" description:"With artifact: why the page was not kept. The page is still published."`
+}
+
+// SaveRenderArtifactRequest keeps a published render as a session artifact.
+type SaveRenderArtifactRequest struct {
+	Title string `json:"title" minLength:"1" maxLength:"200" description:"Name for the file. Characters a file system refuses are replaced."`
+}
+
+// SaveRenderArtifactResponse names the file the render was kept as.
+type SaveRenderArtifactResponse struct {
+	Path string `json:"path" description:"The file, relative to the session's artifact directory."`
+	Name string `json:"name"`
+}
+
+// RenderCheckRequest is a page an agent wants to see before it publishes it.
+type RenderCheckRequest struct {
+	HTML  string `json:"html" description:"A complete, self-contained HTML document, at most 25 MiB."`
+	Width int    `json:"width,omitempty" description:"Viewport width in CSS pixels, 240-1600. Defaults to 720."`
+}
+
+// RenderCheckScreenshot is the page as the desktop app drew it.
+type RenderCheckScreenshot struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data" description:"Base64 PNG."`
+	Width    int    `json:"width" description:"Page width the screenshot shows, in CSS pixels."`
+	Height   int    `json:"height" description:"Page height the screenshot shows, in CSS pixels."`
+	// The desktop app scales a very large image down so it can be handed back.
+	ImageWidth  int `json:"imageWidth,omitempty" description:"PNG width in pixels, when it differs from the page width."`
+	ImageHeight int `json:"imageHeight,omitempty" description:"PNG height in pixels, when it differs from the page height."`
+}
+
+// RenderConsoleMessage is one console line the page wrote while it loaded.
+type RenderConsoleMessage struct {
+	Level string `json:"level" enum:"debug,log,warning,error"`
+	Text  string `json:"text"`
+}
+
+// RenderCheckResponse reports how the page rendered.
+type RenderCheckResponse struct {
+	Screenshot      RenderCheckScreenshot  `json:"screenshot"`
+	ContentHeight   int                    `json:"contentHeight" description:"Height the page needs at this width, in CSS pixels."`
+	ConsoleMessages []RenderConsoleMessage `json:"consoleMessages"`
+	Network         string                 `json:"network" enum:"public,none" description:"Network the page could use. none when the agent's own sandbox has no network, so remote resources did not load."`
+}
+
+// RenderIDParam names a published render.
+type RenderIDParam struct {
+	RenderID string `path:"renderId" description:"Render identifier returned when the page was published."`
+}
+
 // ConversationBranchIDParam names one durable provider-thread branch.
 type ConversationBranchIDParam struct {
 	BranchID string `path:"branchId" description:"Conversation branch identifier, from a snapshot branch navigation point."`
@@ -3198,4 +3316,85 @@ type MuteDeviceRequest struct {
 // routes.
 type InstallIDParam struct {
 	InstallID string `path:"installId" description:"The device's stable install id."`
+}
+
+// CreateConversationSideChatRequest opens an independent launch-scoped side chat.
+type CreateConversationSideChatRequest struct {
+	ForceNew       bool                                 `json:"forceNew,omitempty"`
+	Label          string                               `json:"label,omitempty" maxLength:"80"`
+	IdempotencyKey string                               `json:"idempotencyKey"`
+	Reference      *ConversationExcerptReferenceRequest `json:"reference,omitempty"`
+}
+
+// CreateConversationSideChatResponse identifies a side without activating it.
+type CreateConversationSideChatResponse struct {
+	Side domain.SideConversation `json:"side"`
+}
+
+// SendSideQuestionRequest carries a side question and its references.
+type SendSideQuestionRequest struct {
+	Text            string                                `json:"text"`
+	ClientMessageID string                                `json:"clientMessageId"`
+	References      []ConversationExcerptReferenceRequest `json:"references,omitempty"`
+	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
+	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
+}
+
+// SideQuestionResponse returns an accepted side question.
+type SideQuestionResponse struct {
+	Turn domain.SideTurn `json:"turn"`
+}
+
+// SideChatSnapshotResponse returns a side conversation snapshot.
+type SideChatSnapshotResponse struct {
+	Snapshot domain.SideSnapshot `json:"snapshot"`
+}
+
+// SideChatListResponse lists side conversations for a main chat.
+type SideChatListResponse struct {
+	Sides []domain.SideConversation `json:"sides"`
+}
+
+// SideSettingsRequest updates model settings for a side chat.
+type SideSettingsRequest struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
+}
+
+// SideDraftRequest saves a launch-scoped side draft.
+type SideDraftRequest struct {
+	ContentJSON string `json:"contentJson"`
+}
+
+// SideDraftResponse returns a launch-scoped side draft.
+type SideDraftResponse struct {
+	ContentJSON string `json:"contentJson"`
+}
+
+// SideChatIDParam identifies a side chat in a route.
+type SideChatIDParam struct {
+	SideID string `path:"sideId" description:"Independent side chat identifier."`
+}
+
+// SideChatPageQuery controls side transcript pagination.
+type SideChatPageQuery struct {
+	Before string `query:"before,omitempty" description:"Read side turns older than this RFC3339 timestamp."`
+	Limit  *int   `query:"limit,omitempty" minimum:"1" maximum:"500"`
+}
+
+// SideChatLaunchClaimRequest claims a desktop launch for side chat recovery.
+type SideChatLaunchClaimRequest struct {
+	AppRunID string `json:"appRunId"`
+}
+
+// SideChatLaunchState carries the side state retained by Electron for recovery.
+type SideChatLaunchState struct {
+	Numbers  map[domain.SessionID]int     `json:"numbers,omitempty"`
+	AppRunID string                       `json:"appRunId"`
+	Sides    []chatsvc.SideRecoveryRecord `json:"sides"`
+}
+
+// SideLabelRequest renames a side conversation.
+type SideLabelRequest struct {
+	Label string `json:"label"`
 }

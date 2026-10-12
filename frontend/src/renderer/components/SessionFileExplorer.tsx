@@ -264,7 +264,7 @@ export function SessionFileExplorer({
 	// The picker is hidden until it has something to choose: no review scopes or
 	// commits (nothing changed) and no PR listed, e.g. while an active PR's
 	// summary is still loading — the Workspace button stays the way back.
-	const showSourcePicker = sourceMenu !== null || showBranchMenu;
+	const showSourcePicker = source.kind !== "artifact" && (sourceMenu !== null || showBranchMenu);
 	const currentSourceLabel = sourceOptions.find((option) => option.value === sourceValue)?.label;
 	const selectSource = (value: string) => {
 		setSourceNotice("");
@@ -273,6 +273,7 @@ export function SessionFileExplorer({
 		setSelectedPRCommit(null);
 		if (value === "workspace") {
 			setFilesSource(uiKey, WORKSPACE_SOURCE);
+			if (revealRequest?.source === "artifact") onRevealHandled?.(revealRequest.key);
 			return;
 		}
 		const pr = prSummaries.find((candidate) => candidate.url === value);
@@ -285,7 +286,7 @@ export function SessionFileExplorer({
 	// Docked with nothing to pick or review, the header would hold only the
 	// maximize button (the filter lives in the top bar), so it floats over the
 	// tree's top-right corner instead of reserving an empty row above it.
-	const floatingHeader = !showSourcePicker && Boolean(filesTopbarHost) && !showChanges && !splitView && !hasViewTabs;
+	const floatingHeader = source.kind === "workspace" && !showSourcePicker && Boolean(filesTopbarHost) && !showChanges && !splitView && !hasViewTabs;
 	// In the preview + tree split the (already active) All-files tab doubles as
 	// the tree toggle, so the header doesn't carry two file-tree buttons.
 	const allFilesTabLabel = !showChanges && splitView ? (treeOpen ? t("files.hideFileTree") : t("files.showFileTree")) : t("files.allFiles");
@@ -310,16 +311,16 @@ export function SessionFileExplorer({
 			    the split draws its divider on the content below instead.
 			    The trailing actions sit 4px from the right edge with 4px gaps, the same
 			    as the pinned top-bar buttons above them and the review rows below. */}
-			<header className={floatingHeader ? "absolute right-0 top-0 z-10 flex items-center gap-1 pr-1 pt-1" : "flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-1"}>
+			<header className={floatingHeader ? "absolute right-0 top-0 z-10 flex items-center gap-1 pr-1 pt-1" : "flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-2"}>
 				{/* One dropdown for "what am I reviewing", laid out like a VCS review
 				    picker: working scopes at the top, then Commits › and Branch ›
 				    flyouts (Branch = Workspace or a PR). */}
 				{/* -ml-2 cancels the trigger's own 8px inline padding so its label
 				    starts on the same 12px gutter as the context row's text below. */}
-				{/* While a PR is shown, Workspace sits before the picker as the way back;
-				    on the workspace itself the trigger already names it. It keys off the
-				    source alone, so it stays reachable while the PR list loads or fails. */}
-				{source.kind === "pull_request" ? (
+				{/* While a PR or an artifact is shown, Workspace sits before the picker as
+				    the way back; on the workspace itself the trigger already names it. It
+				    keys off the source alone, so it stays reachable while the PR list loads or fails. */}
+				{source.kind !== "workspace" ? (
 					<Button className="-ml-2 h-control-md shrink-0 text-xs" onClick={() => selectSource("workspace")} size="sm" type="button" variant="ghost">
 						{t("files.explorer.workspaceSource")}
 					</Button>
@@ -329,7 +330,7 @@ export function SessionFileExplorer({
 					<DropdownMenuTrigger asChild>
 						<SettingsMenuTrigger
 							aria-label={t("files.explorer.source")}
-							className={cn(source.kind !== "pull_request" && "-ml-2", "h-control-md min-w-0 max-w-72 shrink text-xs")}
+							className={cn(source.kind === "workspace" && "-ml-2", "h-control-md min-w-0 max-w-72 shrink text-xs")}
 							title={currentSourceLabel}
 						>
 							<span className="min-w-0 truncate">{currentSourceLabel}</span>

@@ -1,3 +1,4 @@
+import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
@@ -51,6 +52,7 @@ import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
+import { ProjectTerminationFeedback } from "./ShellTopbar";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts, useHasAppMemory } from "./SessionMemoryPanel";
@@ -194,6 +196,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
 		void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
 	}, [navigate, hostId]);
+	const openSessionArtifact = useCallback((session: WorkspaceSession, path: string) => {
+		useUiStore.getState().requestWorkspaceFileOpen(session.id, path, hostId, "artifact");
+		openSession(session);
+	}, [openSession, hostId]);
 
 	const restartOrchestrator = async () => {
 		if (!projectId || isProjectRestarting || isProvisioning) return;
@@ -223,6 +229,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 
 	const actions = projectId && (!hostId || connected) ? (
 		<>
+			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
 			{boardOwnsNotificationCenter ? (
 				<>
@@ -233,6 +240,13 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	) : boardOwnsNotificationCenter ? (
 		<NotificationCenter />
 	) : undefined;
+
+	if (projectId && (isProvisioning || projectActions.isSpawning)) {
+		return <OrchestratorStartingChat
+			cloud={workspace?.kind === CLOUD_PROJECT_KIND}
+			coderWorkspaceUrl={workspace?.sessions.find((session) => session.kind === "orchestrator")?.cloud?.coderWorkspaceUrl}
+		/>;
+	}
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-host-id={hostId} data-project-id={projectId}>
@@ -325,6 +339,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								memory={memoryBySession?.get(session.id)}
 								memoryTone={chipToneOf(session)}
 								onOpen={() => openSession(session)}
+								onOpenArtifact={(path) => openSessionArtifact(session, path)}
 								onTerminate={!hostId || connected ? () => terminateSession.mutate(session) : undefined}
 								session={session}
 								usage={usageBySession.get(session.id)}

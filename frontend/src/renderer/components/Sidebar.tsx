@@ -1,9 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import {
 	DndContext,
+	KeyboardSensor,
 	PointerSensor,
 	closestCenter,
 	useSensor,
@@ -11,7 +13,7 @@ import {
 	type Modifier,
 	type DragEndEvent,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
 	AlertTriangle,
@@ -36,6 +38,7 @@ import {
 	Trash2,
 	User,
 	X,
+	ArrowLeft,
 } from "lucide-react";
 import {
 	useCallback,
@@ -123,7 +126,10 @@ import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
+import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { applyOrder } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog } from "./SessionArchiveDialog";
@@ -204,6 +210,11 @@ function useReorderSensors() {
 	return useSensors(
 		useSensor(PointerSensor, {
 			activationConstraint: { distance: REORDER_ACTIVATION_DISTANCE },
+		}),
+		// Space-only start so Enter keeps opening the row.
+		useSensor(KeyboardSensor, {
+			coordinateGetter: sortableKeyboardCoordinates,
+			keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
 		}),
 	);
 }
@@ -291,18 +302,6 @@ function reorderById(ids: string[], activeId: string, overId: string): string[] 
 	return next;
 }
 
-function applyOrder<T>(items: readonly T[], idOf: (item: T) => string, order: readonly string[], unplaced: "start" | "end"): T[] {
-	if (order.length === 0) return [...items];
-	const byId = new Map(items.map((item) => [idOf(item), item]));
-	const placed = order.flatMap((id) => {
-		const item = byId.get(id);
-		return item ? [item] : [];
-	});
-	const placedIds = new Set(order);
-	const rest = items.filter((item) => !placedIds.has(idOf(item)));
-	return unplaced === "start" ? [...rest, ...placed] : [...placed, ...rest];
-}
-
 function useGrabbingCursor(active: boolean) {
 	useEffect(() => {
 		if (!active) return;
@@ -316,7 +315,7 @@ function useGrabbingCursor(active: boolean) {
  *  must keep their open/closed and Show more state while it is hidden. */
 const SIDEBAR_COLLAPSIBLE: "offcanvas" | "icon" = "offcanvas";
 export const SIDEBAR_DEFAULT_WIDTH = 240;
-/** Floor/ceiling for sidebar resize — pass the same values to useResizable AND ResizeHandle. */
+/** Floor/ceiling for sidebar resize — pass the same values to useResizable. */
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_BRAND_TRAILING_GAP = 12;
@@ -469,6 +468,7 @@ function AnimatedSectionBody({ open, children, className }: { open: boolean; chi
 	);
 }
 const expandedProjectsStorageKey = "ao.sidebar.expanded-projects";
+const projectOrderStorageKey = "ao.sidebar.project-order";
 
 function readExpandedProjectIds(): ReadonlySet<string> {
 	if (typeof window === "undefined" || !window.localStorage) return new Set();
@@ -525,7 +525,7 @@ function useSelection() {
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
 	const goConnectMobile = useCallback(() => openGlobalSettings("mobile"), [openGlobalSettings]);
-	const goSettings = useCallback((projectId: string) => openProjectSettings(projectId), [openProjectSettings]);
+	const goSettings = useCallback((projectId: string, cloudOrgId?: string) => openProjectSettings(projectId, { cloudOrgId }), [openProjectSettings]);
 	const goProject = useCallback(
 		(projectId: string) => void navigate({ to: "/projects/$projectId", params: { projectId } }),
 		[navigate],
@@ -633,6 +633,7 @@ export function Sidebar({
 	// rendered outside the shell (unit tests) — the mirror simply doesn't render.
 	const daemonStatus = useShellMaybe()?.daemonStatus ?? null;
 	const commandPaletteEnabled = useCommandPaletteEnabled();
+	const settingsPage = useSettingsPage();
 	const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const existingProjectPaths = useMemo(
 		() => workspaces
@@ -692,6 +693,47 @@ export function Sidebar({
 	const [projectsOpen, setProjectsOpen] = useState(true);
 	const [scratchpadOpen, setScratchpadOpen] = useState(true);
 
+	// Keyboard navigation (⌘⇧[ / ⌘⇧], ⌘1-9, attention jumps) can land on a row
+	// that is scrolled out, in a collapsed project or inside a closed section.
+	// Open whatever hides the active session, then scroll its row into view.
+	// Only a change of session triggers this, so a project the user collapses
+	// while staying on a session is left alone.
+	const activeSessionKey = selection.activeSessionId ?? selection.activeRemoteSessionId;
+	const activeProjectKey = selection.activeProjectId;
+	useEffect(() => {
+		if (!activeSessionKey || isCollapsed) return;
+		if (activeProjectKey) {
+			setExpandedIds((prev) => {
+				if (prev.has(activeProjectKey)) return prev;
+				const next = new Set(prev);
+				next.add(activeProjectKey);
+				window.localStorage?.setItem(expandedProjectsStorageKey, JSON.stringify([...next]));
+				return next;
+			});
+		}
+		let frame = 0;
+		let attempts = 0;
+		const reveal = () => {
+			const row = document.querySelector<HTMLElement>(
+				"[data-slot='sidebar-container'] [data-session-row] button[aria-current='page']",
+			);
+			if (row) {
+				row.scrollIntoView?.({ block: "nearest" });
+				return;
+			}
+			// Not rendered yet: its section may be closed. Open them all once, then retry.
+			if (attempts === 0) {
+				setPinnedOpen(true);
+				setProjectsOpen(true);
+				setScratchpadOpen(true);
+			}
+			if (attempts++ < 3) frame = requestAnimationFrame(reveal);
+		};
+		frame = requestAnimationFrame(() => requestAnimationFrame(reveal));
+		return () => cancelAnimationFrame(frame);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [activeSessionKey]);
+
 	// agent-orchestrator's sidebar resize: drag the right edge (200-420px,
 	// persisted), double-click to reset to 240px. Drives --ao-sidebar-w on :root,
 	// only to the two layout consumers and fixed titlebar strip, rather than
@@ -707,13 +749,6 @@ export function Sidebar({
 			resizeAuxiliaryTargetRef?.current ?? null,
 		];
 	}, [resizeAuxiliaryTargetRef]);
-	// Stable getter — ResizeHandle keeps callbacks in refs; an inline arrow would
-	// rebuild observers on every Sidebar render (daemon ticks / activity).
-	const getSidebarBorderElement = useCallback(
-		() =>
-			resizeScopeRef.current?.querySelector<HTMLElement>('[data-slot="sidebar-container"]') ?? null,
-		[],
-	);
 	const {
 		onPointerDown: onResizePointerDown,
 		onCollapsedPointerDown: onCollapsedResizePointerDown,
@@ -730,11 +765,30 @@ export function Sidebar({
 		onExpand: () => setOpen(true),
 	});
 
-	const [projectOrder, setProjectOrder] = useState<string[]>([]);
+	const [projectOrder, setProjectOrder] = useState<string[]>(() => {
+		try {
+			const saved: unknown = JSON.parse(window.localStorage.getItem(projectOrderStorageKey) ?? "null");
+			if (Array.isArray(saved)) return [...new Set(saved.filter((id): id is string => typeof id === "string"))];
+		} catch {}
+		return workspaces.map((workspace) => workspace.id);
+	});
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(projectOrderStorageKey, JSON.stringify(projectOrder));
+		} catch {}
+		useSidebarOrderStore.getState().setProjectOrder(projectOrder);
+	}, [projectOrder]);
 	const orderedWorkspaces = useMemo(
-		() => applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "end"),
+		() => applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "start"),
 		[projectOrder, workspaces],
 	);
+	// Keep saved IDs through the initial empty query and alphabetical refreshes.
+	const visibleProjectIds = orderedWorkspaces.map((workspace) => workspace.id);
+	const nextProjectOrder = [...visibleProjectIds, ...projectOrder.filter((id) => !visibleProjectIds.includes(id))];
+	if (nextProjectOrder.length !== projectOrder.length || nextProjectOrder.some((id, index) => id !== projectOrder[index])) {
+		setProjectOrder(nextProjectOrder);
+	}
+
 	// The ad hoc group is a bucket for projectless sessions, not a project: it
 	// gets its own Scratchpad section below the project list rather than a
 	// project row appended to the end of it.
@@ -939,6 +993,10 @@ export function Sidebar({
 				</Tooltip>
 			</SidebarHeader>
 
+			{settingsPage ? (
+				<SettingsSidebarNav layer={settingsPage} />
+			) : (
+			<>
 			{/* Keep Search + section chrome fixed above the scrollable sidebar content. */}
 			<div className="flex shrink-0 flex-col gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
 				{commandPaletteEnabled ? (
@@ -1134,6 +1192,8 @@ export function Sidebar({
 					</SidebarGroupContent>
 				</SidebarGroup>
 			</SidebarContent>
+			</>
+			)}
 
 			{/* Footer — Settings opens the global settings page directly.
 			    Footer rows share NAV_ROW height so Settings, Connect mobile,
@@ -1149,6 +1209,35 @@ export function Sidebar({
 						daemon {daemonStatus.state}
 					</span>
 				)}
+				{settingsPage ? (
+					<>
+						<UpdateStatusRow
+							availableDismissed={updateDismissal.dismissed}
+							onDismissAvailable={updateDismissal.dismiss}
+							status={updateStatus}
+							tabIndex={isCollapsed ? -1 : 0}
+						/>
+						<UpdateInstallSlide
+							availableDismissed={updateDismissal.dismissed}
+							onRequestInstall={openUpdateInstallPrompt}
+							status={updateStatus}
+							tabIndex={isCollapsed ? -1 : 0}
+						/>
+						<button
+							className={FOOTER_NAV_BUTTON_CLASS}
+							disabled={settingsPage.cueBusy}
+							onClick={settingsPage.close}
+							type="button"
+						>
+							<NavRowHighlight />
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+								<ArrowLeft aria-hidden="true" />
+								<span className="tracking-tight">{t("settings.back")}</span>
+							</span>
+						</button>
+					</>
+				) : (
+				<>
 				<div
 					aria-hidden={isCollapsed || undefined}
 					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
@@ -1246,13 +1335,13 @@ export function Sidebar({
 						<TooltipContent side="right">{t("shell.settings")}</TooltipContent>
 					</Tooltip>
 				</div>
+				</>
+				)}
 			</SidebarFooter>
 
-			{/* Grip follows the painted sidebar-container edge; useResizable owns clamp. */}
+			{/* useResizable owns clamp. */}
 			<ResizeHandle
 				className="group-data-[state=collapsed]:hidden"
-				getBorderElement={getSidebarBorderElement}
-				getObserveElements={getResizeTargets}
 				onDoubleClick={onResizeDoubleClick}
 				onPointerDown={onResizePointerDown}
 				side="right"
@@ -1316,7 +1405,7 @@ const ProjectItem = memo(function ProjectItem({
 		workspace.sessions.some(
 			(session) => session.id === selection.activeSessionId && session.kind === "orchestrator",
 		);
-	const projectActive = dashboardActive || orchestratorActive;
+
 	const queryClient = useQueryClient();
 	const [removeError, setRemoveError] = useState<string | null>(null);
 	const [isRemoving, setIsRemoving] = useState(false);
@@ -1333,6 +1422,7 @@ const ProjectItem = memo(function ProjectItem({
 	}, []);
 	const projectKey = sessionUiKey(workspace.id, workspace.hostId);
 	const isProjectProvisioning = useUiStore((state) => state.provisioningProjectIds.has(projectKey));
+	const projectActive = dashboardActive || orchestratorActive || (activeProjectMatches && isProjectProvisioning);
 	const isProjectRestarting = useUiStore((state) => state.restartingProjectIds.has(projectKey));
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
@@ -1349,6 +1439,12 @@ const ProjectItem = memo(function ProjectItem({
 		() => applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"),
 		[sessionOrder, visibleSessions],
 	);
+	// Publish the order shown here so keyboard navigation follows it.
+	useEffect(() => {
+		const sessionIds = sessions.map((session) => session.id);
+		useSidebarOrderStore.getState().setSessionOrder(projectKey, sessionIds);
+		return () => useSidebarOrderStore.getState().clearSessionOrder(projectKey);
+	}, [projectKey, sessions]);
 	const {
 		listed: listedSessions,
 		hiddenCount: hiddenSessionCount,
@@ -1398,7 +1494,7 @@ const ProjectItem = memo(function ProjectItem({
 	// Expand a collapsed project so opening the orchestrator also reveals its
 	// session list — otherwise the tree stays shut while you're inside it.
 	const openOrchestrator = async () => {
-		if (isProjectProvisioning || isProjectRestarting) return;
+		if (isSpawning || isProjectProvisioning || isProjectRestarting) return;
 		if (!expanded) toggleDisclosure();
 		if (onOpenOrchestrator) {
 			onOpenOrchestrator();
@@ -1409,8 +1505,13 @@ const ProjectItem = memo(function ProjectItem({
 			if (canResumeOrchestrator && workspace.kind !== "cloud") {
 				setIsSpawning(true);
 				try {
-					await resumeOrchestrator(orchestrator.id);
+					// Start the resume, then open the chat while it runs; its
+					// composer shows the startup shimmer in the meantime.
+					const resume = resumeOrchestrator(orchestrator.id);
+					selection.goSession(workspace.id, orchestrator.id);
+					await resume;
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+					return;
 				} catch (err) {
 					console.error("Failed to resume orchestrator:", err);
 					showGlobalToast(
@@ -1443,7 +1544,7 @@ const ProjectItem = memo(function ProjectItem({
 			return;
 		}
 		if (!hasConfiguredOrchestratorAgent(workspace)) {
-			selection.goSettings(workspace.id);
+					selection.goSettings(workspace.id, workspace.cloudOrgId);
 			return;
 		}
 		setIsSpawning(true);
@@ -1528,7 +1629,7 @@ const ProjectItem = memo(function ProjectItem({
 					data-host-id={workspace.hostId}
 					data-sidebar="menu-item"
 					data-slot="sidebar-menu-item"
-					initial={{ opacity: 0, y: -4 }}
+					initial={false}
 					animate={{ opacity: 1, y: 0 }}
 					exit={{ opacity: 0, y: -4, transition: { duration: prefersReducedMotion ? 0 : 0.12, ease: "easeIn" } }}
 					onDragOver={(event) => onProjectDragOver(event, workspace.id)}
@@ -1632,6 +1733,7 @@ const ProjectItem = memo(function ProjectItem({
 									aria-expanded={expanded}
 									className="absolute inset-y-0 left-0 z-10 w-9 cursor-pointer bg-transparent group-data-[collapsible=icon]:hidden"
 									data-project-folder=""
+									tabIndex={-1}
 									onClick={onFolderClick}
 									type="button"
 								/>
@@ -1700,7 +1802,7 @@ const ProjectItem = memo(function ProjectItem({
 											<Plus aria-hidden="true" />
 											{t("shell.newTask")}
 										</DropdownMenuItem>
-										<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id)}>
+						<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 											<Settings aria-hidden="true" />
 											{t("shell.projectSettings")}
 										</DropdownMenuItem>
@@ -1818,7 +1920,7 @@ const ProjectItem = memo(function ProjectItem({
 					<Plus aria-hidden="true" />
 					{t("shell.newTask")}
 				</ContextMenuItem>
-				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id)}>
+				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 					<Settings aria-hidden="true" />
 					{t("shell.projectSettings")}
 				</ContextMenuItem>}
@@ -1864,6 +1966,13 @@ function ScratchpadSection({
 		() => applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"),
 		[sessionOrder, visibleSessions],
 	);
+	// Publish the order shown here so keyboard navigation follows it.
+	const scratchpadKey = sessionUiKey(workspace.id, workspace.hostId);
+	useEffect(() => {
+		const sessionIds = sessions.map((session) => session.id);
+		useSidebarOrderStore.getState().setSessionOrder(scratchpadKey, sessionIds);
+		return () => useSidebarOrderStore.getState().clearSessionOrder(scratchpadKey);
+	}, [scratchpadKey, sessions]);
 	const {
 		listed: listedSessions,
 		hiddenCount: hiddenSessionCount,
@@ -2110,7 +2219,6 @@ function SessionReorderList({
 		if (!over) {
 			setListDragging(false);
 			setDropTransitionDisabledId(null);
-			if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
 			return;
 		}
 		// reorderById rejects any id that is not in THIS list, so a stray
@@ -2125,13 +2233,11 @@ function SessionReorderList({
 			setDropTransitionDisabledId(sessionId);
 		});
 		requestAnimationFrame(() => setDropTransitionDisabledId(null));
-		if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
 	}, [dragClickGuard, onReorder, sessionIds]);
 
 	const onDragCancel = useCallback(() => {
 		setListDragging(false);
 		setDropTransitionDisabledId(null);
-		if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
 	}, []);
 
 	if (plain) {
@@ -2356,6 +2462,7 @@ function SessionRow({
 								onOpen();
 							}}
 							onKeyDown={(event) => {
+								reorder?.listeners?.onKeyDown?.(event);
 								if (event.key !== "F2") return;
 								event.preventDefault();
 								beginRename();
@@ -2609,7 +2716,11 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { cloudEnabled } = useCloudGate();
 	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
+	// The plan badge is self-serve billing only; a contract org has no plan to show.
+	const billing = useCloudBilling();
+	const plan = billing.offering.selfServeBilling ? paidPlanBadge(billing.data) : null;
 	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
+	const name = accountName(session?.user);
 
 	return (
 		<DropdownMenu>
@@ -2620,14 +2731,18 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 					})}
 					className={FOOTER_NAV_BUTTON_CLASS}
 					tabIndex={tabIndex}
+					title={session?.user.email}
 					type="button"
 				>
 					<NavRowHighlight />
 					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
-						<User aria-hidden="true" />
-						<span className="min-w-0 flex-1 truncate tracking-tight">
-							{session?.user.email ?? "AO Cloud"}
-						</span>
+						<AccountAvatar user={session?.user} />
+						<span className="min-w-0 truncate tracking-tight">{name}</span>
+						{plan ? (
+							<span className="shrink-0 rounded-full bg-[var(--color-status-working)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
+								{plan}
+							</span>
+						) : null}
 					</span>
 				</button>
 			</DropdownMenuTrigger>
@@ -2641,6 +2756,40 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
+	);
+}
+
+/** The signed-in person's name, falling back to their email. */
+function accountName(user: { displayName?: string; email?: string } | undefined): string {
+	const display = user?.displayName?.trim();
+	if (display && display !== user?.email) return display;
+	return user?.email ?? "AO Cloud";
+}
+
+/** The profile picture from the sign-in provider, or the person's initials. */
+function AccountAvatar({ user }: { user: { displayName?: string; email?: string; avatarUrl?: string } | undefined }) {
+	const [broken, setBroken] = useState(false);
+	if (user?.avatarUrl && !broken) {
+		return (
+			<img
+				src={user.avatarUrl}
+				alt=""
+				aria-hidden="true"
+				referrerPolicy="no-referrer"
+				className="size-icon-md shrink-0 rounded-full object-cover"
+				onError={() => setBroken(true)}
+			/>
+		);
+	}
+	const source = accountName(user);
+	const initials = source.includes("@")
+		? source.charAt(0).toUpperCase()
+		: source.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join("");
+	if (!initials) return <User aria-hidden="true" />;
+	return (
+		<span aria-hidden="true" className="grid size-icon-md shrink-0 place-items-center rounded-full bg-[var(--color-bg-tertiary)] text-[length:var(--font-size-xs)] font-medium leading-none text-settings-label">
+			{initials}
+		</span>
 	);
 }
 
@@ -2666,7 +2815,7 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 				>
 					<NavRowHighlight />
 					<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
-						<User aria-hidden="true" />
+						<AccountAvatar user={session?.user} />
 					</span>
 				</button>
 			</TooltipTrigger>
@@ -3146,6 +3295,7 @@ function SectionDisclosure({
  * (NavRowHighlight pill, foreground text, instant) cannot drift apart. */
 function SidebarTopNavRow({
 	active = false,
+	disabled,
 	icon,
 	label,
 	onClick,
@@ -3153,6 +3303,7 @@ function SidebarTopNavRow({
 	trailing,
 }: {
 	active?: boolean;
+	disabled?: boolean;
 	icon: ReactNode;
 	label: string;
 	onClick: () => void;
@@ -3169,6 +3320,8 @@ function SidebarTopNavRow({
 				"transition-none",
 				"group-data-[collapsible=icon]:size-control-board! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-lg group-data-[collapsible=icon]:p-0!",
 			)}
+			aria-current={active ? "page" : undefined}
+			disabled={disabled}
 			isActive={active}
 			onClick={onClick}
 			tooltip={tooltip}
@@ -3184,6 +3337,27 @@ function SidebarTopNavRow({
 				</span>
 			) : null}
 		</SidebarMenuButton>
+	);
+}
+
+/** Settings sections in place of the project tree while the settings page is open. */
+export function SettingsSidebarNav({ layer }: { layer: NonNullable<ReturnType<typeof useSettingsPage>> }) {
+	const { t } = useTranslation();
+	return (
+		<SidebarContent className="scrollbar-none gap-0 px-2">
+			<SidebarGroup className="p-0">
+				<SidebarGroupContent>
+					<SidebarMenu aria-label={t("settings.navSectionsAria")} className="gap-0.5" role="navigation">
+						{layer.navItems.map(({ id, label, icon: Icon, active, disabled, onSelect }) => (
+							<SidebarMenuItem key={id}>
+								<SidebarTopNavRow active={active} disabled={disabled} icon={<Icon aria-hidden="true" />} label={label} onClick={onSelect} tooltip={label} />
+							</SidebarMenuItem>
+						))}
+					</SidebarMenu>
+				</SidebarGroupContent>
+				<SettingsSaveStatus />
+			</SidebarGroup>
+		</SidebarContent>
 	);
 }
 

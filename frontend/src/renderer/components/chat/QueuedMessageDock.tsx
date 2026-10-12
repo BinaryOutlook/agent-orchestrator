@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { flushSync } from "react-dom";
 import {
 	DndContext,
+	KeyboardSensor,
 	PointerSensor,
 	closestCenter,
 	type DragEndEvent,
@@ -10,7 +11,7 @@ import {
 	useSensor,
 	useSensors,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -18,7 +19,12 @@ import type { ConversationMessage } from "../../types/conversation";
 import { useTranslation } from "react-i18next";
 import { labelInlineImages } from "./messageAttachments";
 
-export type QueuedMessage = { turnId: string; message: ConversationMessage };
+export type QueuedMessage = {
+	turnId: string;
+	message: ConversationMessage;
+	/** Sent but not yet confirmed by the daemon: shown at once, with no actions until it has a turn id. */
+	pending?: boolean;
+};
 
 const QUEUE_DOCK_VISIBLE_ROWS = 5;
 const REORDER_ACTIVATION_DISTANCE = 4;
@@ -339,6 +345,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		useSensor(PointerSensor, {
 			activationConstraint: { distance: REORDER_ACTIVATION_DISTANCE },
 		}),
+		useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
 	);
 
 	const runAction = useCallback(
@@ -370,7 +377,11 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		() => new Map(visibleMessages.map((message) => [message.turnId, message])),
 		[visibleMessages],
 	);
-	const fifoTurnIds = useMemo(() => visibleMessages.map(({ turnId }) => turnId), [visibleMessages]);
+	const pendingMessages = useMemo(() => visibleMessages.filter((entry) => entry.pending), [visibleMessages]);
+	const fifoTurnIds = useMemo(
+		() => visibleMessages.filter((entry) => !entry.pending).map(({ turnId }) => turnId),
+		[visibleMessages],
+	);
 	const defaultDisplayTurnIds = useMemo(() => [...fifoTurnIds].reverse(), [fifoTurnIds]);
 	const displayTurnIds = useMemo(() => {
 		if (!displayOrder) return defaultDisplayTurnIds;
@@ -380,15 +391,18 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		return [...ordered, ...missing];
 	}, [defaultDisplayTurnIds, displayOrder, fifoTurnIds]);
 	const displayMessages = useMemo(
-		() =>
-			displayTurnIds.flatMap((turnId) => {
+		() => [
+			// Newest first, like the rest of the dock: a pending send is the newest of all.
+			...[...pendingMessages].reverse(),
+			...displayTurnIds.flatMap((turnId) => {
 				const message = messagesByTurnId.get(turnId);
 				return message ? [message] : [];
 			}),
-		[displayTurnIds, messagesByTurnId],
+		],
+		[displayTurnIds, messagesByTurnId, pendingMessages],
 	);
 	const reorderEnabled =
-		Boolean(onReorderQueuedTurns) && count > 1 && isOpen;
+		Boolean(onReorderQueuedTurns) && fifoTurnIds.length > 1 && isOpen;
 	const nextQueuedTurnId = fifoTurnIds[0];
 
 	const suppressHoverSteer = useCallback(() => {
@@ -612,13 +626,15 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 									isOpen && count >= QUEUE_DOCK_VISIBLE_ROWS && "queue-dock-scroll-active",
 								)}
 							>
-								{displayMessages.map(({ turnId, message }, index) => {
+								{displayMessages.map(({ turnId, message, pending }, index) => {
 									const busy =
 										disabled || promotePendingTurnId === turnId || cancelPendingTurnId === turnId;
 									const isNextQueuedTurn = turnId === nextQueuedTurnId;
 									return (
 										<SortableQueuedMessageRow
-											key={turnId}
+											// The send's own id outlives the swap from pending to confirmed, so the
+											// row stays mounted instead of replaying its entrance.
+											key={message.clientMessageId ?? turnId}
 											turnId={turnId}
 											message={message}
 											hiddenFromView={!isOpen && index !== displayMessages.length - 1}
@@ -628,8 +644,16 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											error={errors[turnId]}
 											isReordering={isReordering}
 											onRowHoverChange={setHoveredTurnId}
-											reorderEnabled={reorderEnabled && !busy}
+											reorderEnabled={reorderEnabled && !busy && !pending}
 											{...rowProps}
+											{...(pending
+												? {
+														canSteer: false,
+														onPromoteQueuedTurn: undefined,
+														onBeginQueuedEdit: undefined,
+														onCancelQueuedTurn: undefined,
+													}
+												: null)}
 										/>
 									);
 								})}
