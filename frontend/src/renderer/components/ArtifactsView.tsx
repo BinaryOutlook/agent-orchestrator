@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Copy, ExternalLink, File, FileText, Folder, Globe, Loader2, Search } from "lucide-react";
+import { ChevronDown, Copy, ExternalLink, File, FileText, Folder, Globe, Loader2, Plus, Search } from "lucide-react";
 import { ScrollArea } from "radix-ui";
 import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -47,6 +47,7 @@ export function ArtifactsView() {
 		[groups, projectFilter, query],
 	);
 	const hasArtifacts = artifactCount(groups) > 0;
+	const createArtifact = useCreateArtifactSession();
 	const clearFilters = () => {
 		setQuery("");
 		setProjectFilter(ALL_PROJECTS);
@@ -84,6 +85,15 @@ export function ArtifactsView() {
 								))}
 							</SelectContent>
 						</Select>
+						<CreateArtifactMenu
+							workspaces={workspaces ?? []}
+							create={createArtifact.create}
+							pending={createArtifact.pending}
+							label="new"
+							align="end"
+							className="h-control-md"
+							disabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
+						/>
 					</div>
 				) : null}
 			</header>
@@ -215,9 +225,6 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const { agentReady, create, pending } = useCreateArtifactSession();
-	const projects = workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== CLOUD_PROJECT_KIND && !workspace.hostId,
-	);
 
 	if (!agentReady) {
 		return (
@@ -234,30 +241,75 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 		<div className="flex flex-col items-center gap-1 py-24 text-center">
 			<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.empty.title")}</h2>
 			<p className="max-w-72 text-xs text-muted-foreground">{t("artifacts.empty.description")}</p>
-			<DropdownMenu>
-				<DropdownMenuTrigger asChild>
-					<Button size="sm" className="mt-3" disabled={pending} aria-busy={pending}>
-						{pending ? (
-							<Loader2 aria-hidden="true" className="size-icon-sm animate-spin text-status-working motion-reduce:animate-none" />
-						) : null}
-						{pending ? t("artifacts.creating") : t("artifacts.create")}
-						{pending ? null : <ChevronDown aria-hidden="true" className="size-icon-sm" />}
-					</Button>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent align="center" className="min-w-56">
-					<DropdownMenuItem onSelect={() => void create()}>
-						<File aria-hidden="true" className="size-icon-sm" />
-						{t("standalone.workspaceName")}
-					</DropdownMenuItem>
-					{projects.length > 0 ? <DropdownMenuSeparator /> : null}
-					{projects.map((project) => (
-						<DropdownMenuItem key={project.id} onSelect={() => void create(project.id)}>
-							<Folder aria-hidden="true" className="size-icon-sm" />
-							<span className="truncate">{project.name}</span>
-						</DropdownMenuItem>
-					))}
-				</DropdownMenuContent>
-			</DropdownMenu>
+			<CreateArtifactMenu workspaces={workspaces} create={create} pending={pending} className="mt-3" align="center" />
 		</div>
+	);
+}
+
+/**
+ * The Create artifact trigger and its Scratchpad / project menu. The empty
+ * state and the list header share it so both start the same session.
+ */
+function CreateArtifactMenu({
+	workspaces,
+	create,
+	pending,
+	label = "create",
+	align,
+	className,
+	disabledReason,
+}: {
+	workspaces: readonly WorkspaceSummary[];
+	create: (projectId?: string) => Promise<void>;
+	pending: boolean;
+	label?: "create" | "new";
+	align: "center" | "end";
+	className?: string;
+	disabledReason?: string;
+}) {
+	const { t } = useTranslation();
+	const projects = workspaces.filter(
+		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== CLOUD_PROJECT_KIND && !workspace.hostId,
+	);
+	const trigger = (
+		<Button size="sm" className={className} disabled={pending || Boolean(disabledReason)} aria-busy={pending}>
+			{pending ? (
+				<Loader2 aria-hidden="true" className="size-icon-sm animate-spin text-status-working motion-reduce:animate-none" />
+			) : label === "new" ? (
+				<Plus aria-hidden="true" className="size-icon-sm" />
+			) : null}
+			{pending ? t("artifacts.creating") : label === "new" ? t("artifacts.new") : t("artifacts.create")}
+			{pending || label === "new" ? null : <ChevronDown aria-hidden="true" className="size-icon-sm" />}
+		</Button>
+	);
+	if (disabledReason) {
+		return (
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span tabIndex={0} className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+						{trigger}
+					</span>
+				</TooltipTrigger>
+				<TooltipContent>{disabledReason}</TooltipContent>
+			</Tooltip>
+		);
+	}
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+			<DropdownMenuContent align={align} className="min-w-56">
+				<DropdownMenuItem onSelect={() => void create()}>
+					<File aria-hidden="true" className="size-icon-sm" />
+					{t("standalone.workspaceName")}
+				</DropdownMenuItem>
+				{projects.length > 0 ? <DropdownMenuSeparator /> : null}
+				{projects.map((project) => (
+					<DropdownMenuItem key={project.id} onSelect={() => void create(project.id)}>
+						<Folder aria-hidden="true" className="size-icon-sm" />
+						<span className="truncate">{project.name}</span>
+					</DropdownMenuItem>
+				))}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }

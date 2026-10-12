@@ -185,6 +185,28 @@ describe("ArtifactsView", () => {
 		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-1" } });
 	});
 
+	it("offers New artifact beside the filters with the same Scratchpad and project menu", async () => {
+		const user = userEvent.setup();
+		mocks.post.mockResolvedValue({ data: { session: { id: "standalone-7" } } });
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "New artifact" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Scratchpad", "agent-orchestrator"]);
+		await user.click(screen.getByRole("menuitem", { name: "Scratchpad" }));
+
+		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-7" } }));
+		expect(mocks.post).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { kind: "worker", outputKind: "artifact", displayName: "New artifact", harness: "codex" },
+		});
+	});
+
+	it("disables New artifact when no agent is ready", () => {
+		mocks.agents = [{ ...codexReady, installation: { state: "not_installed", freshness: "fresh" } }];
+		renderView();
+
+		expect(screen.getByRole("button", { name: "New artifact" })).toBeDisabled();
+	});
+
 	it("shows one Create artifact action and no filters when nothing exists", async () => {
 		const user = userEvent.setup();
 		mocks.workspaces = withoutArtifacts;

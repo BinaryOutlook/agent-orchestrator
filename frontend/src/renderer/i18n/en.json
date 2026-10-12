@@ -2457,6 +2457,7 @@
 	"artifacts.empty.title": "Create your first artifact",
 	"artifacts.empty.description": "Artifacts are pages and documents an agent writes for you. Pick where the session should live.",
 	"artifacts.create": "Create artifact",
+	"artifacts.new": "New artifact",
 	"artifacts.creating": "Creating",
 	"artifacts.createError": "Unable to start the artifact session",
 	"artifacts.newSessionName": "New artifact",
