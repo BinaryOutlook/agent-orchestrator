@@ -159,7 +159,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 			m.hostStopped[side.ID] = record.HostStopped
 			m.closed[side.ID] = true
 			if side.ProviderForkID != "" {
-				m.cleanup[side.ProviderForkID] = domain.SideProviderCleanup{ForkID: side.ProviderForkID, SessionID: side.SessionID}
+				m.cleanup[side.ProviderForkID] = domain.SideProviderCleanup{ForkID: side.ProviderForkID, SessionID: side.SessionID, Harness: side.Harness}
 			}
 			continue
 		}
@@ -230,7 +230,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		}
 		m.drafts[side.ID] = record.Draft
 		if side.ProviderForkID != "" {
-			m.cleanup[side.ProviderForkID] = domain.SideProviderCleanup{ForkID: side.ProviderForkID, SessionID: side.SessionID}
+			m.cleanup[side.ProviderForkID] = domain.SideProviderCleanup{ForkID: side.ProviderForkID, SessionID: side.SessionID, Harness: side.Harness}
 		}
 		created = append(created, side)
 	}
@@ -396,7 +396,7 @@ func (m *memorySideStore) RegisterSideFork(_ context.Context, id, generation, pr
 	return m.updateSide(id, generation, func(s *domain.SideConversation) {
 		s.ProviderForkID = providerID
 		s.UpdatedAt = now
-		m.cleanup[providerID] = domain.SideProviderCleanup{ForkID: providerID, SessionID: s.SessionID}
+		m.cleanup[providerID] = domain.SideProviderCleanup{ForkID: providerID, SessionID: s.SessionID, Harness: s.Harness}
 	})
 }
 func (m *memorySideStore) SetSideFailed(_ context.Context, id, generation, message string, now time.Time) error {

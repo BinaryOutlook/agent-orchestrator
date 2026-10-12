@@ -31,7 +31,7 @@ func TestSideCleanupPreservesOpenForkUntilClosed(t *testing.T) {
 				t.Fatal(err)
 			}
 			side := domain.SideConversation{PolicyVersion: 1, ID: "side", SessionID: "session", MainConversationID: "main",
-				AppRunID: "run", ProviderHostID: "btw-run-side", Generation: "g", State: "opening"}
+				AppRunID: "run", ProviderHostID: "btw-run-side", Generation: "g", State: "opening", Harness: domain.HarnessClaudeCode}
 			if _, _, err := store.CreateSideConversation(ctx, side); err != nil {
 				t.Fatal(err)
 			}
@@ -56,14 +56,20 @@ func TestSideCleanupPreservesOpenForkUntilClosed(t *testing.T) {
 				svc.sides.store = fresh
 			}
 			conv := &sideCleanupTestConversation{}
-			svc.controllers[side.SessionID] = &Controller{conv: conv}
+			svc.controllers[side.SessionID] = &Controller{conv: conv, harness: domain.HarnessClaudeCode}
 			svc.sides.retryCleanup()
 			if len(conv.deleted) != 0 {
 				t.Fatalf("cleanup deleted an open fork: %v", conv.deleted)
 			}
+			svc.controllers[side.SessionID].harness = domain.HarnessCodex
 			if err := svc.CloseIndependentSideChat(ctx, side.SessionID, side.ID); err != nil {
 				t.Fatal(err)
 			}
+			svc.sides.retryCleanup()
+			if len(conv.deleted) != 0 {
+				t.Fatal("deleted a registered fork through a different harness")
+			}
+			svc.controllers[side.SessionID].harness = domain.HarnessClaudeCode
 			svc.sides.retryCleanup()
 			if len(conv.deleted) != 1 || conv.deleted[0] != "fork" {
 				t.Fatalf("closed fork deletions = %v, want [fork]", conv.deleted)

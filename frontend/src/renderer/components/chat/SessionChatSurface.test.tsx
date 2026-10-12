@@ -1204,7 +1204,6 @@ describe("side command routing", () => {
 	it.each([
 		["side chats are off", { developerMode: true, sideChats: false }, "codex"],
 		["Developer mode is off", { developerMode: false, sideChats: true }, "codex"],
-		["the harness cannot run sides", { developerMode: true, sideChats: true }, "cursor"],
 	] as const)("sends /btw to the main chat when %s", async (_case, flags, provider) => {
 		useUiStore.setState(flags);
 		sideMocks.create.mockReset();

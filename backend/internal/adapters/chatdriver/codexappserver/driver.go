@@ -142,10 +142,11 @@ func capabilities() ports.ChatCapabilities {
 		// is advertised despite thread/rollback carrying a DEPRECATED annotation:
 		// what the installed provider does is the only honest answer, and gating the
 		// feature off while the call still works would take undo away for no reason.
-		ports.ChatCapabilityRollback: true,
-		ports.ChatCapabilityFork:     true,
-		ports.ChatCapabilityRename:   true,
-		ports.ChatCapabilitySkills:   true,
+		ports.ChatCapabilityRollback:    true,
+		ports.ChatCapabilityFork:        true,
+		ports.ChatCapabilityForkCurrent: true,
+		ports.ChatCapabilityRename:      true,
+		ports.ChatCapabilitySkills:      true,
 		// config/mcpServer/reload plus the status inventory read after it, both
 		// exercised against a live app-server.
 		ports.ChatCapabilityMCPReload: true,
@@ -738,8 +739,8 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 
 // ForkIntoHost starts an inclusive native fork in an independent provider host.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
-	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
-		return nil, errors.New("source thread and completed turn are required")
+	if sourceProviderConversationID == "" {
+		return nil, errors.New("source thread is required")
 	}
 	if !filepath.IsAbs(cfg.WorkspacePath) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
@@ -757,11 +758,13 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"threadId":          sourceProviderConversationID,
-		"lastTurnId":        conv.nativeID(lastProviderTurnID),
 		"cwd":               cfg.WorkspacePath,
 		"approvalPolicy":    policy,
 		"approvalsReviewer": reviewer,
 		"sandbox":           sandbox,
+	}
+	if lastProviderTurnID != "" {
+		params["lastTurnId"] = conv.nativeID(lastProviderTurnID)
 	}
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
@@ -787,9 +790,9 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 		_ = conv.Terminate()
 		return nil, fmt.Errorf("thread/fork in side host: %w", err)
 	}
-	if resp.Thread.ID == "" {
+	if resp.Thread.ID == "" || resp.Thread.ID == sourceProviderConversationID {
 		_ = conv.Terminate()
-		return nil, errors.New("thread/fork returned no thread id")
+		return nil, errors.New("thread/fork returned no independent thread id")
 	}
 	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
 	return conv, nil

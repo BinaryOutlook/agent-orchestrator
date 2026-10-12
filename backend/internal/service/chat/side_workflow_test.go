@@ -47,6 +47,11 @@ func newSideWorkflow(t *testing.T, mode string, harnesses ...domain.AgentHarness
 	if len(harnesses) > 0 {
 		harnessType = harnesses[0]
 	}
+	if harnessType == domain.HarnessCodex {
+		caps := productionCaps()
+		caps[ports.ChatCapabilityFork] = true
+		main.setCapabilities(caps)
+	}
 	changed := &changedExcerptStore{Store: st, mode: mode}
 	var ids atomic.Int64
 	svc := chatsvc.New(chatsvc.Options{Store: changed, Reader: fullSnapshotReader(st), Sessions: st, Drivers: fakeRegistry{driver: driver}, AppRunID: "workflow", NewID: func() string { return fmt.Sprintf("workflow-%d", ids.Add(1)) }})

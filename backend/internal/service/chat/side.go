@@ -358,6 +358,11 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if record.IsTerminated {
 		return domain.SideConversation{}, ErrSideUnavailable
 	}
+	source, release, err := s.workingController(ctx, id)
+	if err != nil {
+		return domain.SideConversation{}, err
+	}
+	defer release()
 	gate := s.controllerGate(domain.SessionConversationOwner(id))
 	if err := gate.lock(ctx); err != nil {
 		return domain.SideConversation{}, err
@@ -372,15 +377,12 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 			return side, nil
 		}
 	}
-	source, err := s.Controller(id)
-	if err != nil {
-		return domain.SideConversation{}, err
-	}
 	cfg, driver, err := s.branchLaunchConfig(source)
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
-	if err := validateSideProvider(cfg.Harness); err != nil {
+	caps := source.Capabilities()
+	if err := validateSideProvider(caps); err != nil {
 		return domain.SideConversation{}, err
 	}
 	anchor, nativeAnchor, _, err := s.resolveSideAnchor(ctx, source, nil)
@@ -398,8 +400,12 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 			return domain.SideConversation{}, err
 		}
 	}
+	_, isolatedFork := driver.(ports.ChatIsolatedForker)
+	nativeAtTurn := isolatedFork && caps.Has(ports.ChatCapabilityFork)
+	nativeCurrent := isolatedFork && caps.Has(ports.ChatCapabilityForkCurrent) &&
+		s.sideCurrentAnchor(ctx, source, anchor)
 	seedHistory := ""
-	if source.harness != domain.HarnessCodex {
+	if !nativeAtTurn && !nativeCurrent {
 		seedHistory, err = s.sideSeedHistory(ctx, source, anchor)
 		if err != nil {
 			return domain.SideConversation{}, err
@@ -412,8 +418,11 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if resolver, ok := source.conv.(ports.ChatNativeTurnID); ok {
 		nativeAnchor = resolver.NativeTurnID(nativeAnchor)
 	}
-	if anchor != "" && source.harness == domain.HarnessCodex && nativeAnchor == "" {
+	if anchor != "" && nativeAtTurn && nativeAnchor == "" {
 		return domain.SideConversation{}, ErrSideAnchorUnavailable
+	}
+	if !nativeAtTurn {
+		nativeAnchor = ""
 	}
 	idNew := s.newID()
 	label := strings.TrimSpace(req.Label)
@@ -457,7 +466,7 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	}
 	if anchor == "" {
 		side.ContextMode = "fresh"
-	} else if source.harness == domain.HarnessCodex {
+	} else if nativeAtTurn || nativeCurrent {
 		side.ContextMode = "native"
 	} else {
 		side.ContextMode = "reconstructed"
@@ -481,7 +490,11 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 		s.sides.announce(result.ID)
 	}
 	if created {
-		go s.sides.open(result, source, cfg, driver)
+		releaseOpen := source.beginOperation()
+		go func() {
+			defer releaseOpen()
+			s.sides.open(result, source, cfg, driver)
+		}()
 		s.sides.announce(result.ID)
 	}
 	return result, nil
@@ -600,13 +613,9 @@ func (s *Service) validateSideReferences(ctx context.Context, session domain.Ses
 	return result, nil
 }
 
-func (m *sideManager) open(side domain.SideConversation, _ *Controller, cfg StartConfig, driver ports.ChatDriver) {
+func (m *sideManager) open(side domain.SideConversation, source *Controller, cfg StartConfig, driver ports.ChatDriver) {
 	if side.PolicyVersion != sidePolicyVersion {
 		m.failOpen(side, ErrSidePolicyRecreate)
-		return
-	}
-	if err := validateSideProvider(cfg.Harness); err != nil {
-		m.failOpen(side, err)
 		return
 	}
 	m.mu.Lock()
@@ -637,17 +646,21 @@ func (m *sideManager) open(side domain.SideConversation, _ *Controller, cfg Star
 	var providerID string
 	var err error
 	var conv ports.ChatConversation
-	if side.NativeAnchorID != "" && side.Harness == domain.HarnessCodex {
+	if side.ContextMode == "native" {
 		if forker, ok := driver.(ports.ChatIsolatedForker); ok {
 			anchor := side.NativeAnchorID
-
-			conv, err = forker.ForkIntoHost(ctx, side.SourceProviderID, anchor, ports.ChatStartConfig{
+			forkConfig := ports.ChatStartConfig{
 				SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
 				WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 				Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
 				ProviderScopeID: side.ID, ProviderIDsScoped: true,
 				AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
-			})
+			}
+			if anchor == "" {
+				conv, err = m.service.forkCurrentSide(ctx, side, source, forker, forkConfig)
+			} else {
+				conv, err = forker.ForkIntoHost(ctx, side.SourceProviderID, anchor, forkConfig)
+			}
 			if err == nil {
 				providerID = conv.ProviderConversationID()
 			}
@@ -798,11 +811,6 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 	cfg, driver, err := m.service.sideLaunchConfig(side)
 	if err != nil {
 		m.service.log.Warn("side restore: main controller unavailable", "side", side.ID, "error", err)
-		return
-	}
-	if err := validateSideProvider(cfg.Harness); err != nil {
-		m.failOpen(side, err)
-		connected = true
 		return
 	}
 	conv, err := driver.Resume(ctx, ports.ChatResumeConfig{
@@ -1829,11 +1837,18 @@ func (m *sideManager) deleteRegisteredFork(ctx context.Context, side domain.Side
 	if err != nil {
 		return
 	}
+	if side.Harness != "" && source.harness != side.Harness {
+		return
+	}
 	deleter, ok := source.conv.(ports.ChatForkDeleter)
 	if !ok {
 		return
 	}
 	if err := deleter.DeleteFork(ctx, id); err != nil {
+		if errors.Is(err, ports.ErrChatCapabilityUnavailable) {
+			// Keep the owned id for cleanup if a provider upgrade adds deletion.
+			return
+		}
 		m.service.log.Warn("side provider cleanup deferred", "side", side.ID, "error", err)
 		return
 	}
@@ -1880,7 +1895,7 @@ func (m *sideManager) retryCleanup() {
 		return
 	}
 	for _, item := range items {
-		m.deleteRegisteredFork(ctx, domain.SideConversation{SessionID: item.SessionID}, item.ForkID)
+		m.deleteRegisteredFork(ctx, domain.SideConversation{SessionID: item.SessionID, Harness: item.Harness}, item.ForkID)
 	}
 }
 
