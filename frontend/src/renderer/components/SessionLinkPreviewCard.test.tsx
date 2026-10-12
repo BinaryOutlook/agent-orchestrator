@@ -188,6 +188,10 @@ describe("artifactExcerpt", () => {
 		expect(artifactExcerpt("html", html)).toBe("Q3 plan\nShip links");
 	});
 
+	it("drops a markdown file's frontmatter block", () => {
+		expect(artifactExcerpt("markdown", "---\nname: Plan\ndescription: Q3\n---\n# Plan\nBody")).toBe("# Plan\nBody");
+	});
+
 	it("truncates long text", () => {
 		const excerpt = artifactExcerpt("markdown", "a".repeat(1000));
 		expect(excerpt.length).toBe(481);
@@ -212,6 +216,19 @@ describe("ArtifactLinkPreviewCard", () => {
 		expect(screen.getByText("plan.md")).toBeInTheDocument();
 		expect(await screen.findByText(/Ship artifact links\./)).toBeInTheDocument();
 		expect(mocks.artifactFile).toHaveBeenCalledWith("plans/plan.md");
+	});
+
+	it("shows a markdown artifact's frontmatter name and description above its body", async () => {
+		const worker = session({ artifactFiles: [artifact()] });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
+		mocks.artifactFile.mockResolvedValue({ binary: false, content: "---\nname: Q3 plan\ndescription: \"What ships next quarter\"\ntags: [a]\n---\n# Plan\nShip artifact links." });
+
+		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/plans/plan.md" />);
+
+		expect(await screen.findByText("Q3 plan")).toBeInTheDocument();
+		expect(screen.getByText("What ships next quarter")).toBeInTheDocument();
+		expect(screen.getByText(/Ship artifact links\./)).toBeInTheDocument();
+		expect(screen.queryByText(/description:/)).not.toBeInTheDocument();
 	});
 
 	it("reports an artifact the session no longer lists", () => {

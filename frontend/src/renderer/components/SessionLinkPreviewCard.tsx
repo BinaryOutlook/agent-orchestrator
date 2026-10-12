@@ -5,6 +5,7 @@ import type { TFunction } from "i18next";
 import { FileText, Globe, LoaderCircle, Play } from "lucide-react";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { clampPreviewText, parseMarkdownFrontmatter } from "../lib/markdown-frontmatter";
 import { cn } from "../lib/utils";
 import { parseArtifactLink, parseSessionLink } from "../lib/session-links";
 import { getSessionStatusDotView, getSessionStatusView } from "../lib/session-presentation";
@@ -210,6 +211,7 @@ export function SessionLinkPreviewCard({
 }
 
 const ARTIFACT_EXCERPT_CHARS = 480;
+const MARKDOWN_FRONTMATTER = /^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
 
 /** The leading readable text of an artifact, for a hover preview. */
 export function artifactExcerpt(kind: SessionArtifact["kind"], content: string): string {
@@ -220,6 +222,8 @@ export function artifactExcerpt(kind: SessionArtifact["kind"], content: string):
 		const title = document.title.trim();
 		const body = (document.body?.textContent ?? "").replace(/\s+/g, " ").trim();
 		text = title && !body.startsWith(title) ? `${title}\n${body}` : body;
+	} else if (kind === "markdown") {
+		text = content.replace(MARKDOWN_FRONTMATTER, "");
 	}
 	text = text.trim();
 	return text.length > ARTIFACT_EXCERPT_CHARS ? `${text.slice(0, ARTIFACT_EXCERPT_CHARS).trimEnd()}…` : text;
@@ -228,7 +232,11 @@ export function artifactExcerpt(kind: SessionArtifact["kind"], content: string):
 function ArtifactCardBody({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const file = useQuery({ ...sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl), enabled: Boolean(artifact.rawUrl), staleTime: 30_000 });
-	const excerpt = file.data && !file.data.binary ? artifactExcerpt(artifact.kind, file.data.content) : "";
+	const content = file.data && !file.data.binary ? file.data.content : "";
+	const frontmatter = artifact.kind === "markdown" && content ? parseMarkdownFrontmatter(content) : undefined;
+	const title = frontmatter?.name ? clampPreviewText(frontmatter.name) : undefined;
+	const description = frontmatter?.description ? clampPreviewText(frontmatter.description) : undefined;
+	const excerpt = content ? artifactExcerpt(artifact.kind, content) : "";
 	const Icon = artifact.kind === "html" ? Globe : FileText;
 	return (
 		<div className="space-y-2" role="status" aria-label={artifact.name}>
@@ -245,8 +253,18 @@ function ArtifactCardBody({ artifact, session }: { artifact: SessionArtifact; se
 			<div className="border-t border-border pt-2">
 				{file.isLoading ? (
 					<div className="space-y-1.5"><Skeleton className="h-2.5 w-full" /><Skeleton className="h-2.5 w-5/6" /><Skeleton className="h-2.5 w-2/3" /></div>
-				) : excerpt ? (
-					<p className={cn("line-clamp-6 whitespace-pre-wrap break-words text-xs leading-4 text-popover-foreground", artifact.kind === "file" && "font-mono")}>{excerpt}</p>
+				) : title || description || excerpt ? (
+					<div className="space-y-1.5">
+						{title || description ? (
+							<div className="space-y-0.5">
+								{title ? <p className="truncate text-xs font-semibold text-foreground">{title}</p> : null}
+								{description ? <p className="line-clamp-4 break-words text-xs leading-4 text-muted-foreground">{description}</p> : null}
+							</div>
+						) : null}
+						{excerpt ? (
+							<p className={cn("whitespace-pre-wrap break-words text-xs leading-4 text-popover-foreground", title || description ? "line-clamp-3" : "line-clamp-6", artifact.kind === "file" && "font-mono")}>{excerpt}</p>
+						) : null}
+					</div>
 				) : (
 					<p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>
 				)}
