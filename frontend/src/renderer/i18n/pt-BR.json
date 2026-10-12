@@ -2204,6 +2204,8 @@
 	"settings.diagnosticsToggleHint": "Mostra o uso de memória e CPU nos cartões de sessão e no quadro, além da página de Diagnóstico.",
 	"settings.sideChats": "Chats laterais",
 	"settings.sideChatsHint": "Abra conversas laterais separadas no inspetor e use /btw ou /side para fazer uma pergunta.",
+	"settings.windowTranslucency": "Transparência da janela",
+	"settings.windowTranslucencyHint": "Desfoca a área de trabalho atrás da janela do app.",
 	"settings.harness": "Harness",
 	"settings.harness.thisComputer": "Este computador",
 	"settings.harness.remoteBrowserAuthNote": "O login no navegador pode exigir um navegador no host ou encaminhamento da porta de retorno.",

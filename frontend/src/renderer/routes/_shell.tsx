@@ -245,6 +245,7 @@ function ShellLayout() {
 	const themePreference = useUiStore((state) => state.themePreference);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
+	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
@@ -1062,6 +1063,17 @@ function ShellLayout() {
 		});
 		return () => cancelAnimationFrame(frame);
 	}, [resolvedTheme]);
+
+	// macOS window transparency (Developer Mode flag): the shell becomes one
+	// translucent plate over the native vibrancy blur (styles.css, "macOS window
+	// transparency").
+	const windowTranslucent = isMac && developerMode && windowTranslucency;
+	useEffect(() => {
+		if (!isMac) return;
+		if (windowTranslucent) document.documentElement.dataset.windowTranslucent = "true";
+		else delete document.documentElement.dataset.windowTranslucent;
+		void aoBridge.theme?.setWindowTranslucent(windowTranslucent);
+	}, [windowTranslucent]);
 
 	// Follow OS appearance while the user keeps Theme on System — updates
 	// resolvedTheme (and thus React consumers) without writing light/dark to storage.

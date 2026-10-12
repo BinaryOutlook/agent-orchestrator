@@ -409,9 +409,16 @@ function getShellWebContents(): WebContents | null {
 // browser page shows, so the native window background must match it or the
 // gutters around the panels render in the fallback colour.
 let rendererWindowBackground: string | null = null;
+// macOS window transparency: the shell paints translucent surfaces and the
+// native vibrancy material underneath blurs the desktop.
+let windowTranslucent = false;
 
 function syncNativeWindowBackground(): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
+	if (windowTranslucent) {
+		mainWindow.setBackgroundColor("#00000000");
+		return;
+	}
 	mainWindow.setBackgroundColor(
 		rendererWindowBackground ??
 			(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT),
@@ -734,6 +741,13 @@ async function createWindowInternal(): Promise<void> {
 					}
 				: {
 						titleBarStyle: "hiddenInset" as const,
+						// Window transparency: an opaque window keeps Chromium's compositor
+						// opaque, hiding the vibrancy view. Transparent windows still paint
+						// the theme colour via setBackgroundColor unless the Developer Mode
+						// window transparency flag is on.
+						transparent: true,
+						// Keep the window-transparency blur vivid when the window loses focus.
+						visualEffectState: "active" as const,
 						// Center on the shared header; zoom/resize synchronization follows below.
 						trafficLightPosition: { x: MAC_WINDOW_BUTTON_X, y: MAC_TITLEBAR_HEIGHT / 2 - MAC_WINDOW_BUTTON_RADIUS },
 					}),
@@ -2243,7 +2257,15 @@ ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 	}
 });
 
-ipcMain.handle("theme:persist-terminal", (_event, scheme: unknown) => {
+ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
+	if (process.platform !== "darwin" || typeof enabled !== "boolean" || enabled === windowTranslucent) return;
+	if (!mainWindow || mainWindow.isDestroyed()) return;
+	windowTranslucent = enabled;
+	mainWindow.setVibrancy(enabled ? "under-window" : null);
+	syncNativeWindowBackground();
+});
+
+ipcMain.handle("theme:persist-terminal",(_event, scheme: unknown) => {
 	if (scheme === "light" || scheme === "dark") {
 		persistTerminalThemeHint(scheme);
 	}

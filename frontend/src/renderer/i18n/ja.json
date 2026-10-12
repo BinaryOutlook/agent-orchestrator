@@ -2170,6 +2170,8 @@
 	"settings.diagnosticsToggleHint": "セッションカードとボードにメモリと CPU の使用量を表示し、診断ページを表示します。",
 	"settings.sideChats": "サイドチャット",
 	"settings.sideChatsHint": "インスペクターで別のサイド会話を開き、/btw または /side で質問します。",
+	"settings.windowTranslucency": "ウィンドウの透明度",
+	"settings.windowTranslucencyHint": "アプリのウィンドウの背後にあるデスクトップをぼかします。",
 	"settings.harness": "Harness",
 	"settings.harness.thisComputer": "このコンピューター",
 	"settings.harness.remoteBrowserAuthNote": "ブラウザーでのサインインには、ホスト上のブラウザーまたはコールバックポートの転送が必要な場合があります。",

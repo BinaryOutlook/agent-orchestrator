@@ -2170,6 +2170,8 @@
 	"settings.diagnosticsToggleHint": "Speicher- und CPU-Auslastung auf Sitzungskarten und im Board sowie die Diagnoseseite anzeigen.",
 	"settings.sideChats": "Seiten-Chats",
 	"settings.sideChatsHint": "Separate Seitenunterhaltungen im Inspektor öffnen und mit /btw oder /side eine Frage stellen.",
+	"settings.windowTranslucency": "Fenstertransparenz",
+	"settings.windowTranslucencyHint": "Den Desktop hinter dem App-Fenster weichzeichnen.",
 	"settings.harness": "Harness",
 	"settings.harness.thisComputer": "Dieser Computer",
 	"settings.harness.remoteBrowserAuthNote": "Für die Anmeldung im Browser ist möglicherweise ein Browser auf dem Host oder eine Weiterleitung des Callback-Ports erforderlich.",

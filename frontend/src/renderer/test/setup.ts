@@ -143,6 +143,7 @@ if (typeof window !== "undefined") {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
+			setWindowTranslucent: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
