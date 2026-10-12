@@ -1,6 +1,6 @@
 import { parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vitest";
-import { endsAtLastHunk, hydratedCopy, patchIdentity, stableFileDiff } from "./trailingContext";
+import { endsAtLastHunk, hydratedCopy, MAX_STABLE_DIFFS, patchIdentity, stableDiffCacheSize, stableFileDiff } from "./trailingContext";
 
 function parse(path: string, body: string): FileDiffMetadata {
 	const patch = `diff --git a/${path} b/${path}\nindex 1111111..2222222 100644\n--- a/${path}\n+++ b/${path}\n${body}`;
@@ -76,5 +76,20 @@ describe("hydratedCopy", () => {
 		};
 		expect(stableFileDiff(second)).toBe(stableFileDiff(first));
 		expect(hydratedCopy(second, again)).toBe(hydratedCopy(first, files));
+	});
+});
+
+describe("stableFileDiff cache bound", () => {
+	it("stays bounded and keeps recently used diffs stable", () => {
+		const pinned = parse("PINNED.md", appendedAtEnd);
+		stableFileDiff(pinned);
+		for (let version = 0; version < MAX_STABLE_DIFFS * 2; version++) {
+			const churn = parse(`file-${version}.md`, appendedAtEnd);
+			stableFileDiff(churn);
+			// The pinned diff is on screen: it is looked up on every render.
+			if (version % 50 === 0) expect(stableFileDiff(parse("PINNED.md", appendedAtEnd))).toBe(pinned);
+		}
+		expect(stableDiffCacheSize()).toBeLessThanOrEqual(MAX_STABLE_DIFFS);
+		expect(stableFileDiff(parse("PINNED.md", appendedAtEnd))).toBe(pinned);
 	});
 });

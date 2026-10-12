@@ -428,7 +428,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				source = undefined;
 				sourceBaseUrl = baseUrl;
 				try {
-					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/events`);
+					// Start at the newest event. Without a cursor the daemon replays the
+					// whole change_log (up to 100k rows under retention) on every connect,
+					// although onopen already refreshes everything below. The daemon then
+					// sends a cursor id, so the browser's own reconnect replays only the gap.
+					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/events?after=latest`);
 					const connectedSource = source;
 					source.onopen = () => {
 						if (disposed || source !== connectedSource) return;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { APP_LOCALES, coerceLocale, DEFAULT_LOCALE } from "./locales";
-import { createAppI18n, type TranslationCatalogs } from "./instance";
+import { createAppI18n as createBaseAppI18n, loadLocaleCatalog, type TranslationCatalogs } from "./instance";
+import { createFullAppI18n as createAppI18n } from "./all-messages";
 import {
 	deMessages,
 	enMessages,
@@ -10,7 +11,7 @@ import {
 	koMessages,
 	ptBRMessages,
 	zhCNMessages,
-} from "./messages";
+} from "./all-messages";
 
 const allCatalogs = {
 	en: enMessages,
@@ -221,5 +222,15 @@ describe("app i18next instance", () => {
 				}
 			}
 		}
+	});
+});
+
+describe("loadLocaleCatalog", () => {
+	it("loads a lazy locale into an English-only instance before switching", async () => {
+		const instance = createBaseAppI18n("en");
+		expect(instance.getResource("ja", "translation", "settings.general")).toBeUndefined();
+		await loadLocaleCatalog("ja", instance);
+		await instance.changeLanguage("ja");
+		expect(instance.t("settings.general")).toBe(jaMessages["settings.general"]);
 	});
 });

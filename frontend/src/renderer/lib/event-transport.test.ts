@@ -89,7 +89,8 @@ function fakeQueryClient() {
 }
 
 function cdcSources() {
-	return EventSourceStub.instances.filter((source) => source.url.endsWith("/api/v1/events"));
+	// The local stream has no path prefix; remote hosts are mounted under /<host>/.
+	return EventSourceStub.instances.filter((source) => /^http:\/\/127\.0\.0\.1:\d+\/api\/v1\/events\?after=latest$/.test(source.url));
 }
 
 function accountSources() {
@@ -286,7 +287,7 @@ describe("createEventTransport", () => {
 		expect(EventSourceStub.instances).toHaveLength(2);
 		expect(cdcSources()).toHaveLength(1);
 		expect(accountSources()).toHaveLength(1);
-		expect(cdcSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/events");
+		expect(cdcSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
 		expect(accountSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/agents/codex/accounts/events");
 		// All CDC event types plus onmessage are wired up.
 		expect(cdcSources()[0].listeners).toContain("session_updated");
@@ -318,7 +319,7 @@ describe("createEventTransport", () => {
 		expect(firstAccount.closed).toBe(true);
 		expect(cdcSources()).toHaveLength(2);
 		expect(accountSources()).toHaveLength(2);
-		expect(cdcSources()[1].url).toBe("http://127.0.0.1:3099/api/v1/events");
+		expect(cdcSources()[1].url).toBe("http://127.0.0.1:3099/api/v1/events?after=latest");
 	});
 
 	it("does not make a new daemon port serve the dead port's backoff delay", () => {
@@ -725,7 +726,7 @@ describe("createEventTransport", () => {
 			expect(cdcSources()).toHaveLength(1);
 			vi.advanceTimersByTime(5_000);
 			expect(cdcSources()).toHaveLength(2);
-			expect(cdcSources()[1].url).toBe("http://127.0.0.1:3001/api/v1/events");
+			expect(cdcSources()[1].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
 		} finally {
 			vi.useRealTimers();
 		}
@@ -745,7 +746,7 @@ describe("createEventTransport", () => {
 		expect(firstAccount.closed).toBe(true);
 		expect(cdcSources()).toHaveLength(2);
 		expect(accountSources()).toHaveLength(2);
-		expect(cdcSources()[1].url).toBe("http://127.0.0.1:4555/api/v1/events");
+		expect(cdcSources()[1].url).toBe("http://127.0.0.1:4555/api/v1/events?after=latest");
 	});
 
 	it("resets the connection state and unsubscribes on disconnect", () => {
