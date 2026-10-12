@@ -4090,8 +4090,6 @@ export interface components {
             mode: "chat" | "tui";
             model?: string;
             /** @enum {string} */
-            outputKind?: "artifact";
-            /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
             /** Format: date-time */
             pinnedAt?: null | string;
@@ -4104,6 +4102,8 @@ export interface components {
             provisionState?: "provisioning" | "ready" | "failed";
             provisionSteps?: components["schemas"]["SessionProvisionStep"][];
             prs: components["schemas"]["SessionPRFacts"][];
+            /** @enum {string} */
+            requestedOutput?: "artifact";
             reviewerConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
             reviewerHarness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
@@ -5934,11 +5934,11 @@ export interface components {
             /** @enum {string} */
             mode?: "chat" | "tui";
             model?: string;
-            /** @enum {string} */
-            outputKind?: "artifact";
             parentSessionId?: string;
             projectId?: string;
             prompt?: string;
+            /** @enum {string} */
+            requestedOutput?: "artifact";
             /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
         };

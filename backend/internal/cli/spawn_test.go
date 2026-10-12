@@ -541,7 +541,7 @@ func TestSpawnStandaloneOmitsProject(t *testing.T) {
 	}
 }
 
-func TestSpawnOutputArtifactSetsOutputKind(t *testing.T) {
+func TestRequestedOutputArtifactSetsRequestedOutput(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var req map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -564,8 +564,8 @@ func TestSpawnOutputArtifactSetsOutputKind(t *testing.T) {
 	if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--standalone", "--agent", "codex", "--name", "Report", "--output", "artifact"); err != nil {
 		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
 	}
-	if req["outputKind"] != "artifact" {
-		t.Fatalf("outputKind = %#v, want artifact; request=%#v", req["outputKind"], req)
+	if req["requestedOutput"] != "artifact" {
+		t.Fatalf("requestedOutput = %#v, want artifact; request=%#v", req["requestedOutput"], req)
 	}
 }
 

@@ -246,8 +246,8 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 		if got.AgentConfig.Model != "gpt-5.6-sol" {
 			t.Errorf("AgentConfig.Model = %q, want %q (CLI json:\"model\" vs SpawnSessionRequest)", got.AgentConfig.Model, "gpt-5.6-sol")
 		}
-		if got.OutputKind != "artifact" {
-			t.Errorf("OutputKind = %q, want %q (CLI json:\"outputKind\" vs SpawnSessionRequest)", got.OutputKind, "artifact")
+		if got.RequestedOutput != "artifact" {
+			t.Errorf("RequestedOutput = %q, want %q (CLI json:\"requestedOutput\" vs SpawnSessionRequest)", got.RequestedOutput, "artifact")
 		}
 		if !bytes.Contains(out.Bytes(), []byte("spawned session")) {
 			t.Errorf("output missing %q; got: %s", "spawned session", out.String())

@@ -150,7 +150,7 @@ export function toWorkspaceSession(
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
 		outputType: session.outputType,
-		...(session.outputKind ? { outputKind: session.outputKind } : {}),
+		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
@@ -253,7 +253,7 @@ function toLocalWorkspaceSession(
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
 		outputType: session.outputType,
-		...(session.outputKind ? { outputKind: session.outputKind } : {}),
+		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }

@@ -50,7 +50,7 @@ type spawnRequest struct {
 	Branch          string `json:"branch,omitempty"`
 	Prompt          string `json:"prompt,omitempty"`
 	Model           string `json:"model,omitempty"`
-	OutputKind      string `json:"outputKind,omitempty"`
+	RequestedOutput string `json:"requestedOutput,omitempty"`
 	DisplayName     string `json:"displayName"`
 }
 
@@ -172,7 +172,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Branch:          opts.branch,
 				Prompt:          opts.prompt,
 				Model:           strings.TrimSpace(opts.model),
-				OutputKind:      opts.output,
+				RequestedOutput: opts.output,
 				DisplayName:     name,
 			}
 			var res spawnResult

@@ -2162,13 +2162,13 @@ func TestSessionsAPI_OrchestratorRejectsUnknownApprovalMode(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_APPROVAL_MODE")
 }
 
-func TestSessionsAPI_SpawnAcceptsArtifactOutputKind(t *testing.T) {
+func TestSessionsAPI_SpawnAcceptsArtifactRequestedOutput(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		body string
 	}{
-		{name: "project", body: `{"projectId":"ao","kind":"worker","harness":"codex","outputKind":"artifact","displayName":"New artifact"}`},
-		{name: "standalone", body: `{"kind":"worker","harness":"codex","outputKind":"artifact","displayName":"New artifact"}`},
+		{name: "project", body: `{"projectId":"ao","kind":"worker","harness":"codex","requestedOutput":"artifact","displayName":"New artifact"}`},
+		{name: "standalone", body: `{"kind":"worker","harness":"codex","requestedOutput":"artifact","displayName":"New artifact"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := newFakeSessionService()
@@ -2178,14 +2178,14 @@ func TestSessionsAPI_SpawnAcceptsArtifactOutputKind(t *testing.T) {
 			if status != http.StatusCreated {
 				t.Fatalf("status = %d, want 201; body=%s", status, body)
 			}
-			if svc.lastSpawn.OutputKind != domain.SpawnOutputArtifact {
-				t.Fatalf("OutputKind = %q, want artifact", svc.lastSpawn.OutputKind)
+			if svc.lastSpawn.RequestedOutput != domain.RequestedOutputArtifact {
+				t.Fatalf("RequestedOutput = %q, want artifact", svc.lastSpawn.RequestedOutput)
 			}
 		})
 	}
 }
 
-func TestSessionsAPI_SpawnOmittedOutputKindStaysEmpty(t *testing.T) {
+func TestSessionsAPI_SpawnOmittedRequestedOutputStaysEmpty(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
 
@@ -2193,18 +2193,18 @@ func TestSessionsAPI_SpawnOmittedOutputKindStaysEmpty(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", status, body)
 	}
-	if svc.lastSpawn.OutputKind != "" {
-		t.Fatalf("OutputKind = %q, want empty", svc.lastSpawn.OutputKind)
+	if svc.lastSpawn.RequestedOutput != "" {
+		t.Fatalf("RequestedOutput = %q, want empty", svc.lastSpawn.RequestedOutput)
 	}
 }
 
-func TestSessionsAPI_SpawnRejectsUnknownOutputKind(t *testing.T) {
+func TestSessionsAPI_SpawnRejectsUnknownRequestedOutput(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
 
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", `{"projectId":"ao","kind":"worker","harness":"codex","outputKind":"slides"}`)
-	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_OUTPUT_KIND")
-	if svc.lastSpawn.OutputKind != "" || svc.lastSpawn.ProjectID != "" {
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", `{"projectId":"ao","kind":"worker","harness":"codex","requestedOutput":"slides"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_REQUESTED_OUTPUT")
+	if svc.lastSpawn.RequestedOutput != "" || svc.lastSpawn.ProjectID != "" {
 		t.Fatalf("rejected request reached the service: %#v", svc.lastSpawn)
 	}
 }

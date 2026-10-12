@@ -44,7 +44,7 @@ export function useCreateArtifactSession() {
 				const { data, error } = await apiClient.POST("/api/v1/sessions", {
 					body: {
 						kind: "worker",
-						outputKind: "artifact",
+						requestedOutput: "artifact",
 						displayName: t("artifacts.newSessionName"),
 						...(projectId ? { projectId } : {}),
 						...(harness ? { harness: harness as Harness } : {}),

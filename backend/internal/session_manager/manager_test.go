@@ -6046,27 +6046,27 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	}
 }
 
-func TestSystemPrompt_ArtifactOutputKind(t *testing.T) {
+func TestSystemPrompt_ArtifactRequestedOutput(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(), LookPath: lookPath})
 
 	cases := []struct {
-		name       string
-		kind       domain.SessionKind
-		projectID  domain.ProjectID
-		outputKind domain.SpawnOutputKind
-		want       bool
+		name            string
+		kind            domain.SessionKind
+		projectID       domain.ProjectID
+		requestedOutput domain.RequestedOutput
+		want            bool
 	}{
 		{name: "ordinary worker", kind: domain.KindWorker, projectID: "mer"},
-		{name: "artifact worker", kind: domain.KindWorker, projectID: "mer", outputKind: domain.SpawnOutputArtifact, want: true},
-		{name: "artifact standalone worker", kind: domain.KindWorker, outputKind: domain.SpawnOutputArtifact, want: true},
-		{name: "orchestrator ignores artifact", kind: domain.KindOrchestrator, projectID: "mer", outputKind: domain.SpawnOutputArtifact},
+		{name: "artifact worker", kind: domain.KindWorker, projectID: "mer", requestedOutput: domain.RequestedOutputArtifact, want: true},
+		{name: "artifact standalone worker", kind: domain.KindWorker, requestedOutput: domain.RequestedOutputArtifact, want: true},
+		{name: "orchestrator ignores artifact", kind: domain.KindOrchestrator, projectID: "mer", requestedOutput: domain.RequestedOutputArtifact},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sp, err := m.buildSystemPrompt(ctx, tc.kind, tc.projectID, "mer-7", tc.outputKind, true)
+			sp, err := m.buildSystemPrompt(ctx, tc.kind, tc.projectID, "mer-7", tc.requestedOutput, true)
 			if err != nil {
 				t.Fatalf("buildSystemPrompt: %v", err)
 			}
@@ -6080,14 +6080,14 @@ func TestSystemPrompt_ArtifactOutputKind(t *testing.T) {
 	}
 }
 
-func TestSystemPrompt_ArtifactOutputKindWithoutArtifactDir(t *testing.T) {
+func TestSystemPrompt_ArtifactRequestedOutputWithoutArtifactDir(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	// No DataDir: artifactPrompt has no directory to name.
 	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", domain.SpawnOutputArtifact, false)
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", domain.RequestedOutputArtifact, false)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -6106,7 +6106,7 @@ func TestSpawnWorker_ArtifactOutputRequiresArtifactDir(t *testing.T) {
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, OutputKind: domain.SpawnOutputArtifact})
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, RequestedOutput: domain.RequestedOutputArtifact})
 	if !errors.Is(err, ErrArtifactOutputUnavailable) {
 		t.Fatalf("Spawn err = %v, want ErrArtifactOutputUnavailable", err)
 	}
@@ -6118,19 +6118,19 @@ func TestSpawnWorker_ArtifactOutputRequiresArtifactDir(t *testing.T) {
 	}
 }
 
-func TestSpawnWorker_ArtifactOutputKindPersistsAndReachesPrompt(t *testing.T) {
+func TestSpawnWorker_ArtifactRequestedOutputPersistsAndReachesPrompt(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	agent := &recordingAgent{}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(), LookPath: lookPath})
 
-	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, OutputKind: domain.SpawnOutputArtifact})
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, RequestedOutput: domain.RequestedOutputArtifact})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.OutputKind != domain.SpawnOutputArtifact {
-		t.Fatalf("OutputKind = %q, want artifact", rec.OutputKind)
+	if rec.RequestedOutput != domain.RequestedOutputArtifact {
+		t.Fatalf("RequestedOutput = %q, want artifact", rec.RequestedOutput)
 	}
 	if !strings.Contains(agent.lastLaunch.SystemPrompt, "## Artifact Output") {
 		t.Fatalf("spawn system prompt missing artifact output section:\n%s", agent.lastLaunch.SystemPrompt)
@@ -6145,8 +6145,8 @@ func TestRestore_WorkerKeepsArtifactOutputPrompt(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
-		OutputKind: domain.SpawnOutputArtifact,
-		Metadata:   domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
+		RequestedOutput: domain.RequestedOutputArtifact,
+		Metadata:        domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
 	}
 	agent := &recordingAgent{}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }

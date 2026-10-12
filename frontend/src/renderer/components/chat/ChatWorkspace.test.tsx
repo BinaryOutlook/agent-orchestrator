@@ -1939,7 +1939,7 @@ describe("ChatWorkspace timeline", () => {
 
 	it("offers sample artifact requests in an empty artifact session and fills the composer with one", async () => {
 		const user = userEvent.setup();
-		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, outputKind: "artifact" }} />);
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, requestedOutput: "artifact" }} />);
 
 		expect(screen.getByRole("heading", { name: "What do you want to create?" })).toBeInTheDocument();
 		expect(screen.getByText("Describe the page or document you want")).toBeInTheDocument();
