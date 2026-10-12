@@ -78,6 +78,7 @@ func New(store *Store, clock func() time.Time) *Service {
 // autoPrune is the retention pass a closed run ends with. It writes the summary, and any skip lines, to the run's
 // comment.log when something was deleted or skipped, and never fails the run.
 func (s *Service) autoPrune(ctx context.Context, run Run) {
+	ctx = context.WithoutCancel(ctx)                                     // the client that closed the run may hang up; the disk is freed all the same
 	rep, err := s.prune(ctx, s.keepRuns, s.keepCheckouts, false, run.ID) // this run's dir is kept whatever keepRuns says
 	if err != nil {
 		s.commentLogf(run, "prune failed: %v", err)

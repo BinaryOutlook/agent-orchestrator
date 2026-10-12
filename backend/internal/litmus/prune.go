@@ -150,7 +150,7 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 	}
 	// remove deletes path, or aside when the checkout was already moved there; both are reported as path.
 	remove := func(path, aside string, into *[]string, kind string) {
-		if ctx.Err() != nil {
+		if aside == "" && ctx.Err() != nil { // a dir already moved aside is deleted whatever the context says
 			return
 		}
 		rel, err := withinRoot(root, path)
@@ -177,10 +177,17 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 	// removeCheckout re-reads the runs under the lock and moves the dir aside only if it is still unpinned, so a run
 	// that started since the plan keeps its checkout. The move is instant; the slow delete runs unlocked.
 	removeCheckout := func(d string) {
+		if asideDir(d) { // moved aside by a pass that did not get to delete it: nothing can use it, delete it now
+			remove(d, d, &rep.Checkouts, "checkout")
+			return
+		}
 		if dry {
 			if !s.recentlyUsed(d) {
 				remove(d, "", &rep.Checkouts, "checkout")
 			}
+			return
+		}
+		if ctx.Err() != nil { // never move aside what this pass will not delete
 			return
 		}
 		if _, err := withinRoot(root, d); err != nil { // before anything is moved
@@ -207,9 +214,14 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 		rep.Lines = append(rep.Lines, fmt.Sprintf("skipped checkouts: %d run dirs have no readable run.json (%s), so their commits are unknown", len(unreadable), strings.Join(unreadable, ", ")))
 	} else {
 		repoDirs, _ := filepath.Glob(filepath.Join(root, "repos", "*", "*"))
-		slices.Sort(repoDirs)
+		slices.SortFunc(repoDirs, func(a, b string) int { // dirs left aside go first, so a move never lands on one
+			if x, y := asideDir(a), asideDir(b); x != y {
+				return map[bool]int{true: -1, false: 1}[x]
+			}
+			return strings.Compare(a, b)
+		})
 		for _, d := range repoDirs {
-			if fi, err := os.Lstat(d); err != nil || !fi.IsDir() || plan.holds(d) {
+			if fi, err := os.Lstat(d); err != nil || !fi.IsDir() || (plan.holds(d) && !asideDir(d)) {
 				continue
 			}
 			removeCheckout(d)
@@ -267,9 +279,15 @@ func finishedRun(r Run) bool {
 	return true
 }
 
+// asideDir reports whether a checkout dir was moved aside (<sha>.pruning, possibly several times) by a pass that
+// never got to delete it. No run can use such a dir, so prune deletes it without a pin check or another move.
+func asideDir(dir string) bool {
+	return strings.Contains(filepath.Base(dir), ".pruning")
+}
+
 // shaPinned reports whether a checkout dir (named by full SHA) is a pinned commit; a pinned SHA may be abbreviated.
 func shaPinned(shas map[string]bool, name string) bool {
-	name = strings.TrimSuffix(strings.ToLower(name), ".pruning") // a checkout moved aside by an interrupted pass
+	name = strings.ToLower(name)
 	for sha := range shas {
 		if len(sha) >= 7 && strings.HasPrefix(name, sha) {
 			return true
