@@ -131,6 +131,7 @@ describe("ArtifactsView", () => {
 			expect.stringContaining("pricing.md"),
 		]);
 		expect(project.getByText("Design the Artifacts entry point")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /team/i })).not.toBeInTheDocument();
 	});
 
 	it("searches by file name and session title, then clears filters", async () => {

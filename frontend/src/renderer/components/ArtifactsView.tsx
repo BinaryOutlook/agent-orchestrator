@@ -54,13 +54,12 @@ export function ArtifactsView() {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
-			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 pr-2">
-				<h1 className={showPageTitle ? "truncate text-heading font-semibold leading-none tracking-tight text-foreground" : "sr-only"}>
+			<header className="workspace-topbar-container center-panel-titlebar mt-4 flex h-toolbar shrink-0 items-center justify-between gap-3 pr-8">
+				<h1 className={showPageTitle ? "truncate pl-3.5 text-heading font-semibold leading-none tracking-tight text-foreground" : "sr-only"}>
 					{t("artifacts.title")}
 				</h1>
 				{hasArtifacts ? (
 					<div className="workspace-topbar-actions flex shrink-0 items-center gap-2">
-						<ScopeToggle />
 						<div className="relative">
 							<Search aria-hidden="true" className="pointer-events-none absolute start-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-muted-foreground" />
 							<Input
@@ -91,7 +90,7 @@ export function ArtifactsView() {
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
 					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
-						<div className="px-4 pb-6 pt-2">
+						<div className="px-8 pb-8 pt-3">
 							{workspaceQuery.isLoading ? (
 								<p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("artifacts.loading")}</p>
 							) : workspaceQuery.error ? (
@@ -106,7 +105,7 @@ export function ArtifactsView() {
 									</Button>
 								</div>
 							) : (
-								<div className="flex flex-col gap-5">
+								<div className="flex flex-col gap-6">
 									{visibleGroups.map((group) => (
 										<ArtifactGroupSection key={group.id} group={group} />
 									))}
@@ -123,29 +122,13 @@ export function ArtifactsView() {
 	);
 }
 
-/** Just me today; the Team scope is not built yet. */
-function ScopeToggle() {
-	const { t } = useTranslation();
-	return (
-		<div className="flex items-center gap-0.5" role="group" aria-label={t("artifacts.scope.label")}>
-			<button type="button" aria-pressed="true" className="inline-flex h-control-md items-center rounded-md bg-muted px-2.5 text-xs text-foreground">
-				{t("artifacts.scope.me")}
-			</button>
-			<button type="button" aria-pressed="false" disabled className="inline-flex h-control-md items-center gap-1.5 rounded-md px-2.5 text-xs text-muted-foreground disabled:cursor-not-allowed">
-				{t("artifacts.scope.team")}
-				<span className="text-caption text-passive">{t("artifacts.scope.soon")}</span>
-			</button>
-		</div>
-	);
-}
-
 function ArtifactGroupSection({ group }: { group: ArtifactGroup }) {
 	const { t } = useTranslation();
 	const name = group.isScratchpad ? t("standalone.workspaceName") : group.name;
 	const GroupIcon = group.isScratchpad ? File : Folder;
 	return (
 		<section aria-label={name}>
-			<h2 className="flex h-8 items-center gap-2 px-2 text-xs font-medium text-muted-foreground">
+			<h2 className="flex h-8 items-center gap-2 px-2.5 text-xs font-medium text-muted-foreground">
 				<GroupIcon aria-hidden="true" className="size-icon-sm shrink-0" />
 				<span className="truncate text-foreground">{name}</span>
 				<span className="tabular-nums text-passive">{group.rows.length}</span>
@@ -184,7 +167,7 @@ function ArtifactListRow({ row }: { row: ArtifactRow }) {
 	};
 
 	return (
-		<li className="group/artifact relative flex h-[38px] items-center gap-2.5 rounded-md px-2 transition-colors duration-(--duration-fast) hover:bg-interactive-hover focus-within:bg-interactive-hover motion-reduce:transition-none">
+		<li className="group/artifact relative flex h-[38px] items-center gap-2.5 rounded-md px-2.5 transition-colors duration-(--duration-fast) hover:bg-interactive-hover focus-within:bg-interactive-hover motion-reduce:transition-none">
 			<button
 				type="button"
 				className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
