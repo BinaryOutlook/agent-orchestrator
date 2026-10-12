@@ -762,6 +762,7 @@ describe("createEventTransport", () => {
 
 	it("rebuilds a source the browser abandoned after the retry delay", () => {
 		vi.useFakeTimers();
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
 		try {
 			createEventTransport(fakeQueryClient()).connect();
 			const source = cdcSources()[0];
@@ -775,6 +776,46 @@ describe("createEventTransport", () => {
 			expect(cdcSources()[1].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
 		} finally {
 			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("drops the cursor for a daemon that rejects ?after=latest", async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn().mockResolvedValue({ status: 400 });
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const source = cdcSources()[0];
+
+			// An older daemon answers 400, so the stream closes without ever opening.
+			source.readyState = 2;
+			source.onerror?.();
+			expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/events?after=latest", expect.anything());
+
+			await vi.advanceTimersByTimeAsync(5_000);
+			const latest = EventSourceStub.instances.filter((s) => s.url.includes("/api/v1/events")).at(-1);
+			expect(latest?.url).toBe("http://127.0.0.1:3001/api/v1/events");
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("does not probe once the stream has opened", () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn().mockResolvedValue({ status: 200 });
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const source = cdcSources()[0];
+			source.onopen?.();
+			source.readyState = 2;
+			source.onerror?.();
+			expect(fetchMock).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
 		}
 	});
 

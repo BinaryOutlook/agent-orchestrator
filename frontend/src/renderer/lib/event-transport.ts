@@ -77,6 +77,19 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let retryTimer: ReturnType<typeof setTimeout> | undefined;
 			let source: EventSource | undefined;
 			let sourceBaseUrl: string | undefined;
+			// Base URL of a daemon that rejected ?after=latest (built before the cursor
+			// existed). Its stream connects without one, replaying history as before.
+			let cursorUnsupportedBaseUrl: string | undefined;
+			const probeCursorSupport = (baseUrl: string, url: string) => {
+				const controller = new AbortController();
+				void fetch(url, { signal: controller.signal })
+					.then((response) => {
+						if (response.status === 400) cursorUnsupportedBaseUrl = baseUrl;
+					})
+					.catch(() => undefined)
+					// A supporting daemon answers with an open stream; do not keep it.
+					.finally(() => controller.abort());
+			};
 			let accountSource: EventSource | undefined;
 			let accountSourceBaseUrl: string | undefined;
 			let disposed = false;
@@ -443,10 +456,16 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// whole change_log (up to 100k rows under retention) on every connect,
 					// although onopen already refreshes everything below. The daemon then
 					// sends a cursor id, so the browser's own reconnect replays only the gap.
-					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/events?after=latest`);
+					// A daemon from before the cursor existed answers 400; that base URL
+					// falls back to the cursorless stream (see probeCursorSupport).
+					const streamUrl = `${baseUrl.replace(/\/+$/, "")}/api/v1/events`;
+					const useCursor = cursorUnsupportedBaseUrl !== baseUrl;
+					source = new EventSource(useCursor ? `${streamUrl}?after=latest` : streamUrl);
 					const connectedSource = source;
+					let opened = false;
 					source.onopen = () => {
 						if (disposed || source !== connectedSource) return;
+						opened = true;
 						healthAttempt += 1;
 						retries = 0;
 						setEventsConnectionState("connected");
@@ -461,7 +480,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						// either way the stream is not delivering, so surface it instead
 						// of looping silently against a dead daemon.
 						setEventsConnectionState("disconnected");
-						if (source?.readyState === EVENTSOURCE_CLOSED) scheduleRetry();
+						if (source?.readyState === EVENTSOURCE_CLOSED) {
+							// Closed before it ever opened: maybe this daemon rejects the cursor.
+							if (!opened && useCursor) probeCursorSupport(baseUrl, `${streamUrl}?after=latest`);
+							scheduleRetry();
+						}
 						const attempt = ++healthAttempt;
 						void queryClient.refetchQueries(
 							{ queryKey: workspaceQueryKey, type: "active" },
