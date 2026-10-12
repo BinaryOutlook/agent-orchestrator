@@ -25,7 +25,7 @@ function Chat({ text, openInBrowser, onUnownedFile }: { text: string; openInBrow
 }
 
 function renderChat(text: string) {
-	const openInBrowser = vi.fn(async () => undefined);
+	const openInBrowser = vi.fn(async (_uri: string) => undefined);
 	const onUnownedFile = vi.fn();
 	render(
 		<QueryClientProvider client={new QueryClient()}>
