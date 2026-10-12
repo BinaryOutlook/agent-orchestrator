@@ -154,19 +154,21 @@ export async function getReviewerConversationPage(
 	};
 }
 
+/** Probe before any quoted-send side effect, including attachment staging. */
+export async function requireConversationExcerptSupport(cfg: ServerConfig, sessionId: string): Promise<void> {
+	// Older daemons accept messages but silently ignore the excerpts field.
+	const snapshot = await getConversationPage(cfg, sessionId);
+	if (!snapshot.supportsExcerpts) {
+		throw new Error("Update AO on this machine to send quoted responses. Your draft is saved.");
+	}
+}
+
 export async function sendConversationMessage(
 	cfg: ServerConfig,
 	sessionId: string,
 	input: SendMessageInput,
 ): Promise<SendMessageResult> {
-	if (input.excerpts?.length) {
-		// Probe the target again for restored drafts and retries after a host change.
-		// Older daemons accept the message but silently ignore the excerpts field.
-		const snapshot = await getConversationPage(cfg, sessionId);
-		if (!snapshot.supportsExcerpts) {
-			throw new Error("Update AO on this machine to send quoted responses. Your draft is saved.");
-		}
-	}
+	if (input.excerpts?.length) await requireConversationExcerptSupport(cfg, sessionId);
 	const res = await apiRequest(cfg, conversationPath(sessionId, "/messages"), {
 		method: "POST",
 		headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
