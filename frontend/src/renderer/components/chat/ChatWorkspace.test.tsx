@@ -747,7 +747,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(url.searchParams.get("path")).toBe("docs/screenshot.png");
 	});
 
-	it("makes composer and history controls inert while a durable agent switch owns input", () => {
+	it("makes composer and history controls inert while a durable transition owns input", () => {
 		render(<ChatWorkspace snapshot={idleSnapshot()} agentInputDisabled />);
 
 		expect(screen.getByTestId("chat-conversation-panel")).toHaveAttribute("inert");
@@ -797,7 +797,7 @@ describe("ChatWorkspace timeline", () => {
 		const workerTab = screen.getByRole("tab", { name: "Reviewer chat · Codex · Working" });
 		expect(workerTab).toHaveTextContent(chatSession.title);
 		expect(workerTab).not.toHaveTextContent("Codex");
-		expect(workerTab.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
+		expect(workerTab.querySelector('img[aria-hidden="true"], [style*="mask"][aria-hidden="true"]')).toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -4465,7 +4465,7 @@ describe("ChatWorkspace reviewer tabs", () => {
 			"cursor-pointer",
 			"focus-visible:outline-2",
 		);
-		expect(reviewerTab.querySelector("img")).toBeInTheDocument();
+		expect(reviewerTab.querySelector('img, [style*="mask"]')).toBeInTheDocument();
 
 		fireEvent.click(reviewerTab);
 		expect(onOpenReviewerTerminal).toHaveBeenCalledWith(reviewerTerminal);

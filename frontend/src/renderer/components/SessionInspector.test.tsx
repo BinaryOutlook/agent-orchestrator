@@ -1289,7 +1289,8 @@ describe("SessionInspector usage", () => {
 		expect(screen.queryByText("Cache write tokens")).not.toBeInTheDocument();
 		expect(screen.queryByText("Reasoning (included in output)")).not.toBeInTheDocument();
 		const agentAttribution = screen.getByText("Codex").parentElement;
-		expect(agentAttribution?.querySelector("img")).toBeInTheDocument();
+		// Codex's single-colour mark is a tinted mask, not an <img>.
+		expect(agentAttribution?.querySelector('[style*="mask"]')).toBeInTheDocument();
 		const agentDisclosure = screen.getByRole("button", { name: "Codex usage details" });
 		await userEvent.click(agentDisclosure);
 		const details = screen.getByRole("region", { name: "Codex usage peek" });
@@ -1310,7 +1311,7 @@ describe("SessionInspector usage", () => {
 
 		renderWithQuery(<SessionInspector session={session([])} />);
 		const codexDisclosure = await screen.findByRole("button", { name: "Codex usage details" });
-		expect(codexDisclosure.querySelector("img")).toBeInTheDocument();
+		expect(codexDisclosure.querySelector('[style*="mask"]')).toBeInTheDocument();
 
 		await userEvent.click(codexDisclosure);
 		const details = screen.getByRole("region", { name: "Codex usage peek" });
@@ -1734,28 +1735,6 @@ describe("SessionInspector Activity section", () => {
         })}
       />,
     );
-    expect(
-      screen.queryByRole("button", { name: "Resume agent" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("does not offer agent resume while an agent switch owns the exited source", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([], {
-          status: "exited",
-          activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
-          activeAgentSwitch: {
-            id: "switch-1",
-            fromHarness: "claude-code",
-            targetHarness: "codex",
-            state: "source_stopped",
-            agentHandoffStatus: "received",
-          },
-        })}
-      />,
-    );
-
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();

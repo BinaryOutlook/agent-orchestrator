@@ -216,11 +216,6 @@ type PRNumberParam struct {
 	PRNumber int `path:"prNumber" description:"Associated pull request number." minimum:"1"`
 }
 
-// AgentSwitchIDParam is the {switchId} path parameter for one durable switch saga.
-type AgentSwitchIDParam struct {
-	SwitchID string `path:"switchId" description:"Durable agent-switch identifier."`
-}
-
 // SessionInterfaceTransitionIDParam is the {transitionId} path parameter for a
 // durable interface handoff.
 type SessionInterfaceTransitionIDParam struct {
@@ -371,10 +366,9 @@ type SessionView struct {
 	// LastEventAt is when something a person would notice last happened: an
 	// activity-state transition, a PR lifecycle or CI change, or a review
 	// submission. Derived at read time; see domain.Session.LastEventAt.
-	LastEventAt       time.Time             `json:"lastEventAt"`
-	PRs               []SessionPRFacts      `json:"prs"`
-	ArtifactFiles     []SessionArtifactView `json:"artifactFiles,omitempty"`
-	ActiveAgentSwitch *AgentSwitchView      `json:"activeAgentSwitch,omitempty"`
+	LastEventAt   time.Time             `json:"lastEventAt"`
+	PRs           []SessionPRFacts      `json:"prs"`
+	ArtifactFiles []SessionArtifactView `json:"artifactFiles,omitempty"`
 }
 
 // SessionArtifactView is one inferred file artifact for a session.
@@ -471,55 +465,6 @@ type SpawnSessionResponse struct {
 	Session           SessionView `json:"session"`
 	PromptBytes       int         `json:"promptBytes"`
 	SystemPromptBytes int         `json:"systemPromptBytes"`
-}
-
-// SwitchAgentRequest is the body of POST /api/v1/sessions/{sessionId}/switch-agent.
-type SwitchAgentRequest struct {
-	TargetHarness  domain.AgentHarness `json:"targetHarness" enum:"claude-code,codex,fx" description:"Agent harness to continue the logical AO session with."`
-	Model          string              `json:"model,omitempty" maxLength:"256" description:"Optional model override for the target agent launch or resume."`
-	IdempotencyKey string              `json:"idempotencyKey,omitempty" maxLength:"128" description:"Optional retry key. Reusing it with a different request is rejected."`
-}
-
-// AgentSwitchView is the deliberately small public projection of a durable
-// switch saga. Provider context, local artifact paths, retry keys, generation
-// fences, and raw failure details remain daemon-private.
-type AgentSwitchView struct {
-	ID                      domain.AgentSwitchID                     `json:"id"`
-	SessionID               domain.SessionID                         `json:"sessionId"`
-	FromHarness             domain.AgentHarness                      `json:"fromHarness"`
-	TargetHarness           domain.AgentHarness                      `json:"targetHarness"`
-	TargetStartMode         domain.AgentSwitchTargetStartMode        `json:"targetStartMode,omitempty" enum:"fresh,resumed"`
-	State                   domain.AgentSwitchState                  `json:"state" enum:"preparing_handoff,stopping_source,source_stopped,starting_target,target_ready,delivering_context,completed,failed"`
-	AgentHandoffStatus      domain.AgentHandoffStatus                `json:"agentHandoffStatus" enum:"not_attempted,requested,received,unavailable,timed_out,failed,rejected"`
-	SemanticHandoffIncluded bool                                     `json:"semanticHandoffIncluded"`
-	SourceTranscriptStatus  domain.AgentSwitchSourceTranscriptStatus `json:"sourceTranscriptStatus,omitempty" enum:"not_attempted,available,unavailable"`
-	ErrorCode               domain.AgentSwitchErrorCode              `json:"errorCode,omitempty" enum:"daemon_restart_pre_stop,daemon_restart_post_stop,daemon_restart_unrecoverable_target,daemon_restart_before_delivery,delivery_unconfirmed,source_session_terminated,source_stop_unconfirmed,target_binary_missing,target_agent_unauthorized,target_start_unconfirmed,source_restore_unconfirmed,request_cancelled,source_blocked,failed_pre_stop,failed_post_stop,target_ready_failed,delivery_failed,switch_failed"`
-	RequestedAt             time.Time                                `json:"requestedAt"`
-	UpdatedAt               time.Time                                `json:"updatedAt"`
-}
-
-// AgentSwitchResponse is the body returned by switch creation, reads, and
-// generation-fenced handoff submission.
-type AgentSwitchResponse struct {
-	Switch AgentSwitchView `json:"switch"`
-}
-
-// ListAgentSwitchesResponse is the body of
-// GET /api/v1/sessions/{sessionId}/agent-switches.
-type ListAgentSwitchesResponse struct {
-	Switches []AgentSwitchView `json:"switches"`
-}
-
-// SubmitAgentHandoffRequest is the body of
-// POST /api/v1/sessions/{sessionId}/agent-switches/{switchId}/handoff.
-// Handoff remains provider-neutral JSON and is accepted only from the source
-// generation recorded by the durable switch.
-type SubmitAgentHandoffRequest struct {
-	SourceGenerationID domain.AgentGenerationID `json:"sourceGenerationId" description:"Source invocation generation that authored this handoff."`
-	// RawMessage deliberately preserves the source object's original token
-	// stream. Decoding into a map here would silently collapse duplicate keys
-	// before the semantic validator can reject them.
-	Handoff json.RawMessage `json:"handoff" description:"Structured, source-agent-authored handoff enrichment."`
 }
 
 // StageSessionAttachmentsRequest attaches files to a session that is already
@@ -1348,6 +1293,9 @@ type SetActivityRequest struct {
 	AgentSessionID               string                              `json:"agentSessionId,omitempty" description:"Native agent session identifier used to resume its transcript."`
 	LatestUserPrompt             string                              `json:"latestUserPrompt,omitempty" maxLength:"16384" description:"Latest real user prompt exposed by the provider hook."`
 	LatestAssistantUpdate        string                              `json:"latestAssistantUpdate,omitempty" maxLength:"16384" description:"Latest assistant update exposed by the provider hook."`
+	FinalAssistantMessage        string                              `json:"finalAssistantMessage,omitempty" maxLength:"16384" description:"The agent's final message of the turn, kept for terminal turn history only."`
+	TurnUserRequest              string                              `json:"turnUserRequest,omitempty" maxLength:"16384" description:"The user's request for the turn, kept for terminal turn history only."`
+	Harness                      string                              `json:"harness,omitempty" maxLength:"64" description:"The agent whose hook sent this signal. A signal from an agent the session no longer runs is ignored."`
 	ConversationCheckpointOrigin domain.ConversationCheckpointOrigin `json:"conversationCheckpointOrigin,omitempty" enum:"human,coordination" description:"Whether the main-turn boundary came from a human or AO coordination."`
 	CoordinationID               string                              `json:"coordinationId,omitempty" description:"Opaque identity of an AO-authored semantic prompt accepted by the native agent."`
 	ProviderTurnID               string                              `json:"providerTurnId,omitempty" description:"Native main-turn identity reported by the hook, when supported."`
@@ -2473,6 +2421,68 @@ type ConversationExcerptReferenceRequest struct {
 	Text           string `json:"text"`
 }
 
+// ProviderSwitchRequest starts an idle Chat-to-Chat provider handoff.
+type ProviderSwitchRequest struct {
+	TargetHarness  string `json:"targetHarness"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	// Model is the target provider's model id. Empty uses its default.
+	Model string `json:"model,omitempty" maxLength:"200"`
+	// Effort is the target's reasoning effort. Empty uses its default.
+	Effort string `json:"effort,omitempty" maxLength:"64"`
+	// FastMode starts the target on its faster tier, where its model has one.
+	FastMode bool `json:"fastMode,omitempty"`
+	// Ultracode starts a Claude Code terminal target with Ultracode on.
+	Ultracode bool `json:"ultracode,omitempty"`
+	// AutoCompactWindow is where a Claude Code terminal target compacts on its own.
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+}
+
+// ProviderSwitchResponse returns only the published provider identities; the
+// bounded bootstrap remains internal to the daemon.
+type ProviderSwitchResponse struct {
+	SessionID            string `json:"sessionId"`
+	ConversationID       string `json:"conversationId"`
+	BranchID             string `json:"branchId"`
+	SourceHarness        string `json:"sourceHarness"`
+	TargetHarness        string `json:"targetHarness"`
+	ProviderConversation string `json:"providerConversationId"`
+}
+
+// ProviderSwitchCapabilityResponse describes one target without launching it.
+type ProviderSwitchCapabilityResponse struct {
+	Harness   string `json:"harness"`
+	Supported bool   `json:"supported"`
+	Reason    string `json:"reason,omitempty"`
+	Retryable bool   `json:"retryable"`
+}
+
+// ProviderSwitchTargetParam names a target provider in the capability route.
+type ProviderSwitchTargetParam struct {
+	TargetHarness string `path:"targetHarness" description:"Registered Chat provider harness to evaluate."`
+}
+
+// SessionHistoryQuery pages GET /api/v1/sessions/{sessionId}/history.
+type SessionHistoryQuery struct {
+	Offset int `query:"offset,omitempty" minimum:"0" description:"Number of newest turns to skip."`
+	Limit  int `query:"limit,omitempty" minimum:"1" maximum:"50" description:"Maximum turns to return. Defaults to 10."`
+}
+
+// SessionHistoryTurn is one turn of a session, whichever UI it happened in:
+// the user's request and the agent's final response.
+type SessionHistoryTurn struct {
+	UserRequest   string    `json:"userRequest"`
+	AgentResponse string    `json:"agentResponse"`
+	At            time.Time `json:"at"`
+	Harness       string    `json:"harness,omitempty"`
+}
+
+// SessionHistoryResponse is one page of a session's turns, newest first.
+type SessionHistoryResponse struct {
+	Turns  []SessionHistoryTurn `json:"turns"`
+	Total  int                  `json:"total"`
+	Offset int                  `json:"offset"`
+}
+
 // ConversationImageContentRequest is a native raster image prompt block.
 type ConversationImageContentRequest struct {
 	MIMEType string `json:"mimeType"`
@@ -2658,6 +2668,8 @@ type ConversationModelResponse struct {
 	// order. Empty means the model does not take one.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// SupportsFast reports that the model can run on the provider's faster tier.
+	SupportsFast bool `json:"supportsFast,omitempty"`
 }
 
 // ConversationSkillsResponse is the named skills the provider will let this
@@ -2692,6 +2704,13 @@ type ConversationTurnSettingsPayload struct {
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	ApprovalMode    string `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	// FastMode asks for the provider's faster tier on models that offer one.
+	FastMode bool `json:"fastMode,omitempty"`
+	// PlanMode asks the provider to plan rather than act, where it supports that.
+	PlanMode bool `json:"planMode,omitempty"`
+	// AutoCompactWindow is where Claude Code compacts on its own. Empty leaves
+	// it to Claude Code. It applies the next time the agent starts.
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
 }
 
 // ResolveConversationApprovalRequest answers a pending approval. DecisionID must

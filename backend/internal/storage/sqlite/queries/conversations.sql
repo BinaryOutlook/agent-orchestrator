@@ -207,8 +207,8 @@ ORDER BY b.created_at, b.id;
 -- provider events. The previous provider turn is the fork target; it is empty for
 -- the first prompt, which tells the service to start a fresh provider thread.
 -- A provider boundary is the nearest ancestor that is either the root or has no
--- replaced turn. Agent switching creates the latter kind: older AO history stays
--- visible, but its provider turn ids can never be sent to the new driver.
+-- replaced turn. Older AO history stays visible, but provider turn ids outside
+-- the active boundary can never be sent to the current driver.
 -- name: SelectConversationEditAnchor :one
 WITH RECURSIVE active_path(branch_id, max_sequence, depth) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER), 0
@@ -414,15 +414,8 @@ WHERE id = ?;
 -- offset, so a multi-byte character here silently corrupts later queries.
 -- name: UpdateConversationTurnSettings :exec
 UPDATE conversations
-SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, updated_at = ?
+SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, auto_compact_window = ?, updated_at = ?
 WHERE id = ?;
-
--- An agent switch starts a new provider/model scope. Clear only the source
--- harness choices; approval posture is AO-owned and remains applicable.
--- name: ResetConversationAgentOverridesForSession :exec
-UPDATE conversations
-SET model = NULL, reasoning_effort = NULL, updated_at = ?
-WHERE current_session_id = ?;
 
 -- Token position for the conversation, latest wins.
 --

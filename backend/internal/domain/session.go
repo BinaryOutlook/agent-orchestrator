@@ -151,7 +151,7 @@ type SessionMetadata struct {
 	Prompt                   string    `json:"prompt,omitempty"`
 	// LatestUserPrompt is the latest real user-authored task direction observed
 	// for this AO session. Internal AO coordination messages (for example an
-	// agent-switch handoff request) must not replace it.
+	// internal coordination request) must not replace it.
 	LatestUserPrompt string `json:"latestUserPrompt,omitempty"`
 	// LatestUserPromptAt is when LatestUserPrompt was submitted. It is kept as a
 	// separate durable fact because SessionRecord.UpdatedAt also changes for
@@ -160,7 +160,7 @@ type SessionMetadata struct {
 	// LatestInteractionAt records deliberate direction independently of human authorship.
 	LatestInteractionAt time.Time `json:"-"`
 	// LatestAssistantUpdate is the latest user-facing assistant update observed
-	// before any internal agent-switch coordination turn.
+	// before any internal coordination turn.
 	LatestAssistantUpdate   string    `json:"latestAssistantUpdate,omitempty"`
 	LatestAssistantUpdateAt time.Time `json:"-"`
 	// ConversationCheckpointState and its owner provenance are internal replay
@@ -459,10 +459,9 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus     DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
-	TerminalHandleID  string                `json:"terminalHandleId,omitempty"`
-	ArtifactFiles     []SessionArtifactFile `json:"-"`
-	ActiveAgentSwitch *AgentSwitch          `json:"-"`
+	DisplayStatus    DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	TerminalHandleID string                `json:"terminalHandleId,omitempty"`
+	ArtifactFiles    []SessionArtifactFile `json:"-"`
 	// PRs are the session's attributed pull requests (one session can own many).
 	// They feed status derivation and are surfaced on the API read model. Not
 	// serialized here: the HTTP boundary maps them to the curated wire shape.

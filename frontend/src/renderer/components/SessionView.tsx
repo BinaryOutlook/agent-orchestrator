@@ -33,12 +33,10 @@ import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { isArtifactPreviewUrl } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
-import { SessionActionsMenu } from "./SessionActionsMenu";
+import { TerminalSessionMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import { ShellTopbar } from "./ShellTopbar";
-import { SwitchAgentDialog } from "./SwitchAgentDialog";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
-import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 import { TopbarButton } from "./TopbarButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useBrowserView } from "../hooks/useBrowserView";
@@ -56,7 +54,6 @@ import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
-import { useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
 import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
 import {
@@ -70,8 +67,6 @@ import { subscribeChatReveal } from "../lib/chat-context-bus";
 import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "../lib/cloud-lifecycle";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
-import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
-import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useHostConnection } from "../hooks/useHostConnection";
@@ -108,6 +103,7 @@ import {
 
 type CenterFileOpenRequest = { commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
 const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
+
 // Centre-file open requests take keys from this process-wide counter, not a
 // per-mount one: the display mode remembered for a request (ui-store) outlives a
 // SessionView remount, so a new request must never reuse a recorded key.
@@ -589,13 +585,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		// and the address/tabs never spend a frame underneath the native view.
 		setBrowserPopOutState({ sessionId, phase: "open" });
 	}, [browserPopOutPhase, browserPopoutTopbarHost, sessionId]);
-	const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
-	const handoffDialogContainerRef = useRef<HTMLDivElement | null>(null);
-	const [handoffDialogContainer, setHandoffDialogContainer] = useState<HTMLDivElement | null>(null);
-	const bindHandoffDialogContainer = useCallback((node: HTMLDivElement | null) => {
-		handoffDialogContainerRef.current = node;
-		setHandoffDialogContainer(node);
-	}, []);
 	const stopTerminalLiveResize = useCallback(() => {
 		if (terminalLiveResizeTimerRef.current !== null) {
 			window.clearTimeout(terminalLiveResizeTimerRef.current);
@@ -703,13 +692,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			// open, or route visit can issue a fresh explicit resume intent.
 		});
 	}, [requestCloudResume, session]);
-	const routeVisibilityOperation =
-		session?.activeAgentSwitch &&
-		session.activeAgentSwitch.state !== "completed" &&
-		session.activeAgentSwitch.state !== "failed"
-			? "active"
-			: "history";
-	useAgentSwitchRouteVisibility(`session/${uiSessionId}`, routeVisibilityOperation);
 	const reviewerQuery = useQuery({
 		queryKey: sessionReviewsQueryKey(sessionId, hostId),
 		enabled: Boolean(
@@ -1421,42 +1403,26 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	const {
-		agentSwitch: handoffAgentSwitch,
-		switchControlPresentation: handoffControlPresentation,
-		switchError: handoffSwitchError,
-	} = useSessionHandoffMenu(session);
-	const handleHandoffDialogOpenChange = useCallback(
-		(nextOpen: boolean) => {
-			setHandoffDialogOpen(nextOpen);
-			if (!nextOpen && handoffSwitchError && session) {
-				clearSwitchAgentState(queryClient, session.id, hostId);
-			}
-		},
-		[handoffSwitchError, hostId, queryClient, session],
-	);
-	useEffect(() => {
-		if (handoffSwitchError) setHandoffDialogOpen(true);
-	}, [handoffSwitchError]);
-	const handoffMenuItem = useMemo(() => session && !session.cloud ? (
-		<TerminalSwitchAgentButton
-			key={session.id}
-			variant="menu-item"
-			agentSwitch={handoffAgentSwitch}
-			onOpenChange={handleHandoffDialogOpenChange}
-			open={handoffDialogOpen}
-			presentation={handoffControlPresentation}
-			session={session}
-			switchError={handoffSwitchError}
-		/>
-	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
-	// Cloud sessions only expose the interface switch; agent handoff is local.
-	const sessionTabActions = useMemo(() => interfaceUi.unsupported ? null : (
-		<SessionActionsMenu inlineStatus={interfaceUi.inlineStatus}>
-			{interfaceUi.menuItem}
-			{handoffMenuItem}
-		</SessionActionsMenu>
-	), [handoffMenuItem, interfaceUi.inlineStatus, interfaceUi.menuItem, interfaceUi.unsupported]);
+	// The chat/terminal control sits beside the agent picker: in the chat box,
+	// or over the terminal. Only a Cloud chat, which has neither, keeps it in the tab.
+	const interfaceSwitchControl = interfaceUi.unsupported ? null : interfaceUi.switchControl;
+	// A terminal session keeps its agent, the switch to chat and a new terminal
+	// in the tab's menu.
+	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
+		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
+	const sessionTabActions = !session || showChatSurface
+		? (session?.cloud ? interfaceSwitchControl : null)
+		: (
+			<TerminalSessionMenu
+				key={uiSessionId}
+				session={session}
+				hostId={hostId}
+				blocked={agentWorking}
+				switchAction={interfaceUi.unsupported ? undefined : interfaceUi.switchAction}
+				switchControl={interfaceSwitchControl}
+				onNewTerminal={isOrchestrator ? undefined : addShellTerminal}
+			/>
+		);
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome flex shrink-0 items-center"
@@ -1466,13 +1432,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<ShellTopbar embedded />
 		</div>
 	);
-	// Spinner replaces the ⋮ at the same size, so the tab title does not need a
-	// wider action slot while switching.
 	const sessionTabActionWide = false;
-
-	useEffect(() => {
-		setHandoffDialogOpen(false);
-	}, [sessionId]);
 
 	// The pane shows one terminal at a time, so selecting a shell or the reviewer
 	// takes the agent's terminal off screen while the route still points here.
@@ -1888,19 +1848,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							className="relative z-chrome flex h-inspector-tabs w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
-						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
+						<div className="relative min-h-0 flex-1">
 							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : null}
 							{startupFailure && session?.cloud ? (
 								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
-							) : null}
-							{session && !session.cloud && handoffDialogContainer ? (
-								<SwitchAgentDialog
-									agentSwitch={handoffAgentSwitch}
-									container={handoffDialogContainer}
-									onOpenChange={handleHandoffDialogOpenChange}
-									open={handoffDialogOpen}
-									session={session}
-								/>
 							) : null}
 							{/* The committed mode owns the agent surface. Auxiliary shell and
 							    reviewer targets remain terminal surfaces in either mode. */}
@@ -1958,10 +1909,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									sessionTabAction={sessionTabActions}
 									sessionTabActionWide={sessionTabActionWide}
 									tabStripAction={newShellTerminalAction}
-									handoffDialogOpen={handoffDialogOpen}
 									workspaceTabs={centerFileTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
-									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
 									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
@@ -1971,6 +1920,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									agentResuming={quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
+									interfaceSwitch={{ control: interfaceSwitchControl, errorNotice: interfaceUi.switchErrorNotice }}
 									onOpenShell={addShellTerminal}
 									openingShell={openShellTerminal.isPending}
 									shellError={
@@ -2010,11 +1960,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
 									sessionTabActionWide={sessionTabActionWide}
-									tabStripAction={newShellTerminalAction}
-									handoffDialogOpen={handoffDialogOpen}
+									tabStripAction={undefined}
 									workspaceTabs={centerFileTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
-									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
 								/>

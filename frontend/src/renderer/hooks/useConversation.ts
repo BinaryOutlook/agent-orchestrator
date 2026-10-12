@@ -423,6 +423,59 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 }
 
 /** Commands against a conversation. Each refetches the snapshot on success. */
+export function useProviderSwitchCommand(sessionId: string | undefined, hostId?: string) {
+	const queryClient = useQueryClient();
+	const switchProvider = useMutation({
+		mutationFn: async ({ targetHarness, model, effort, fastMode, ultracode, autoCompactWindow }: {
+			targetHarness: string;
+			model?: string;
+			effort?: string;
+			fastMode?: boolean;
+			/** Terminal targets only: Claude Code launch choices. */
+			ultracode?: boolean;
+			autoCompactWindow?: string;
+		}) => {
+			if (!sessionId) throw new Error("No session is selected.");
+			const { data, error } = await clientForSessionHost(hostId).POST(
+				"/api/v1/sessions/{sessionId}/provider-switch",
+				{
+					params: { path: { sessionId } },
+					body: {
+						targetHarness, model, effort, fastMode, ultracode,
+						autoCompactWindow: autoCompactWindow as "200k" | "1m" | undefined,
+						idempotencyKey: crypto.randomUUID(),
+					},
+				},
+			);
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+			if (!sessionId) return;
+			// These catalogs are provider-owned but keyed by the stable AO session id.
+			// A provider switch therefore must evict the outgoing provider's values
+			// before the next render can display them as if they belonged to the target.
+			clearConversationProviderCatalogs(queryClient, sessionId, hostId);
+			await queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+			invalidateConversationProviderCatalogs(queryClient, sessionId, hostId);
+		},
+	});
+	return {
+		switchProvider: (
+			targetHarness: string,
+			model?: string,
+			effort?: string,
+			fastMode?: boolean,
+			launch?: { ultracode?: boolean; autoCompactWindow?: string },
+		) => switchProvider.mutateAsync({ targetHarness, model, effort, fastMode, ...launch }),
+		switchProviderPending: switchProvider.isPending,
+		switchProviderError: switchProvider.error ? apiErrorMessage(switchProvider.error) : undefined,
+		resetSwitchProviderError: switchProvider.reset,
+	};
+}
+
+/** Commands against a conversation. Each refetches the snapshot on success. */
 export function useConversationCommands(sessionId: string | undefined, hostId?: string) {
 	const queryClient = useQueryClient();
 	const stateSessionId = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
@@ -949,6 +1002,21 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 		onSettled: invalidate,
 	});
+
+	const switchProvider = useMutation({
+		mutationFn: async (targetHarness: string) => {
+			const { data, error } = await clientForSessionHost(hostId).POST(
+				"/api/v1/sessions/{sessionId}/provider-switch",
+				{
+					params: { path: { sessionId: sessionId as string } },
+					body: { targetHarness, idempotencyKey: crypto.randomUUID() },
+				},
+			);
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: invalidate,
+	});
 	const acknowledgeAcceptedTurn = useCallback(
 		(turnId: string) => {
 			if (!sessionId) return;
@@ -1020,6 +1088,19 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		compact: () => compact.mutateAsync(),
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,
 		chooseSettings: (settings: TurnSettings) => chooseSettings.mutate({ targetSessionId: sessionId as string, settings }),
+		/**
+		 * Saves settings the agent only reads when it starts, then restarts the
+		 * agent so they take effect. The conversation is resumed, not replaced.
+		 */
+		chooseStartSettings: async (settings: TurnSettings) => {
+			await chooseSettings.mutateAsync({ targetSessionId: sessionId as string, settings });
+			const { error } = await clientForSessionHost(hostId).POST(
+				"/api/v1/sessions/{sessionId}/exit-agent",
+				{ params: { path: { sessionId: sessionId as string } } },
+			);
+			if (error) throw new Error(apiErrorMessage(error));
+			await resume.mutateAsync();
+		},
 		/** A compaction is in flight provider-side and takes seconds, so it reads as
 		 *  its own state rather than folding into the generic busy flag, which also
 		 *  gates the composer. */
@@ -1095,6 +1176,9 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		activateBranch: (branchId: string) => activateBranch.mutateAsync(branchId),
 		activateBranchPending: activateBranch.isPending,
 		activateBranchError: activateBranch.error ? apiErrorMessage(activateBranch.error) : undefined,
+		switchProvider: (targetHarness: string) => switchProvider.mutateAsync(targetHarness),
+		switchProviderPending: switchProvider.isPending,
+		switchProviderError: switchProvider.error ? apiErrorMessage(switchProvider.error) : undefined,
 		steer: async (text: string, attachments?: WireImageContent[], clientMessageId?: string, recoverOnly?: boolean): Promise<ChatSteerOutcome> => {
 			try {
 				if (sessionId) recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
@@ -1493,6 +1577,9 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			model: wire.settings?.model || undefined,
 			reasoningEffort: wire.settings?.reasoningEffort || undefined,
 			approvalMode: (wire.settings?.approvalMode as ApprovalMode | undefined) || undefined,
+			fastMode: wire.settings?.fastMode || undefined,
+			planMode: wire.settings?.planMode || undefined,
+			autoCompactWindow: wire.settings?.autoCompactWindow || undefined,
 		},
 		// Absent means the provider has not reported, which the meter renders as
 		// nothing rather than as an empty bar.

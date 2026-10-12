@@ -198,6 +198,12 @@ var shippedMigrations = map[int64]string{
 	193: "0193_allow_codewhale_harness.sql",
 	194: "0194_allow_command_code_harness.sql",
 	195: "0195_session_requested_output.sql",
+	// The provider-switching migrations.
+	196: "0196_remove_agent_switching.sql",
+	197: "0197_tui_provider_switch.sql",
+	198: "0198_session_terminal_turns.sql",
+	199: "0199_conversation_auto_compact_window.sql",
+	200: "0200_session_launch_options.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

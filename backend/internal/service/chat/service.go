@@ -95,6 +95,9 @@ type Service struct {
 	gates            map[domain.ConversationOwner]controllerGate
 	probeMu          sync.Mutex
 	probed           map[domain.AgentHarness]ports.ChatCapabilities
+	switchMu         sync.Mutex
+	switchResults    map[string]ProviderSwitchResult
+	terminalSwitcher TerminalProviderSwitcher
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -200,6 +203,7 @@ func New(opts Options) *Service {
 		startConfigs:           make(map[domain.ConversationOwner]StartConfig),
 		gates:                  make(map[domain.ConversationOwner]controllerGate),
 		probed:                 make(map[domain.AgentHarness]ports.ChatCapabilities),
+		switchResults:          make(map[string]ProviderSwitchResult),
 		waking:                 make(map[domain.SessionID]int),
 		wakeRuns:               make(map[domain.SessionID]*wakeRun),
 		backgroundWakes:        make(map[domain.SessionID]bool),
@@ -284,8 +288,16 @@ func notifyControllerReady(
 	return commit, nil
 }
 
+// claudeAutoCompactWindowEnv is the Claude Code setting for the token count at
+// which it compacts a conversation on its own.
+const claudeAutoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+
 func cloneStartConfig(cfg StartConfig) StartConfig {
 	cloned := cfg
+	if cfg.ProviderSwitch != nil {
+		switchCopy := *cfg.ProviderSwitch
+		cloned.ProviderSwitch = &switchCopy
+	}
 	cloned.Env = make(map[string]string, len(cfg.Env))
 	for key, value := range cfg.Env {
 		cloned.Env[key] = value
@@ -334,14 +346,21 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 // the user can act on.
 func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, error) {
 	owner := conversationOwner(cfg)
-	if owner.Kind == domain.ConversationOwnerReview {
-		cfg.ReadOnly = true
-	}
 	gate := s.controllerGate(owner)
 	if err := gate.lock(ctx); err != nil {
 		return nil, err
 	}
 	defer gate.unlock()
+	return s.startLocked(ctx, cfg)
+}
+
+// startLocked is the launch implementation shared by ordinary starts and the
+// provider-switch saga. Callers must hold the typed controller gate.
+func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller, error) {
+	owner := conversationOwner(cfg)
+	if owner.Kind == domain.ConversationOwnerReview {
+		cfg.ReadOnly = true
+	}
 	if cfg.HistoryMode > ports.ChatHistoryDeferred {
 		return nil, errors.New("invalid Chat history mode")
 	}
@@ -352,6 +371,17 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 		cfg.ProviderScopeID = handoff.BoundaryID
 		cfg.HistoryMode = ports.ChatHistoryRequired
+	}
+	if providerSwitch := cfg.ProviderSwitch; providerSwitch != nil {
+		if owner.Kind == domain.ConversationOwnerReview ||
+			providerSwitch.SourceSessionID != cfg.SessionID ||
+			providerSwitch.TargetHarness != cfg.Harness ||
+			providerSwitch.SourceHarness == cfg.Harness ||
+			providerSwitch.ConversationID == "" || providerSwitch.SourceBranchID == "" ||
+			providerSwitch.SourceGeneration == "" || strings.TrimSpace(providerSwitch.Bootstrap) == "" ||
+			cfg.ProviderConversationID != "" || cfg.ProviderHandoff != nil || cfg.ControllerReady == nil {
+			return nil, errors.New("incomplete provider Chat switch reservation")
+		}
 	}
 
 	replayCheckpoint := nativeHistoryCheckpoint{}
@@ -422,7 +452,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	s.mu.RLock()
 	existing := s.ownerControllers[owner]
 	s.mu.RUnlock()
-	if existing != nil {
+	if existing != nil && cfg.ProviderSwitch == nil {
 		if existing.State() != ports.ChatControllerStopped {
 			return existing, nil
 		}
@@ -506,7 +536,8 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	}
 	now := s.now()
 	var resetBoundary domain.ConversationActivity
-	freshProjectContext := scope == domain.ConversationScopeProject && cfg.ProviderConversationID == ""
+	freshProjectContext := scope == domain.ConversationScopeProject &&
+		cfg.ProviderConversationID == "" && cfg.ProviderSwitch == nil
 	if freshProjectContext {
 		detail, marshalErr := json.Marshal(map[string]string{
 			"event":  "context.reset",
@@ -540,6 +571,13 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			conversation.ActiveBranchID != handoff.PreviousBranchID || conversation.LatestSequence != handoff.PreviousSequence) {
 			err = errors.New("native Chat handoff conversation changed")
 		}
+	} else if providerSwitch := cfg.ProviderSwitch; providerSwitch != nil {
+		conversation, err = s.store.ConversationForSession(ctx, providerSwitch.SourceSessionID)
+		if err == nil && (conversation.ID != providerSwitch.ConversationID ||
+			conversation.ActiveBranchID != providerSwitch.SourceBranchID ||
+			conversation.LatestSequence != providerSwitch.SourceSequence) {
+			err = errors.New("provider switch conversation changed")
+		}
 	} else if freshProjectContext {
 		conversation, err = s.store.CreateProjectConversationWithContextReset(
 			ctx, conversationID, cfg.ProjectID, cfg.SessionID, resetBoundary, now)
@@ -562,7 +600,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	}
 	var repairedBranch domain.ConversationBranch
 	var restoredProviderOwner bool
-	if cfg.ProviderHandoff == nil && owner.Kind != domain.ConversationOwnerReview {
+	if cfg.ProviderHandoff == nil && cfg.ProviderSwitch == nil && owner.Kind != domain.ConversationOwnerReview {
 		repairedBranch, restoredProviderOwner, err = s.store.RepairIncompleteConversationEdit(
 			ctx, cfg.SessionID, conversation.ID, s.now())
 		if err != nil {
@@ -573,7 +611,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		conversation.ActiveBranchID = repairedBranch.ID
 		// An ordinary restart was handed the abandoned child's provider handle.
 		// A coordinator-supplied scope belongs to a pending provider boundary (for
-		// example, agent switching) and must keep its independently reserved handle.
+		// example, a pending provider boundary) and must keep its independently reserved handle.
 		if restoredProviderOwner && cfg.ProviderScopeID == "" {
 			cfg.ProviderConversationID = repairedBranch.ProviderConversationID
 		}
@@ -612,7 +650,11 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 	}
 	providerBoundaryID := ""
-	if !providerHandleOwnedByActiveBranch {
+	if cfg.ProviderSwitch != nil {
+		providerBoundaryID = s.newID()
+		providerScopeID = providerBoundaryID
+		providerHandleOwnedByActiveBranch = false
+	} else if !providerHandleOwnedByActiveBranch {
 		providerBoundaryID = providerScopeID
 	} else if cfg.ProviderConversationID == "" && cfg.ProviderScopeID == "" &&
 		!queuedBeforeFirstController &&
@@ -632,6 +674,19 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			return nil, fmt.Errorf("active conversation branch provider handle %q does not match session handle %q",
 				activeBranch.ProviderConversationID, cfg.ProviderConversationID)
 		}
+	}
+	// Claude Code reads its compaction window when it starts. The map is
+	// copied because the caller's may be the one saved for later restarts.
+	if cfg.Harness == domain.HarnessClaudeCode {
+		env := make(map[string]string, len(cfg.Env)+1)
+		for key, value := range cfg.Env {
+			env[key] = value
+		}
+		delete(env, claudeAutoCompactWindowEnv)
+		if tokens := conversation.Settings.AutoCompactTokens(); tokens != "" {
+			env[claudeAutoCompactWindowEnv] = tokens
+		}
+		cfg.Env = env
 	}
 	// Conversation settings are durable user choices. Restore the selected
 	// model when rebuilding a controller after a daemon restart; the caller's
@@ -668,6 +723,22 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 	}
 
+	// A provider that took over through a switch keeps its handoff note for
+	// the life of its branch. The switch supplies it on the first start; any
+	// later restart reads it back from the branch, so the note is not lost
+	// with the process.
+	handoffNote := activeBranch.HandoffNote
+	if providerSwitch := cfg.ProviderSwitch; providerSwitch != nil {
+		handoffNote = providerSwitch.Bootstrap
+	}
+	providerSystemPrompt := cfg.SystemPrompt
+	if strings.TrimSpace(handoffNote) != "" {
+		providerSystemPrompt = strings.TrimSpace(strings.Join([]string{
+			strings.TrimSpace(cfg.SystemPrompt),
+			"AO provider handoff context:\n\n" + handoffNote,
+		}, "\n\n"))
+	}
+
 	var conv ports.ChatConversation
 	hostID := providerHostID(cfg)
 	if cfg.ProviderConversationID != "" {
@@ -683,7 +754,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			Effort:                 cfg.Effort,
 			Permissions:            cfg.Permissions,
 			ReadOnly:               cfg.ReadOnly,
-			SystemPrompt:           cfg.SystemPrompt,
+			SystemPrompt:           providerSystemPrompt,
 			ProviderScopeID:        providerScopeID,
 			ProviderIDsScoped:      providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
 			AdditionalDirectories:  cfg.AdditionalDirectories,
@@ -701,7 +772,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			Effort:                cfg.Effort,
 			Permissions:           cfg.Permissions,
 			ReadOnly:              cfg.ReadOnly,
-			SystemPrompt:          cfg.SystemPrompt,
+			SystemPrompt:          providerSystemPrompt,
 			ProviderScopeID:       providerScopeID,
 			AdditionalDirectories: cfg.AdditionalDirectories,
 			MCPServers:            cfg.MCPServers,
@@ -843,8 +914,15 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			ID: providerBoundaryID, ConversationID: conversation.ID, SessionID: cfg.SessionID,
 			ProviderConversationID: conv.ProviderConversationID(), ParentBranchID: activeBranch.ID,
 			ForkAfterSequence: conversation.LatestSequence, ProviderScopeID: providerScopeID,
+			ProviderBindingID: string(cfg.Harness),
+			Strategy:          domain.ConversationBranchStrategyNative,
 			ProviderIDsScoped: true,
 			CreatedAt:         s.now(),
+		}
+		if cfg.ProviderSwitch != nil {
+			providerBoundary.Strategy = domain.ConversationBranchStrategyApproximateContext
+			providerBoundary.ReplayCutoffSequence = cfg.ProviderSwitch.SourceSequence
+			providerBoundary.ReplayTruncated = true
 		}
 	}
 	// Whatever the previous controller left in flight is not this controller's, and
@@ -1045,6 +1123,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// A committed reservation is consumed. Internal controller restarts must
 	// resume the now-current branch, not retry its old ownership snapshot.
 	cfg.ProviderHandoff = nil
+	cfg.ProviderSwitch = nil
 	cfg.ProviderScopeID = ""
 	cfg.HistoryMode = ports.ChatHistoryImport
 	s.startConfigs[owner] = cloneStartConfig(cfg)
@@ -1807,6 +1886,10 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 			state = live
 			caps = controller.Capabilities()
 		}
+		// Fast and plan mode live with the controller, not in the stored row.
+		liveSettings := controller.Settings()
+		rows.Conversation.Settings.FastMode = liveSettings.FastMode
+		rows.Conversation.Settings.PlanMode = liveSettings.PlanMode
 	}
 
 	return Snapshot{
@@ -1912,6 +1995,10 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 			state = live
 			caps = controller.Capabilities()
 		}
+		// Fast and plan mode live with the controller, not in the stored row.
+		liveSettings := controller.Settings()
+		rows.Conversation.Settings.FastMode = liveSettings.FastMode
+		rows.Conversation.Settings.PlanMode = liveSettings.PlanMode
 	}
 	return Snapshot{
 		Conversation:                     rows.Conversation,

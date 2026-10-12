@@ -65,9 +65,6 @@ type fakeStore struct {
 
 	createClientRequestErr error
 	promoteTaskErr         error
-	// agentSwitchStore is wired only by agent-switch tests so fakeLCM can model
-	// Lifecycle Manager's atomic ownership-boundary commands.
-	agentSwitchStore any
 	// worktrees maps session ID to its saved worktree rows (shutdown-saved marker).
 	worktrees map[domain.SessionID][]domain.SessionWorktreeRecord
 	// sharedLog, when non-nil, receives an ordered call entry for each
@@ -554,33 +551,6 @@ func (l *fakeLCM) changeControllerEpoch(
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}
 	l.store.sessions[id] = rec
 	return true, nil
-}
-func (l *fakeLCM) ConfirmAgentSwitchSourceStopped(ctx context.Context, confirmation domain.AgentSwitchSourceStopConfirmation) (bool, error) {
-	store, ok := l.store.agentSwitchStore.(interface {
-		ConfirmAgentSwitchSourceStopped(context.Context, domain.AgentSwitchSourceStopConfirmation) (bool, error)
-	})
-	if !ok {
-		return false, errors.New("fake lifecycle: agent-switch source-stop persistence unavailable")
-	}
-	return store.ConfirmAgentSwitchSourceStopped(ctx, confirmation)
-}
-func (l *fakeLCM) ActivateAgentSwitchTarget(ctx context.Context, activation domain.AgentSwitchTargetActivation) (bool, error) {
-	store, ok := l.store.agentSwitchStore.(interface {
-		ActivateAgentSwitchTarget(context.Context, domain.AgentSwitchTargetActivation) (bool, error)
-	})
-	if !ok {
-		return false, errors.New("fake lifecycle: agent-switch target activation persistence unavailable")
-	}
-	return store.ActivateAgentSwitchTarget(ctx, activation)
-}
-func (l *fakeLCM) ActivateChatAgentSwitchTarget(ctx context.Context, activation domain.AgentSwitchChatTargetActivation) (bool, error) {
-	store, ok := l.store.agentSwitchStore.(interface {
-		ActivateChatAgentSwitchTarget(context.Context, domain.AgentSwitchChatTargetActivation) (bool, error)
-	})
-	if !ok {
-		return false, errors.New("fake lifecycle: Chat agent-switch target activation persistence unavailable")
-	}
-	return store.ActivateChatAgentSwitchTarget(ctx, activation)
 }
 
 // MarkTerminated mirrors the real lifecycle.Manager, which refuses to write on
@@ -2360,20 +2330,6 @@ func TestResumeAgent_RejectsConcurrentRequest(t *testing.T) {
 	close(runtime.release)
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first resume: %v", err)
-	}
-}
-
-func TestResumeAgent_ReportsActiveAgentSwitch(t *testing.T) {
-	baseRuntime := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
-	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
-	m, _, _ := newExitedResumeManager(t, baseRuntime, agent)
-	if err := m.beginAgentSwitch(ctx, "mer-1"); err != nil {
-		t.Fatal(err)
-	}
-	defer m.endAgentSwitch("mer-1")
-
-	if _, err := m.ResumeAgentWithMode(ctx, "mer-1"); !errors.Is(err, ErrSwitchInProgress) {
-		t.Fatalf("resume during switch error = %v, want ErrSwitchInProgress", err)
 	}
 }
 
@@ -4487,6 +4443,28 @@ func TestRestore_RefreshesModelFromSessionMetadata(t *testing.T) {
 	}
 	if res.Mode != RestoreModeNative {
 		t.Fatalf("restore mode = %q, want native (no new session)", res.Mode)
+	}
+}
+
+// The effort picked with a session's model must reach the agent on a rebuild
+// for every harness. It used to be applied for Claude Code only, so a terminal
+// switch to Codex started on the project's default effort.
+func TestRestore_KeepsSessionEffortForAnyHarness(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Effort: "medium"}}}
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", Effort: "high"})
+	rec := st.sessions["mer-1"]
+	rec.Harness = domain.HarnessCodex
+	st.sessions["mer-1"] = rec
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatalf("RestoreWithMode: %v", err)
+	}
+	if agent.lastConfig.Effort != "high" {
+		t.Fatalf("restore config effort = %q, want the session's own choice high", agent.lastConfig.Effort)
 	}
 }
 
@@ -11061,7 +11039,7 @@ func TestHarnessNudgeSafe(t *testing.T) {
 }
 
 func TestSwitchTargetsOnlyRetryEnterWhenActivitySignalsMakeItSafe(t *testing.T) {
-	agents := switchTestAgents{
+	agents := testAgentRegistry{
 		domain.HarnessClaudeCode: claudecode.New(),
 		domain.HarnessCodex:      codex.New(),
 	}

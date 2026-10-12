@@ -37,9 +37,8 @@ export function canResumeAgent(
 	transition?: SessionInterfaceTransition,
 ): boolean {
 	return Boolean(
-		session &&
-			sessionAgentExited(session) &&
-			!session.activeAgentSwitch &&
+		 session &&
+			 sessionAgentExited(session) &&
 			!session.cloud &&
 			!interfaceTransitionIsActive(transition),
 	);
