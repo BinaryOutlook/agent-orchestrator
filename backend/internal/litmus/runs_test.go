@@ -38,7 +38,7 @@ func TestAskBeforePostingStopsAtAwaitingApprovalThenPosts(t *testing.T) {
 	}
 	body, _ := os.ReadFile(filepath.Join(runDir, "comment.md"))
 	exists(t, filepath.Join(runDir, "verdict.json"))
-	if !strings.HasPrefix(string(body), "Litmus tried #6394 on the PR build and on main.") {
+	if !strings.HasPrefix(string(body), "Litmus tried #6394 on the PR build and on main (") {
 		t.Fatalf("comment.md = %s", body)
 	}
 

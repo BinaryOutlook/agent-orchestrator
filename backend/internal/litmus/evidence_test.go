@@ -291,7 +291,7 @@ func TestSubmitPublishesEvidenceAndEmbedsIt(t *testing.T) {
 			}
 			suffix := map[bool]string{false: "", true: "?raw=true"}[c.private == "true"]
 			for _, want := range []string{"![base branch on the left, PR build on the right](" + c.prefix + "list-shown-main-vs-pr.png" + suffix + ")", "![PR build](" + c.prefix + "scrolls-pr.png" + suffix + ")",
-				"<details><summary>Recordings and every screenshot</summary>", "![PR build recording](" + c.prefix + "pr.gif" + suffix + ")", "![base branch recording](" + c.prefix + "main.gif" + suffix + ")", "Took under a minute."} {
+				"<details><summary>Recordings and every screenshot</summary>", "![PR build recording](" + c.prefix + "pr.gif" + suffix + ")", "![base branch recording](" + c.prefix + "main.gif" + suffix + ")", "(under a minute)."} {
 				if !strings.Contains(string(body), want) {
 					t.Errorf("comment lacks %q:\n%s", want, body)
 				}
@@ -425,13 +425,13 @@ func TestRenderCommentWithImagesGolden(t *testing.T) {
 	videos := []vidItem{{leg: "head", url: "https://github.com/user-attachments/assets/11111111-2222-4333-8444-555555555555", span: 79 * time.Second},
 		{leg: "base", url: "https://github.com/user-attachments/assets/66666666-7777-4888-8999-aaaaaaaaaaaa", span: 15 * time.Second}}
 	got := renderComment(run, v, evidence{state: "published", commit: fakeSHA, items: items, videos: videos}, now)
-	want := strings.ReplaceAll(`Litmus tried #7 on the PR build and on main.
+	want := strings.ReplaceAll(`Litmus tried #7 on the PR build and on main (2 minutes).
 
 **Result: the fix works; fine to merge from my side. One check only ran on the PR build.**
 
 I did not run main: main has no setting for the last model.
 
-I checked that the Go back and Go forward arrows show next to the brand. On the PR build, both buttons are there, and Go back works. On main, there are no arrows at all. That is the fix, and it holds.
+I checked that the Go back and Go forward arrows show next to the brand. On the PR build, both buttons are there, and Go back works. On main, there are no arrows at all.
 
 Next I checked that the last model picked is remembered after reopening. On the PR build, the model picker in the sidebar still showed the last model.
 
@@ -441,7 +441,7 @@ Main on the left: there are no arrows at all. PR build on the right: both button
 ![PR build]({base}the-last-model-picked-is-remembered-pr.png)
 PR build: the model picker in the sidebar still showed the last model.
 
-What the PR touches. Shell sidebar, 3 files, covered above. Tests, 2 files, not run here.
+Not checked by this run: tests (2 files).
 
 <details><summary>Recordings and every screenshot</summary>
 
@@ -463,8 +463,6 @@ Step 2, PR build: click "Go back"
 ![]({base}the-go-back-and-go-forward-arrows-show-pr-step-2.png)
 
 </details>
-
-Took 2 minutes.
 
 <!-- litmus:comment o/r#7 -->`, "{base}", base)
 	if got != want {
@@ -800,7 +798,7 @@ func TestSubmitShowsTheUploadedVideosAheadOfTheGIFs(t *testing.T) {
 		t.Fatalf("verdict %+v run %+v err %v", v, run, err)
 	}
 	const videos = "<details><summary>Recordings and every screenshot</summary>\n\nPR build, 1 min 19 s\n\n" + vid1 + "\n\nMain, 15 s\n\n" + vid2 + "\n\nPR build, the moments around each step\n![PR build recording]("
-	if !strings.Contains(body, videos) || strings.Contains(body, "AO session") || !strings.HasSuffix(body, "\n\nTook under a minute.\n\n"+commentMarker("o/r", 7)) {
+	if !strings.Contains(body, videos) || strings.Contains(body, "AO session") || !strings.HasSuffix(body, "\n\n</details>\n\n"+commentMarker("o/r", 7)) {
 		t.Fatalf("comment:\n%s", body)
 	}
 	if b, _ := os.ReadFile(filepath.Join(runDir, "comment.md")); string(b) != body {

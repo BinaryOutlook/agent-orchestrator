@@ -404,8 +404,6 @@ func checkPara(run Run, v Verdict, c Check, n, i int) string {
 	case preExisting(v.Checks, c) && c.State == CheckPartial && baseResult(v.Checks, c) == string(CheckPartial): // the main sentence already says what was seen
 	case preExisting(v.Checks, c):
 		out = append(out, "The same thing happens on "+main+", so the PR did not cause it.")
-	case baseResult(v.Checks, c) == string(CheckFail):
-		out = append(out, "That is the fix, and it holds.")
 	}
 	return strings.Join(out, " ")
 }
@@ -418,15 +416,15 @@ func skipWhy(note string) string {
 	return ""
 }
 
-// took is how long the run lasted, in whole minutes.
-func took(d time.Duration) string {
+// lasted is how long the run lasted, in whole minutes, for the first line: "7 minutes".
+func lasted(d time.Duration) string {
 	switch m := int(d.Round(time.Minute) / time.Minute); {
 	case m < 1:
-		return "Took under a minute."
+		return "under a minute"
 	case m == 1:
-		return "Took 1 minute."
+		return "1 minute"
 	default:
-		return fmt.Sprintf("Took %d minutes.", m)
+		return fmt.Sprintf("%d minutes", m)
 	}
 }
 
@@ -482,7 +480,7 @@ func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) s
 	both := slices.ContainsFunc(v.Checks, func(c Check) bool {
 		return c.onLeg() == "base" || slices.ContainsFunc(c.Receipts, func(r Receipt) bool { return r.onLeg() == "base" })
 	})
-	add("Litmus tried #%d%s on the PR build%s.", run.PRNumber, issuesFor(run.Issues), map[bool]string{true: " and on " + main}[both])
+	add("Litmus tried #%d%s on the PR build%s (%s).", run.PRNumber, issuesFor(run.Issues), map[bool]string{true: " and on " + main}[both], lasted(now.Sub(run.CreatedAt)))
 	add("**Result: %s.**", verdictLine(v.Overall, count(v.Checks), main))
 	if why := lowerFirst(mdText(clause(v.SkipBase, 200), 400)); why != "" {
 		add("I did not run %s: %s.", main, why)
@@ -536,7 +534,6 @@ func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) s
 	if len(limits) > 0 {
 		add("%s", strings.Join(limits, "\n"))
 	}
-	add("%s", took(now.Sub(run.CreatedAt)))
 	return strings.Join(blocks, "\n\n")
 }
 
@@ -589,39 +586,39 @@ func covers(said []string, a Area) bool {
 	return false
 }
 
-// areaLine says which changed areas (six at most) the checks touched. Tests are never run here. Another area is
-// covered when a check shares a word stem with one of its files, or when it is the only one: the checks came from the
-// PR's own claims, so they are about it. A single file is named: "the renderer component TitlebarNav".
+// areaLine says which changed areas (six at most) the run did not check, as one sentence, or "" when it checked them
+// all. Tests are never run here. Another area is covered when a check that ran on the PR build (pass, fail or partial;
+// a skipped check ran nothing) shares a word stem with one of its files, or when it is the only one: the checks came
+// from the PR's own claims, so they are about it.
 func areaLine(areas []Area, checks []Check) string {
-	if len(areas) == 0 {
-		return ""
-	}
 	var said []string
+	ran := false
 	for _, c := range checks {
+		if c.onLeg() != "head" || (c.State != CheckPass && c.State != CheckFail && c.State != CheckPartial) {
+			continue
+		}
+		ran = true
 		said = append(said, words.FindAllString(strings.ToLower(c.Name+" "+c.Expect+" "+c.Note), -1)...)
 	}
 	others := len(areas)
 	if slices.ContainsFunc(areas, func(a Area) bool { return a.Name == "Tests" }) {
 		others--
 	}
-	out := "What the PR touches."
-	for i, a := range areas {
-		if i == 6 {
-			return out + fmt.Sprintf(" And %d more %s.", len(areas)-i, map[bool]string{true: "area", false: "areas"}[len(areas)-i == 1])
+	var left []string
+	for _, a := range areas {
+		if a.Name != "Tests" && ran && (others == 1 || covers(said, a)) {
+			continue
 		}
-		status, who := "not run here", fmt.Sprintf("%s, %d %s", mdText(a.Name, 40), a.Files, map[bool]string{true: "file", false: "files"}[a.Files == 1])
-		if a.Name != "Tests" {
-			status = "not touched by this run"
-			if others == 1 || covers(said, a) {
-				status = "covered above"
-			}
-			if a.Files == 1 && len(a.Stems) == 1 {
-				who = "The " + singular(lowerFirst(mdText(a.Name, 40))) + " " + mdText(a.Stems[0], 40)
-			}
-		}
-		out += " " + who + ", " + status + "."
+		left = append(left, fmt.Sprintf("%s (%d %s)", lowerFirst(mdText(a.Name, 40)), a.Files, map[bool]string{true: "file", false: "files"}[a.Files == 1]))
 	}
-	return out
+	if len(left) == 0 {
+		return ""
+	}
+	out := "Not checked by this run: "
+	if len(left) > 6 {
+		return out + strings.Join(left[:6], ", ") + fmt.Sprintf(", and %d more %s.", len(left)-6, map[bool]string{true: "area", false: "areas"}[len(left)-6 == 1])
+	}
+	return out + strings.Join(left, ", ") + "."
 }
 
 // singular drops the plural s of a name's last word: components is component, but status stays.

@@ -137,17 +137,15 @@ func noSlop(t *testing.T, body string) {
 func TestRenderCommentGolden(t *testing.T) {
 	now := commentRun.CreatedAt.Add(4*time.Minute + 3*time.Second)
 	got := renderComment(commentRun, commentVerdict(commentChecks()), evidence{}, now)
-	const want = `Litmus tried #7 on the PR build and on main.
+	const want = `Litmus tried #7 on the PR build and on main (4 minutes).
 
 **Result: the fix works; fine to merge from my side. One check only ran on the PR build and one could not be done.**
 
-I checked that the menu stays open. On the PR build, the menu stayed open and grew to 14 rows (that element \| focus kept) &lt;b> !\[x](u) &amp;commat;. On main, closed the submenu. That is the fix, and it holds.
+I checked that the menu stays open. On the PR build, the menu stayed open and grew to 14 rows (that element \| focus kept) &lt;b> !\[x](u) &amp;commat;. On main, closed the submenu.
 
 Next I checked that the last model is remembered. On the PR build, long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note. I could not compare it with main.
 
 I could not check that the effort slider moves. Needs a paid key.
-
-Took 4 minutes.
 
 <!-- litmus:comment o/r#7 -->`
 	if got != want {
@@ -167,7 +165,7 @@ func TestRenderCommentFitsTheCapAndClipsTableRowsLast(t *testing.T) {
 		v.Reasons = append(v.Reasons, fmt.Sprintf("reason %d %s", i, long))
 	}
 	got := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
-	if len(got) > commentCap || !strings.HasSuffix(got, "\n"+commentMarker("o/r", 7)) || !strings.HasPrefix(got, "Litmus tried #7 on the PR build.\n\n**Result: nothing failed, but I could not confirm the change from the app; read the diff before merging.**\n") {
+	if len(got) > commentCap || !strings.HasSuffix(got, "\n"+commentMarker("o/r", 7)) || !strings.HasPrefix(got, "Litmus tried #7 on the PR build (under a minute).\n\n**Result: nothing failed, but I could not confirm the change from the app; read the diff before merging.**\n") {
 		t.Fatalf("len %d, ends %q", len(got), got[len(got)-60:])
 	}
 	rows := 0
@@ -194,7 +192,7 @@ func TestRenderCommentFitsTheCapAndClipsTableRowsLast(t *testing.T) {
 
 func TestBlockedCommentCarriesTheReason(t *testing.T) {
 	got := renderComment(commentRun, Verdict{Overall: CheckBlocked, Reasons: []string{"prepare refused: no checkout"}}, evidence{}, commentRun.CreatedAt)
-	if !strings.HasPrefix(got, "Litmus tried #7 on the PR build.\n\n**Result: could not test this one.**\n") || !strings.Contains(got, "\nI could not run the checks. Prepare refused: no checkout.\n") || strings.Contains(got, "| what was checked |") {
+	if !strings.HasPrefix(got, "Litmus tried #7 on the PR build (under a minute).\n\n**Result: could not test this one.**\n") || !strings.Contains(got, "\nI could not run the checks. Prepare refused: no checkout.\n") || strings.Contains(got, "| what was checked |") {
 		t.Fatalf("blocked comment:\n%s", got)
 	}
 }
@@ -286,7 +284,7 @@ func TestSubmitCommentModesAndFailure(t *testing.T) {
 	if err != nil || v.CommentState != "posted" || run.CommentState != "posted" || run.CommentURL != v.CommentURL || v.CommentURL == "" {
 		t.Fatalf("posted: verdict %+v run %+v err %v", v, run, err)
 	}
-	if g.field(0, "body") != string(body) || !strings.HasPrefix(string(body), "Litmus tried #6394 on the PR build and on main.\n\n**Result: the fix works") {
+	if g.field(0, "body") != string(body) || !strings.HasPrefix(string(body), "Litmus tried #6394 on the PR build and on main (") {
 		t.Fatalf("comment.md is not the posted body: %s", body)
 	}
 
@@ -393,25 +391,28 @@ func TestVerdictLineSentences(t *testing.T) {
 	}
 }
 
-func TestAreaLineSaysWhichChangedAreasTheChecksCover(t *testing.T) {
+func TestAreaLineSaysWhichChangedAreasTheChecksDidNotCover(t *testing.T) {
 	// run 11: three e2e specs, two unit tests and one component. The component's file name shares the stem "nav" with
-	// "navigate", and it is the only area that is not tests, so it counts as covered either way.
+	// "navigate", and it is the only area that is not tests, so it counts as covered either way. Tests are never run.
 	pr := []Area{{Name: "Tests", Files: 5}, {Name: "Renderer components", Files: 1, Stems: []string{"TitlebarNav"}}}
-	navigate := []Check{{Name: "history", Expect: "back and forward navigate", Note: "the arrows stayed"}}
-	if got, want := areaLine(pr, navigate), "What the PR touches. Tests, 5 files, not run here. The renderer component TitlebarNav, covered above."; got != want {
+	navigate := []Check{{Name: "history", Expect: "back and forward navigate", Note: "the arrows stayed", State: CheckPass}}
+	if got, want := areaLine(pr, navigate), "Not checked by this run: tests (5 files)."; got != want {
 		t.Fatalf("line %q, want %q", got, want)
 	}
-	if got, want := areaLine(pr, []Check{{Name: "colors", Expect: "the page is red"}}), "What the PR touches. Tests, 5 files, not run here. The renderer component TitlebarNav, covered above."; got != want {
+	if got, want := areaLine(pr, []Check{{Name: "colors", Expect: "the page is red", State: CheckFail}}), "Not checked by this run: tests (5 files)."; got != want {
 		t.Fatalf("the only area besides tests is about what the checks claim: %q, want %q", got, want)
 	}
-	checks := []Check{{Name: "history", Expect: "going back works", Note: "the sidebar shows the arrows"}, {Name: "x", Note: "the latest build happens often; Project files changed"}}
+	checks := []Check{{Name: "history", Expect: "going back works", Note: "the sidebar shows the arrows", State: CheckPass}, {Name: "x", Note: "the latest build happens often; Project files changed", State: CheckPartial}}
 	areas := []Area{{Name: "Shell sidebar", Files: 3, Stems: []string{"Sidebar", "useHistory"}}, {Name: "Tests", Files: 1}, {Name: "Project files", Files: 2, Stems: []string{"package", "lockfile"}}, {Name: "App", Files: 4, Stems: []string{"index"}}}
-	want := "What the PR touches. Shell sidebar, 3 files, covered above. Tests, 1 file, not run here. Project files, 2 files, not touched by this run. App, 4 files, not touched by this run."
+	want := "Not checked by this run: tests (1 file), project files (2 files), app (4 files)."
 	if got := areaLine(areas, checks); got != want { // a file word must start a word the checks use; "index" and "use" are too common to count
 		t.Fatalf("line %q, want %q", got, want)
 	}
-	if got, want := areaLine([]Area{{Name: "Shell sidebar", Files: 2}, {Name: "Chat", Files: 1}}, checks), "What the PR touches. Shell sidebar, 2 files, covered above. Chat, 1 file, not touched by this run."; got != want { // older runs kept no file names: the area's own words stand in
+	if got, want := areaLine([]Area{{Name: "Shell sidebar", Files: 2}, {Name: "Chat", Files: 1}}, checks), "Not checked by this run: chat (1 file)."; got != want { // older runs kept no file names: the area's own words stand in
 		t.Fatalf("older run: %q, want %q", got, want)
+	}
+	if got := areaLine([]Area{{Name: "Shell sidebar", Files: 2}}, checks); got != "" {
+		t.Fatalf("everything covered, no line: %q", got)
 	}
 	if got := areaLine(nil, checks); got != "" {
 		t.Fatalf("no areas, no line: %q", got)
@@ -420,11 +421,37 @@ func TestAreaLineSaysWhichChangedAreasTheChecksCover(t *testing.T) {
 	for i := 1; i <= 8; i++ {
 		many = append(many, Area{Name: fmt.Sprint("Area", i), Files: i})
 	}
-	if got := areaLine(many[:7], nil); !strings.HasSuffix(got, " Area6, 6 files, not touched by this run. And 1 more area.") || strings.Contains(got, "Area7") {
+	if got := areaLine(many[:7], nil); !strings.HasSuffix(got, " area6 (6 files), and 1 more area.") || strings.Contains(got, "area7") {
 		t.Fatalf("seven areas: %q", got)
 	}
-	if got := areaLine(many, nil); !strings.HasSuffix(got, " And 2 more areas.") {
+	if got := areaLine(many, nil); !strings.HasSuffix(got, ", and 2 more areas.") {
 		t.Fatalf("eight areas: %q", got)
+	}
+}
+
+func TestAreaIsCoveredOnlyWhenACheckNamingItRan(t *testing.T) {
+	areas := []Area{{Name: "Shell sidebar", Files: 3, Stems: []string{"Sidebar"}}, {Name: "Chat", Files: 2, Stems: []string{"Chat"}}}
+	about := func(state CheckState, name string) Check {
+		return Check{Name: name, Expect: "the " + name + " works", Note: "seen", State: state}
+	}
+	want := "Not checked by this run: shell sidebar (3 files)."
+	if got := areaLine(areas, []Check{about(CheckSkipped, "sidebar"), about(CheckPass, "chat")}); got != want { // could not be done: not checked
+		t.Errorf("skipped check: %q, want %q", got, want)
+	}
+	for _, state := range []CheckState{CheckPass, CheckFail, CheckPartial} {
+		if got := areaLine(areas, []Check{about(state, "sidebar"), about(CheckPass, "chat")}); got != "" {
+			t.Errorf("%s check: %q, want no line", state, got)
+		}
+	}
+	// a skipped check alone covers nothing, even for the only non-test area
+	if got, want := areaLine(areas[:1], []Check{about(CheckSkipped, "sidebar")}), "Not checked by this run: shell sidebar (3 files)."; got != want {
+		t.Errorf("only area, skipped: %q, want %q", got, want)
+	}
+	// a check on main alone does not cover the PR build's area
+	base := about(CheckPass, "sidebar")
+	base.Leg = "base"
+	if got := areaLine(areas[:1], []Check{base}); got == "" {
+		t.Errorf("a main-only check covered an area")
 	}
 }
 
@@ -545,10 +572,10 @@ func TestCommentFirstLineNamesTheClosedIssues(t *testing.T) {
 		issues []IssueRef
 		want   string
 	}{
-		{nil, "Litmus tried #6403 on the PR build and on main."},
-		{[]IssueRef{{Number: 6390, URL: url(6390)}}, "Litmus tried #6403 (for [#6390](" + url(6390) + ")) on the PR build and on main."},
-		{[]IssueRef{{Number: 6390, URL: url(6390)}, {Number: 6391, URL: url(6391)}}, "Litmus tried #6403 (for [#6390](" + url(6390) + ") and [#6391](" + url(6391) + ")) on the PR build and on main."},
-		{[]IssueRef{{Number: 1}, {Number: 2}, {Number: 3}}, "Litmus tried #6403 (for #1, #2 and #3) on the PR build and on main."},
+		{nil, "Litmus tried #6403 on the PR build and on main (1 minute)."},
+		{[]IssueRef{{Number: 6390, URL: url(6390)}}, "Litmus tried #6403 (for [#6390](" + url(6390) + ")) on the PR build and on main (1 minute)."},
+		{[]IssueRef{{Number: 6390, URL: url(6390)}, {Number: 6391, URL: url(6391)}}, "Litmus tried #6403 (for [#6390](" + url(6390) + ") and [#6391](" + url(6391) + ")) on the PR build and on main (1 minute)."},
+		{[]IssueRef{{Number: 1}, {Number: 2}, {Number: 3}}, "Litmus tried #6403 (for #1, #2 and #3) on the PR build and on main (1 minute)."},
 	} {
 		run.Issues = c.issues
 		got := renderComment(run, commentVerdict(commentChecks()), evidence{}, run.CreatedAt.Add(time.Minute))
@@ -563,7 +590,7 @@ func TestCommentFirstLineNamesTheClosedIssues(t *testing.T) {
 		one.Checks[i].Leg = "head"
 		one.Checks[i].Receipts = nil
 	}
-	if first, _, _ := strings.Cut(commentBody(run, one, evidence{}, run.CreatedAt, commentFits[0]), "\n"); first != "Litmus tried #6403 (for [#6390]("+url(6390)+")) on the PR build." {
+	if first, _, _ := strings.Cut(commentBody(run, one, evidence{}, run.CreatedAt, commentFits[0]), "\n"); first != "Litmus tried #6403 (for [#6390]("+url(6390)+")) on the PR build (under a minute)." {
 		t.Errorf("head-only first line %q", first)
 	}
 }
