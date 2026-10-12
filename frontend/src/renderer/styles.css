@@ -2566,8 +2566,8 @@ html.sidebar-reordering * {
 	transform: none;
 }
 
-/* Artifact sample prompts are list rows like the sidebar's: no press scale. */
-.cursor-chat-surface .artifact-prompt-suggestion:not(:disabled):active {
+/* Welcome sample prompts are list rows like the sidebar's: no press scale. */
+.cursor-chat-surface .welcome-prompt-suggestion:not(:disabled):active {
 	transform: none;
 }
 
