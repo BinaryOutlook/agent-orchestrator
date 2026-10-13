@@ -174,13 +174,15 @@ describe("Litmus chat command intercept", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
-	it("does not intercept in a worker session chat", async () => {
+	it("intercepts in a worker session chat", async () => {
 		renderSurface(worker);
 		await userEvent.click(screen.getByText("send test PR number"));
 
-		await waitFor(() => expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({ text: "test PR #6473" })));
-		expect(postMock).not.toHaveBeenCalled();
-		expect(screen.queryByTestId("litmus-chat-notice")).not.toBeInTheDocument();
+		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/testing/start", {
+			body: { projectId: "proj-1", prUrl: "https://github.com/acme/app/pull/6473" },
+		}));
+		expect(await screen.findByText("Litmus started on #6473 (session ao-9)")).toBeInTheDocument();
+		expect(sendMock).not.toHaveBeenCalled();
 	});
 
 	it("does not intercept in a remote host's orchestrator chat", async () => {
