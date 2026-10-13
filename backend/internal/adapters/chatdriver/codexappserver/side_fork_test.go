@@ -84,10 +84,10 @@ func TestSideForkRecordsReturnedChildBeforeStarting(t *testing.T) {
 	}
 }
 
-func TestBackgroundForkIsEphemeralAndReadOnly(t *testing.T) {
+func TestBackgroundForkIsReadOnlyAndOmitsResponseHistory(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.reply("thread/fork", `{"thread":{"id":"suggestion-child"},"model":"test-model"}`)
-	conv, err := d.ForkIntoHost(t.Context(), "parent", "native-turn", ports.ChatStartConfig{WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto, Ephemeral: true, ReadOnly: true, DisableNetwork: true})
+	conv, err := d.ForkIntoHost(t.Context(), "parent", "native-turn", ports.ChatStartConfig{WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto, ReadOnly: true, DisableNetwork: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestBackgroundForkIsEphemeralAndReadOnly(t *testing.T) {
 	if err := json.Unmarshal(srv.awaitFrame(func(f frame) bool { return f.Method == "thread/fork" }).Params, &params); err != nil {
 		t.Fatal(err)
 	}
-	if params["ephemeral"] != true || params["excludeTurns"] != true || params["sandbox"] != "read-only" || params["approvalPolicy"] != "never" {
+	if params["ephemeral"] != nil || params["excludeTurns"] != true || params["sandbox"] != "read-only" || params["approvalPolicy"] != "never" {
 		t.Fatalf("fork policies=%+v", params)
 	}
 	if conv.(ports.ChatSandboxNetwork).SandboxAllowsNetwork("") {

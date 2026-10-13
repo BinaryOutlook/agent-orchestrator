@@ -417,8 +417,9 @@ an active desktop launch and the live provider's fork capability are available.
 Exact-turn providers receive the resolved native turn ID; current-context
 providers revalidate and fence the latest completed turn while copying. The
 child uses a scratch workspace, background permissions, its parent's model and
-the lowest advertised reasoning effort. Codex forks are ephemeral, read-only,
-and have tool network access disabled. ACP retains the existing no-tools
+the lowest advertised reasoning effort. Codex forks omit turn history from the fork response, enforce read-only access,
+and have tool network access disabled. Temporary forks retain a provider rollout
+so the existing cleanup API can delete them after their host stops. ACP retains the existing no-tools
 instruction policy rather than an enforced read-only sandbox. Unsupported
 providers and standalone daemons retain the bounded transcript-copy fallback.
 Suggestions create no visible side chat or durable transcript. Child IDs enter
