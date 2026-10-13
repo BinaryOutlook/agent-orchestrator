@@ -21,11 +21,11 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-const lidHelperVersion = 1
+const lidHelperVersion = 2
 const lidHelperLabel = "com.aoagents.mobile-wake"
 
 // LidAwake is a lease client for the independent, launchd-owned coordinator.
-// Default-data AO instances for this login share ~/.ao/wake. Custom data
+// Default-data AO instances for this login share ~/.ao/data/wake. Custom data
 // roots cannot enable host control, which would break isolation.
 type LidAwake struct {
 	mu                    sync.Mutex
@@ -78,7 +78,7 @@ func NewLidAwake(pid int, binary, dataDir string) *LidAwake {
 	if binary == "" || !filepath.IsAbs(binary) {
 		return l
 	}
-	l.directory = filepath.Join(home, ".ao", "wake")
+	l.directory = filepath.Join(dataDir, "wake")
 	ctx, cancel := context.WithTimeout(context.Background(), processProbeTimeout)
 	defer cancel()
 	out, err := aoprocess.CommandContext(ctx, binary, "probe").Output()

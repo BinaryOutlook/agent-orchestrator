@@ -24,7 +24,7 @@ path. The renderer does not own recovery. Implement independently of the closed
 main Amphetamine app and Insomnia's installer.
 
 On explicit opt-in, copy the bundled helper to a content-addressed executable
-under `~/.ao/wake`, then register its plist using `launchctl bootstrap`.
+under `~/.ao/data/wake`, then register its plist using `launchctl bootstrap`.
 Keeping the executable outside the replaceable app bundle preserves recovery
 across updates. Plist, private request files, status and journal also live here;
 no files go into OS-default app-data or `~/Library/LaunchAgents`. After a
@@ -111,3 +111,9 @@ decision narrows the advertised range. Record unavailable machines honestly.
 - [Apple kernel clamshell policy](https://github.com/apple-oss-distributions/xnu/blob/main/iokit/Kernel/IOPMrootDomain.cpp)
 - [Apple IOKitUser SDK sources](https://github.com/apple-oss-distributions/IOKitUser)
 - [Amphetamine documented behavior](https://apps.apple.com/us/app/amphetamine/id937984704)
+
+Native protocol version 2 stores coordinator state inside the default durable
+data root. An existing version-1 registration is never replaced automatically;
+open the lid, stop all old wake sessions and unload its registration before
+opting in again. Retain any unfinished legacy recovery journal under
+`~/.ao/wake` until recovery has completed.

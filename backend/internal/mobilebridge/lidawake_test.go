@@ -113,7 +113,7 @@ func TestWakeSetupAcceptsDaemonParentAndReusesRegisteredBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	registered, bootstraps := false, 0
-	protocol := 1
+	protocol := lidHelperVersion
 	execute := func(_ context.Context, command string, args ...string) ([]byte, error) {
 		if command == "/bin/launchctl" {
 			switch args[0] {
@@ -143,9 +143,11 @@ func TestWakeSetupAcceptsDaemonParentAndReusesRegisteredBuild(t *testing.T) {
 			t.Fatal(err)
 		}
 		if i == 1 {
-			protocol = 2
-			if err := l.setup(); err == nil {
-				t.Fatal("incompatible registration silently accepted")
+			for _, incompatible := range []int{1, lidHelperVersion + 1} {
+				protocol = incompatible
+				if err := l.setup(); err == nil {
+					t.Fatal("incompatible registration silently accepted")
+				}
 			}
 		}
 	}

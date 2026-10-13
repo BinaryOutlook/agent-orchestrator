@@ -115,7 +115,7 @@ short lid-closed session on your machine before relying on it unattended.
 [ADR 0005](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/adr/0005-mobile-closed-lid-wake.md)
 records current evidence and the release gate.
 
-Helper versions, plist, leases and recovery journal live under `~/.ao/wake`,
+Helper versions, plist, leases and recovery journal live under `~/.ao/data/wake`,
 shared by AO instances of the same login using the default `~/.ao/data` durable
 data root. Custom or scratch `AO_DATA_DIR` roots disable native lid control so
 isolated runs cannot affect production state or host power. Ordinary Keep awake
@@ -130,3 +130,9 @@ An existing compatible helper is reused across app builds, rather than replaced
 while sessions may be active. To upgrade that helper, use the removal steps above
 with the lid open, then enable the option again; fresh registration removes stale
 helper copies.
+
+Native protocol version 2 stores coordinator state inside the default durable
+data root. An existing version-1 registration is never replaced automatically;
+open the lid, stop all old wake sessions and unload its registration before
+opting in again. Retain any unfinished legacy recovery journal under
+`~/.ao/wake` until recovery has completed.

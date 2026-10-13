@@ -5,9 +5,9 @@ import IOKit.pwr_mgt
 import CoreGraphics
 import Darwin
 
-let protocolVersion = 1
+let protocolVersion = 2
 let home = FileManager.default.homeDirectoryForCurrentUser
-let directory = home.appendingPathComponent(".ao/wake")
+let directory = home.appendingPathComponent(".ao/data/wake")
 let leasesDirectory = directory.appendingPathComponent("leases")
 let journalURL = directory.appendingPathComponent("journal.json")
 let statusURL = directory.appendingPathComponent("status.json")
