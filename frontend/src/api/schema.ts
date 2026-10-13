@@ -4018,6 +4018,9 @@ export interface components {
             hasBattery: boolean;
             supported: boolean;
         };
+        ControllersKillSessionRequest: {
+            deleteArtifacts?: boolean;
+        };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
             token: string;
@@ -4739,6 +4742,7 @@ export interface components {
             runs: components["schemas"]["ReviewRun"][];
         };
         KillSessionResponse: {
+            artifactsDeleted?: boolean;
             cleanupPending?: boolean;
             freed?: boolean;
             ok: boolean;
@@ -15158,7 +15162,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ControllersKillSessionRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {

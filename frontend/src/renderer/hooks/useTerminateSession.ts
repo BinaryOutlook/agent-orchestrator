@@ -26,7 +26,13 @@ type TerminateSessionOptions = {
 
 export const terminateSessionMutationKey = ["terminate-session"] as const;
 
-async function terminateSession(queryClient: QueryClient, session: WorkspaceSession): Promise<void> {
+/**
+ * The session to archive. `deleteArtifacts` asks the daemon to also delete the
+ * session's artifact files; only the archive dialog sets it.
+ */
+export type TerminateSessionRequest = WorkspaceSession & { deleteArtifacts?: boolean };
+
+async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<void> {
 	if (session.cloud) {
 		const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
 		const baseUrl = settings?.cloudControlPlaneUrl ?? "";
@@ -37,6 +43,7 @@ async function terminateSession(queryClient: QueryClient, session: WorkspaceSess
 
 	const { error, response } = await (session.hostId ? clientForHost(session.hostId) : apiClient).POST("/api/v1/sessions/{sessionId}/kill", {
 		params: { path: { sessionId: session.id } },
+		body: session.deleteArtifacts ? { deleteArtifacts: true } : undefined,
 	});
 	if (error) {
 		const fallback = response ? `Failed to terminate session (${response.status})` : "Failed to terminate session";
@@ -107,7 +114,7 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationKey: terminateSessionMutationKey,
-		mutationFn: async (session: WorkspaceSession) => {
+		mutationFn: async (session: TerminateSessionRequest) => {
 			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind, session.hostId);
 			void captureRendererEvent("ao.renderer.session_kill_requested", { project_id: session.workspaceId });
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -841,6 +842,51 @@ func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (session
 	s.cancelTitleRefinement(id)
 	result, err := s.manager.RequestKill(ctx, id)
 	return result, toAPIError(err)
+}
+
+// artifactVersionDeleter is the optional store capability that drops a
+// session's artifact version rows. Production wiring supplies the SQLite store;
+// focused fakes without it delete only the files.
+type artifactVersionDeleter interface {
+	DeleteSessionArtifactVersions(ctx context.Context, id domain.SessionID) error
+}
+
+// DeleteArtifacts empties a terminated session's artifact directory, version
+// history included, and drops its version rows. The directory itself is kept,
+// so a restored session starts with an empty one. Only the user's archive
+// choice calls this; kill, cleanup and the reaper never delete artifacts.
+func (s *Service) DeleteArtifacts(ctx context.Context, id domain.SessionID) error {
+	rec, ok, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return toAPIError(err)
+	}
+	if !ok {
+		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	if !rec.IsTerminated {
+		return apierr.Conflict("SESSION_NOT_TERMINATED", "Archive the session before deleting its artifacts.", nil)
+	}
+	dir := sessionartifacts.Dir(s.dataDir, id)
+	if dir == "" {
+		return nil
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("delete artifacts %s: %w", id, err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("delete artifacts %s: recreate dir: %w", id, err)
+	}
+	if versions, ok := s.store.(artifactVersionDeleter); ok {
+		if err := versions.DeleteSessionArtifactVersions(ctx, id); err != nil {
+			return err
+		}
+	}
+	if s.outputTypeReconciler != nil {
+		if err := s.outputTypeReconciler.ReconcileSessionOutputType(ctx, id); err != nil {
+			return fmt.Errorf("delete artifacts %s: reconcile output type: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // RollbackSpawn deletes a seed-state session row, or falls back to a Kill if

@@ -27,6 +27,16 @@ type ConfirmDialogProps = {
 	/** Defaults to "Cancel"; reversible actions can soften it to "No". */
 	cancelLabel?: string;
 	destructive?: boolean;
+	/**
+	 * A second, quieter way to confirm, rendered between cancel and confirm.
+	 * Destructive ones keep the quiet surface but take the destructive text color.
+	 */
+	secondaryAction?: {
+		label: string;
+		ariaLabel?: string;
+		destructive?: boolean;
+		onClick: () => void;
+	};
 	busy?: boolean;
 	error?: string | null;
 	onConfirm: () => void;
@@ -45,6 +55,7 @@ export function ConfirmDialog({
 	confirmAriaLabel,
 	cancelLabel,
 	destructive,
+	secondaryAction,
 	busy,
 	error,
 	onConfirm,
@@ -64,7 +75,11 @@ export function ConfirmDialog({
 		<Dialog open={open} onOpenChange={(next) => { if (busy && !next) return; onOpenChange(next); }}>
 			<DialogContent
 				showCloseButton={false}
-				className={cn(settingsDialogContentClass, "w-[min(420px,calc(100vw-24px))]")}
+				className={cn(
+					settingsDialogContentClass,
+					// A third button does not fit the two-button width.
+					secondaryAction ? "w-[min(480px,calc(100vw-24px))]" : "w-[min(420px,calc(100vw-24px))]",
+				)}
 				// React portals re-dispatch synthetic events up the React tree, not the
 				// DOM tree, so a confirm rendered from inside a clickable row or card
 				// would otherwise also trigger that ancestor's onClick (opening the very
@@ -115,6 +130,18 @@ export function ConfirmDialog({
 							{cancelLabel ?? t("confirm.cancel")}
 						</Button>
 					</DialogClose>
+					{secondaryAction ? (
+						<Button
+							aria-label={secondaryAction.ariaLabel}
+							type="button"
+							variant="footer"
+							className={cn(compactButtonClass, secondaryAction.destructive && "text-destructive")}
+							disabled={busy}
+							onClick={secondaryAction.onClick}
+						>
+							{secondaryAction.label}
+						</Button>
+					) : null}
 					<Button
 						ref={confirmRef}
 						aria-label={confirmAriaLabel}
