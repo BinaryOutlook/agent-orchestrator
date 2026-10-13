@@ -1209,8 +1209,6 @@
 	"settings.cliLink.unlink": "Unlink",
 	"settings.cliLink.confirmLinkTitle": "Link the global ao command?",
 	"settings.cliLink.confirmUnlinkTitle": "Remove the global ao link?",
-	"settings.cliLink.confirm": "Confirm",
-	"settings.cliLink.cancel": "Cancel",
 	"settings.cliLink.currentMissing": "Current target: none at {{path}}.",
 	"settings.cliLink.current": "Current target: {{target}}.",
 	"settings.cliLink.proposed": "Proposed target: {{target}} ({{version}}).",

@@ -1,6 +1,8 @@
-// Developer Mode only. Links /usr/local/bin/ao to the CLI shipped inside the
+// Developer Mode only. Links the global ao command to the CLI shipped inside the
 // installed app. It never edits shell startup files and never replaces a
 // command AO did not create.
+
+import { randomUUID } from "node:crypto";
 
 export const CLI_LINK_DIRECTORY = "/usr/local/bin";
 export const CLI_LINK_NAME = "ao";
@@ -59,6 +61,7 @@ export type CliLinkIo = {
 	writeText(path: string, text: string): Promise<void>;
 	remove(path: string): Promise<void>;
 	symlink(target: string, path: string): Promise<void>;
+	rename(from: string, to: string): Promise<void>;
 	canWrite(path: string): Promise<boolean>;
 	canExecute(path: string): Promise<boolean>;
 	version(executable: string): Promise<string>;
@@ -78,6 +81,9 @@ export type CliLinkRequest = {
 	dataDir: string;
 	allowSystemLinkDir?: boolean;
 	confirmReplacement?: boolean;
+	expectedTarget?: string | null;
+	appVersion?: string;
+	shellPath?: string;
 };
 
 type Marker = { version: 1; linkPath: string; targetPath: string };
@@ -92,6 +98,7 @@ export function cliLinkSupport(input: {
 	platform: NodeJS.Platform;
 	isPackaged: boolean;
 	appImage?: string;
+	appCliPath?: string;
 }): { ok: true } | { ok: false; message: string } {
 	if (input.platform === "win32") {
 		return {
@@ -106,6 +113,9 @@ export function cliLinkSupport(input: {
 			message:
 				"AppImage is not supported. The bundled CLI is on a temporary mount that changes every launch, so a global link would go stale. Use a deb or rpm install, or run the AppImage directly.",
 		};
+	}
+	if (input.platform === "darwin" && (input.appCliPath?.includes("/AppTranslocation/") || input.appCliPath?.startsWith("/Volumes/"))) {
+		return { ok: false, message: "Move Agent Orchestrator to Applications before linking the global ao command." };
 	}
 	if (!input.isPackaged) {
 		return {
@@ -158,11 +168,11 @@ async function classify(io: CliLinkIo, linkPath: string, appCliPath: string, mar
 		return { kind: "foreign", target: null, managed: false };
 	}
 	const absolute = raw.startsWith("/") ? raw : io.resolve(io.join(io.parent(linkPath), raw));
-	const markerOwns = marker?.linkPath === linkPath;
+	const markerOwns = marker?.linkPath === linkPath && io.resolve(marker.targetPath) === absolute;
 	const appReal = await io.realpath(appCliPath);
 	const linkReal = await io.realpath(linkPath);
 	const sameAsApp = Boolean(appReal && linkReal && appReal === linkReal) || absolute === io.resolve(appCliPath);
-	if (!markerOwns && !sameAsApp) return { kind: "foreign", target: absolute, managed: false };
+	if (!markerOwns) return { kind: "foreign", target: absolute, managed: false };
 	if (!linkReal || !sameAsApp) return { kind: "stale", target: absolute, managed: true };
 	return { kind: "linked", target: absolute, version: "", managed: true };
 }
@@ -178,7 +188,8 @@ export async function inspectCliLink(io: CliLinkIo, request: CliLinkRequest): Pr
 	if (await io.canExecute(request.appCliPath)) {
 		proposedTarget = io.resolve(request.appCliPath);
 		try {
-			proposedVersion = await io.version(proposedTarget);
+			const binaryVersion = await io.version(proposedTarget);
+			proposedVersion = request.appVersion ?? binaryVersion;
 		} catch (error) {
 			message = error instanceof Error ? error.message : "The app CLI did not report a version.";
 		}
@@ -187,7 +198,7 @@ export async function inspectCliLink(io: CliLinkIo, request: CliLinkRequest): Pr
 	}
 	if (current.kind === "linked") {
 		try {
-			current.version = await io.version(gated.linkPath);
+			current.version = request.appVersion ?? await io.version(gated.linkPath);
 		} catch (error) {
 			message = error instanceof Error ? error.message : "The linked command did not report a version.";
 		}
@@ -196,7 +207,22 @@ export async function inspectCliLink(io: CliLinkIo, request: CliLinkRequest): Pr
 		message = `The command at ${gated.linkPath} is not an Agent Orchestrator link. It was left unchanged.`;
 	}
 	if (current.kind === "missing" && !(await io.canWrite(io.parent(gated.linkPath)))) {
-		message = `Cannot write ${io.parent(gated.linkPath)}. This action will not change ownership or ask for a password.`;
+		message = await io.lstat(io.parent(gated.linkPath))
+			? `Cannot write ${io.parent(gated.linkPath)}. This action will not change ownership or ask for a password.`
+			: `The link directory ${io.parent(gated.linkPath)} does not exist.`;
+	}
+	if (request.shellPath && current.kind !== "foreign") {
+		let winner: string | null = null;
+		for (const directory of request.shellPath.split(":")) {
+			if (!directory) continue;
+			const candidate = io.join(directory, CLI_LINK_NAME);
+			if (await io.canExecute(candidate)) { winner = candidate; break; }
+		}
+		if (winner && io.resolve(winner) !== gated.linkPath) {
+			message = [message, `A fresh shell finds ${winner} before ${gated.linkPath}. This link will be shadowed.`].filter(Boolean).join(" ");
+		} else if (!request.shellPath.split(":").some((directory) => directory && io.resolve(directory) === io.parent(gated.linkPath))) {
+			message = [message, `${io.parent(gated.linkPath)} is not on the login shell PATH.`].filter(Boolean).join(" ");
+		}
 	}
 	return {
 		ok: true,
@@ -219,26 +245,25 @@ export async function linkCli(io: CliLinkIo, request: CliLinkRequest): Promise<C
 	const view = await inspectCliLink(io, request);
 	if (!view.ok) return view;
 	const { status } = view;
-	if (!status.proposedTarget) {
-		return failure("missing-app", status.message ?? "The installed app CLI is missing or not executable.", {
-			linkPath: status.linkPath,
-		});
-	}
-	if (!status.proposedVersion) {
-		return failure("version", status.message ?? "The app CLI did not report a version.", {
-			linkPath: status.linkPath,
-			proposedTarget: status.proposedTarget,
-		});
-	}
 	if (status.current.kind === "foreign") {
-		return failure("foreign", status.message ?? "The existing command is not an Agent Orchestrator link.", {
+		return failure("foreign", `The command at ${status.linkPath} is not an Agent Orchestrator link. It was left unchanged.`, {
 			linkPath: status.linkPath,
 			currentTarget: status.current.target,
 			proposedTarget: status.proposedTarget,
 		});
 	}
+	if (!status.proposedTarget) {
+		return failure("missing-app", `The installed app CLI is missing or not executable (${request.appCliPath}).`, {
+			linkPath: status.linkPath,
+		});
+	}
+	if (!status.proposedVersion) {
+		return failure("version", "The installed app CLI did not report a version.", {
+			linkPath: status.linkPath,
+			proposedTarget: status.proposedTarget,
+		});
+	}
 	if (status.current.kind === "linked") {
-		await writeMarker(io, request, status.linkPath, status.proposedTarget);
 		return {
 			ok: true,
 			changed: false,
@@ -254,41 +279,69 @@ export async function linkCli(io: CliLinkIo, request: CliLinkRequest): Promise<C
 			{ linkPath: status.linkPath, currentTarget: status.current.target, proposedTarget: status.proposedTarget },
 		);
 	}
+	if (status.current.kind === "stale" && request.expectedTarget !== status.current.target) {
+		return failure("confirmation-required", "The current ao link changed. Review its target before relinking.", {
+			linkPath: status.linkPath, currentTarget: status.current.target, proposedTarget: status.proposedTarget,
+		});
+	}
 	if (!(await io.canWrite(io.parent(status.linkPath)))) {
-		return failure("permission", `Cannot write ${io.parent(status.linkPath)}. This action will not change ownership or ask for a password.`, {
+		const exists = await io.lstat(io.parent(status.linkPath));
+		return failure(exists ? "permission" : "io", exists
+			? `Cannot write ${io.parent(status.linkPath)}. This action will not change ownership or ask for a password.`
+			: `The link directory ${io.parent(status.linkPath)} does not exist.`, {
 			linkPath: status.linkPath,
 			proposedTarget: status.proposedTarget,
 		});
 	}
-	if (status.current.kind === "stale") {
-		const stat = await io.lstat(status.linkPath);
-		if (!stat?.symbolicLink) {
-			return failure("foreign", `The command at ${status.linkPath} is not an Agent Orchestrator link. It was left unchanged.`, {
-				linkPath: status.linkPath,
-				proposedTarget: status.proposedTarget,
-			});
-		}
-		await io.remove(status.linkPath);
-	}
-	await io.symlink(status.proposedTarget, status.linkPath);
-	await writeMarker(io, request, status.linkPath, status.proposedTarget);
-	let version: string;
+	const markerPath = io.join(request.dataDir, CLI_LINK_MARKER_FILE);
+	const previousMarker = await io.readText(markerPath);
+	const stagedPath = `${status.linkPath}.${randomUUID()}.tmp`;
+	let staged = false;
+	let markerChanged = false;
+	let verifying = false;
 	try {
-		version = await io.version(status.linkPath);
+		await io.symlink(status.proposedTarget, stagedPath);
+		staged = true;
+		verifying = true;
+		await io.version(stagedPath);
+		verifying = false;
+		const latest = await classify(io, status.linkPath, request.appCliPath, await readMarker(io, request.dataDir));
+		if (latest.kind !== status.current.kind || (latest.kind === "stale" && status.current.kind === "stale" && latest.target !== status.current.target)) {
+			return failure("confirmation-required", "The current ao link changed. Review its target before linking.", { linkPath: status.linkPath });
+		}
+		await writeMarker(io, request, status.linkPath, status.proposedTarget);
+		markerChanged = true;
+		if (status.current.kind === "missing") {
+			await io.symlink(status.proposedTarget, status.linkPath);
+		} else {
+			await io.rename(stagedPath, status.linkPath);
+			staged = false;
+		}
 	} catch (error) {
-		return failure("version", error instanceof Error ? error.message : "The linked command did not report a version.", {
-			linkPath: status.linkPath,
-			proposedTarget: status.proposedTarget,
+		if (markerChanged) {
+			if (previousMarker === null) await io.remove(markerPath);
+			else await io.writeText(markerPath, previousMarker);
+		}
+		const code = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code;
+		return failure(code === "EACCES" || code === "EPERM" ? "permission" : verifying ? "version" : "io", error instanceof Error ? error.message : "Could not create the ao link.", {
+			linkPath: status.linkPath, proposedTarget: status.proposedTarget,
 		});
+	} finally {
+		if (staged) await io.remove(stagedPath).catch(() => undefined);
 	}
-	return { ok: true, changed: true, linkPath: status.linkPath, targetPath: status.proposedTarget, version };
+	return { ok: true, changed: true, linkPath: status.linkPath, targetPath: status.proposedTarget, version: status.proposedVersion };
 }
 
 export async function unlinkCli(io: CliLinkIo, request: CliLinkRequest): Promise<CliLinkResult> {
 	const view = await inspectCliLink(io, request);
 	if (!view.ok) return view;
 	const { status } = view;
-	if (!request.confirmReplacement) {
+	if (status.current.kind === "foreign") {
+		return failure("foreign", status.message ?? "The existing command is not an Agent Orchestrator link.", {
+			linkPath: status.linkPath, currentTarget: status.current.target,
+		});
+	}
+	if (!request.confirmReplacement || request.expectedTarget !== (status.current.kind === "missing" ? null : status.current.target)) {
 		return failure("confirmation-required", `Remove the Agent Orchestrator link at ${status.linkPath}?`, {
 			linkPath: status.linkPath,
 			currentTarget: status.current.kind === "missing" ? null : status.current.target,
@@ -297,22 +350,22 @@ export async function unlinkCli(io: CliLinkIo, request: CliLinkRequest): Promise
 	if (status.current.kind === "missing") {
 		return failure("io", `No ao command exists at ${status.linkPath}.`, { linkPath: status.linkPath });
 	}
-	if (status.current.kind === "foreign") {
-		return failure("foreign", status.message ?? "The existing command is not an Agent Orchestrator link.", {
-			linkPath: status.linkPath,
-			currentTarget: status.current.target,
-		});
-	}
-	const stat = await io.lstat(status.linkPath);
-	if (!stat?.symbolicLink) {
+	const latest = await classify(io, status.linkPath, request.appCliPath, await readMarker(io, request.dataDir));
+	if (latest.kind === "foreign" || latest.kind === "missing" || latest.target !== status.current.target) {
 		return failure("foreign", `The command at ${status.linkPath} is not an Agent Orchestrator link. It was left unchanged.`, {
 			linkPath: status.linkPath,
 		});
 	}
 	try {
-		await io.remove(status.linkPath);
-		const marker = await readMarker(io, request.dataDir);
-		if (marker?.linkPath === status.linkPath) await io.remove(io.join(request.dataDir, CLI_LINK_MARKER_FILE));
+		const markerPath = io.join(request.dataDir, CLI_LINK_MARKER_FILE);
+		const markerText = await io.readText(markerPath);
+		await io.remove(markerPath);
+		try {
+			await io.remove(status.linkPath);
+		} catch (error) {
+			if (markerText !== null) await io.writeText(markerPath, markerText);
+			throw error;
+		}
 	} catch (error) {
 		const code = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code;
 		if (code === "EACCES" || code === "EPERM") {

@@ -1,7 +1,9 @@
-import { spawn } from "node:child_process";
-import { access, lstat, mkdir, readFile, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { access, lstat, mkdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import type { CliLinkIo } from "../shared/cli-link";
 
 function missing(error: unknown): boolean {
@@ -33,12 +35,19 @@ export function nodeCliLinkIo(): CliLinkIo {
 		},
 		async writeText(value, text) {
 			await mkdir(path.dirname(value), { recursive: true });
-			await writeFile(value, text, { mode: 0o600 });
+			const staged = `${value}.${randomUUID()}.tmp`;
+			try {
+				await writeFile(staged, text, { mode: 0o600, flag: "wx" });
+				await rename(staged, value);
+			} finally {
+				await rm(staged, { force: true }).catch(() => undefined);
+			}
 		},
 		async remove(value) {
 			await rm(value, { force: false });
 		},
 		symlink,
+		rename,
 		async canWrite(value) {
 			try {
 				await access(value, constants.W_OK);
@@ -67,31 +76,13 @@ export function nodeCliLinkIo(): CliLinkIo {
 }
 
 export function readCliVersion(executable: string): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const child = spawn(executable, ["version"], {
-			shell: false,
-			env: { PATH: path.dirname(executable) },
-			stdio: ["ignore", "pipe", "pipe"],
-			timeout: 5000,
-		});
-		let stdout = "";
-		let stderr = "";
-		child.stdout.setEncoding("utf8");
-		child.stderr.setEncoding("utf8");
-		child.stdout.on("data", (chunk: string) => {
-			stdout += chunk;
-		});
-		child.stderr.on("data", (chunk: string) => {
-			stderr += chunk;
-		});
-		child.on("error", reject);
-		child.on("close", (code) => {
-			const line = stdout.trim().split("\n")[0]?.trim() ?? "";
-			if (code !== 0 || !line) {
-				reject(new Error(stderr.trim() || `The CLI at ${executable} did not report a version.`));
-				return;
-			}
-			resolve(line);
-		});
+	return promisify(execFile)(executable, ["version"], {
+		env: { PATH: path.dirname(executable) },
+		timeout: 5000,
+		maxBuffer: 1024 * 1024,
+	}).then(({ stdout }) => {
+		const line = stdout.trim().split("\n")[0]?.trim();
+		if (!line) throw new Error(`The CLI at ${executable} did not report a version.`);
+		return line;
 	});
 }

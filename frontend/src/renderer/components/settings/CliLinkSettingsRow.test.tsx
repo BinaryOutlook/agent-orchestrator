@@ -18,11 +18,16 @@ vi.mock("../../lib/bridge", () => ({
 
 const inspect = aoBridge.cliLink.inspect as ReturnType<typeof vi.fn>;
 const link = aoBridge.cliLink.link as ReturnType<typeof vi.fn>;
+const unlink = aoBridge.cliLink.unlink as ReturnType<typeof vi.fn>;
+const setEnabled = aoBridge.cliLink.setEnabled as ReturnType<typeof vi.fn>;
 
 beforeEach(async () => {
 	await appI18n.changeLanguage("en");
 	inspect.mockReset();
 	link.mockReset();
+	unlink.mockReset();
+	setEnabled.mockReset();
+	setEnabled.mockResolvedValue(undefined);
 	inspect.mockResolvedValue({
 		ok: true,
 		status: {
@@ -33,6 +38,7 @@ beforeEach(async () => {
 		},
 	});
 	link.mockResolvedValue({ ok: true, changed: true, linkPath: "/tmp/bin/ao", targetPath: "/Apps/Agent Orchestrator.app/Contents/Resources/daemon/ao", version: "9.1.0" });
+	unlink.mockResolvedValue({ ok: true, changed: true, linkPath: "/tmp/bin/ao", targetPath: "", version: "" });
 });
 
 describe("CliLinkSettings", () => {
@@ -51,7 +57,34 @@ describe("CliLinkSettings", () => {
 		await user.click(screen.getByRole("button", { name: "Relink" }));
 		expect(link).not.toHaveBeenCalled();
 		await user.click(screen.getByRole("button", { name: "Confirm" }));
-		expect(link).toHaveBeenCalledWith(true);
+		expect(link).toHaveBeenCalledWith(true, "/Apps/Old.app/Contents/Resources/daemon/ao");
+	});
+
+	it("enables Developer mode in main before the first inspect", async () => {
+		let enabled = false;
+		setEnabled.mockImplementation(async (next: boolean) => { enabled = next; });
+		inspect.mockImplementation(async () => enabled
+			? { ok: true, status: { linkPath: "/tmp/bin/ao", proposedTarget: "/Apps/AO/ao", proposedVersion: "1.0.0", current: { kind: "missing" } } }
+			: { ok: false, code: "developer-mode", message: "Turn on Developer mode" });
+		render(<CliLinkSettings enabled />);
+		expect(await screen.findByRole("button", { name: "Link" })).toBeInTheDocument();
+		expect(inspect).toHaveBeenCalledOnce();
+	});
+
+	it("shows an inspect rejection instead of a permanent loading state", async () => {
+		inspect.mockRejectedValue(new Error("marker access denied"));
+		render(<CliLinkSettings enabled />);
+		expect(await screen.findByRole("alert")).toHaveTextContent("marker access denied");
+		expect(screen.queryByText("Checking the global ao command.")).not.toBeInTheDocument();
+	});
+
+	it("requires confirmation before unlinking the target shown", async () => {
+		const user = userEvent.setup();
+		render(<CliLinkSettings enabled />);
+		await user.click(await screen.findByRole("button", { name: "Unlink" }));
+		expect(unlink).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: "Confirm" }));
+		expect(unlink).toHaveBeenCalledWith(true, "/Apps/Old.app/Contents/Resources/daemon/ao");
 	});
 
 	it("offers no replacement when the current command is not an AO link", async () => {

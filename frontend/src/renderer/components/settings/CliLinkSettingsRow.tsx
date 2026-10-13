@@ -7,11 +7,17 @@ import { Button } from "../ui/button";
 import { SettingsRow } from "./SettingsRow";
 
 export function CliLinkSettings({ enabled }: { enabled: boolean }) {
+	const [ready, setReady] = useState(false);
 	useEffect(() => {
-		void aoBridge.cliLink.setEnabled(enabled);
+		let active = true;
+		setReady(false);
+		void aoBridge.cliLink.setEnabled(enabled).then(() => {
+			if (active) setReady(enabled);
+		});
+		return () => { active = false; };
 	}, [enabled]);
 	if (!enabled) return null;
-	return <CliLinkSettingsRow />;
+	return ready ? <CliLinkSettingsRow /> : null;
 }
 
 function CliLinkSettingsRow() {
@@ -19,16 +25,34 @@ function CliLinkSettingsRow() {
 	const [view, setView] = useState<CliLinkView | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [confirm, setConfirm] = useState<"link" | "unlink" | null>(null);
+	const [confirm, setConfirm] = useState<{ action: "link" | "unlink"; target: string | null } | null>(null);
 
 	const refresh = () => {
 		setBusy(true);
 		return aoBridge.cliLink.inspect().then((next) => {
 			setView(next);
-			if (!next.ok) setError(next.message);
+			setError(next.ok ? null : next.message);
 		}).catch((cause: unknown) => {
-			setError(cause instanceof Error ? cause.message : t("settings.cliLink.loading"));
+			setView(null);
+			setError(cause instanceof Error ? cause.message : "Could not inspect the global ao command.");
 		}).finally(() => setBusy(false));
+	};
+	const runAction = async (action: "link" | "unlink", target: string | null, confirmed: boolean) => {
+		setBusy(true);
+		setError(null);
+		try {
+			const result = action === "unlink"
+				? await aoBridge.cliLink.unlink(confirmed, target)
+				: await aoBridge.cliLink.link(confirmed, target);
+			if (result.ok) setConfirm(null);
+			await refresh();
+			if (!result.ok) setError(result.message);
+		} catch (cause) {
+			await refresh();
+			setError(cause instanceof Error ? cause.message : "Could not update the global ao command.");
+		} finally {
+			setBusy(false);
+		}
 	};
 
 	useEffect(() => {
@@ -38,7 +62,7 @@ function CliLinkSettingsRow() {
 	const status: CliLinkStatus | null = view?.ok ? view.status : null;
 	const foreign = status?.current.kind === "foreign";
 	const linked = status?.current.kind === "linked";
-	const canLink = Boolean(status && !foreign && status.proposedTarget);
+	const canLink = Boolean(status && !foreign && !linked && status.proposedTarget);
 	const canUnlink = status?.current.kind === "linked" || status?.current.kind === "stale";
 	const detail = describeStatus((key, options) => String(t(key as never, options as never)), view, error);
 
@@ -47,13 +71,22 @@ function CliLinkSettingsRow() {
 			<SettingsRow label={t("settings.cliLink.label")}>
 				<div className="flex items-center gap-1.5">
 					{canUnlink ? (
-						<Button type="button" variant="footer" disabled={busy} onClick={() => setConfirm("unlink")}>
+						<Button type="button" variant="footer" disabled={busy} onClick={() => {
+							if (!status || status.current.kind === "missing") return;
+							setError(null);
+							setConfirm({ action: "unlink", target: status.current.target });
+						}}>
 							{t("settings.cliLink.unlink")}
 						</Button>
 					) : null}
 					{canLink ? (
-						<Button type="button" variant="footer-primary" disabled={busy} onClick={() => setConfirm("link")}>
-							{t(linked ? "settings.cliLink.relink" : status?.current.kind === "stale" ? "settings.cliLink.relink" : "settings.cliLink.link")}
+						<Button type="button" variant="footer-primary" disabled={busy} onClick={() => {
+							if (!status) return;
+							setError(null);
+							if (status.current.kind === "missing") void runAction("link", null, false);
+							else setConfirm({ action: "link", target: status.current.target });
+						}}>
+							{t(status?.current.kind === "stale" ? "settings.cliLink.relink" : "settings.cliLink.link")}
 						</Button>
 					) : null}
 				</div>
@@ -63,31 +96,16 @@ function CliLinkSettingsRow() {
 			</p>
 			<ConfirmDialog
 				open={confirm !== null}
-				title={t(confirm === "unlink" ? "settings.cliLink.confirmUnlinkTitle" : "settings.cliLink.confirmLinkTitle")}
-				description={detail}
-				confirmLabel={t("settings.cliLink.confirm")}
-				cancelLabel={t("settings.cliLink.cancel")}
+				title={t(confirm?.action === "unlink" ? "settings.cliLink.confirmUnlinkTitle" : "settings.cliLink.confirmLinkTitle")}
+				description={describeStatus((key, options) => String(t(key as never, options as never)), view, null)}
+				confirmLabel={t("confirm.confirm")}
 				busy={busy}
 				error={error}
 				onOpenChange={(open) => {
-					if (!open) setConfirm(null);
+					if (!open) { setConfirm(null); setError(null); }
 				}}
 				onConfirm={() => {
-					const action = confirm;
-					if (!action) return;
-					setBusy(true);
-					setError(null);
-					const op = action === "unlink" ? aoBridge.cliLink.unlink(true) : aoBridge.cliLink.link(true);
-					void op.then((result) => {
-						if (!result.ok) {
-							setError(result.message);
-							return;
-						}
-						setConfirm(null);
-						return refresh();
-					}).catch((cause: unknown) => {
-						setError(cause instanceof Error ? cause.message : t("settings.cliLink.loading"));
-					}).finally(() => setBusy(false));
+					if (confirm) void runAction(confirm.action, confirm.target, true);
 				}}
 			/>
 		</div>
@@ -99,7 +117,7 @@ function describeStatus(
 	view: CliLinkView | null,
 	error: string | null,
 ): string {
-	if (!view) return String(t("settings.cliLink.loading"));
+	if (!view) return error || String(t("settings.cliLink.loading"));
 	if (!view.ok) return error || view.message;
 	const { status } = view;
 	const current = status.current.kind === "missing"
@@ -110,6 +128,6 @@ function describeStatus(
 			? String(t("settings.cliLink.proposed", { target: status.proposedTarget, version: status.proposedVersion }))
 			: String(t("settings.cliLink.proposedUnknown", { target: status.proposedTarget }));
 	const linked = status.current.kind === "linked" ? String(t("settings.cliLink.linked", { version: status.current.version })) : "";
-	const foreign = status.current.kind === "foreign" ? String(t("settings.cliLink.foreign")) : "";
+	const foreign = status.current.kind === "foreign" && !status.message ? String(t("settings.cliLink.foreign")) : "";
 	return [current, proposed, linked, foreign, status.message, error].filter(Boolean).join(" ");
 }

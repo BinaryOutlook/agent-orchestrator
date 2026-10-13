@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -115,7 +115,7 @@ describe("cli link", () => {
 		expect(await readlink(path.join(linkDirectory, "ao"))).toBe(appCliPath);
 		const again = await linkCli(io, { ...req, confirmReplacement: true });
 		expect(again).toMatchObject({ ok: true, changed: false, version: "2.4.0" });
-		expect(countedHolder.symlinks).toBe(1);
+		expect(countedHolder.symlinks).toBe(2);
 		expect(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE), "utf8")).toContain(appCliPath);
 	});
 
@@ -144,7 +144,7 @@ describe("cli link", () => {
 		expect(await inspectCliLink(io, req)).toMatchObject({ ok: true, status: { current: { kind: "stale", target: oldCli }, proposedVersion: "4.0.0" } });
 		expect(await linkCli(io, req)).toMatchObject({ ok: false, code: "confirmation-required" });
 		expect(await readlink(linkPath)).toBe(oldCli);
-		const repaired = await linkCli(io, { ...req, confirmReplacement: true });
+		const repaired = await linkCli(io, { ...req, confirmReplacement: true, expectedTarget: oldCli });
 		expect(repaired).toMatchObject({ ok: true, changed: true, version: "4.0.0", targetPath: appCliPath });
 		expect(await readlink(linkPath)).toBe(appCliPath);
 		expect(await readFile(oldCli, "utf8")).toContain("1.0.0");
@@ -158,9 +158,9 @@ describe("cli link", () => {
 		const io = nodeCliLinkIo();
 		await io.symlink(gone, linkPath);
 		await io.writeText(path.join(dataDir, CLI_LINK_MARKER_FILE), `${JSON.stringify({ version: 1, linkPath, targetPath: gone })}\n`);
-		const req = request({ appCliPath, linkDirectory, dataDir, confirmReplacement: true });
+		const req = request({ appCliPath, linkDirectory, dataDir, confirmReplacement: true, expectedTarget: gone });
 		expect(await linkCli(io, req)).toMatchObject({ ok: true, version: "5.0.0" });
-		expect(await unlinkCli(io, req)).toMatchObject({ ok: true, changed: true });
+		expect(await unlinkCli(io, { ...req, expectedTarget: appCliPath })).toMatchObject({ ok: true, changed: true });
 		expect(await lstat(linkPath).catch(() => null)).toBeNull();
 		expect(await lstat(appCliPath)).toBeTruthy();
 		expect(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE), "utf8").catch(() => null)).toBeNull();
@@ -189,5 +189,110 @@ describe("cli link", () => {
 			confirmReplacement: true,
 		}));
 		expect(result).toMatchObject({ ok: false, code: "missing-app" });
+	});
+
+	it("never claims a user made symlink to the app CLI", async () => {
+		const { linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const linkPath = path.join(linkDirectory, "ao");
+		await symlink(appCliPath, linkPath);
+		const req = request({ appCliPath, linkDirectory, dataDir, confirmReplacement: true, expectedTarget: appCliPath });
+		expect(await linkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: false, code: "foreign" });
+		expect(await unlinkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: false, code: "foreign" });
+		expect(await readlink(linkPath)).toBe(appCliPath);
+		expect(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE)).catch(() => null)).toBeNull();
+	});
+
+	it("refuses a link replaced by the user after AO wrote its marker", async () => {
+		const { linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = await executable(path.join(apps, "current"), "ao", "1.0.0");
+		const userCli = await executable(path.join(apps, "user"), "ao", "2.0.0");
+		const linkPath = path.join(linkDirectory, "ao");
+		const io = nodeCliLinkIo();
+		const req = request({ appCliPath, linkDirectory, dataDir });
+		expect((await linkCli(io, req)).ok).toBe(true);
+		await rm(linkPath);
+		await symlink(userCli, linkPath);
+		expect(await inspectCliLink(io, req)).toMatchObject({ ok: true, status: { current: { kind: "foreign", target: userCli } } });
+		expect(await linkCli(io, { ...req, confirmReplacement: true, expectedTarget: userCli })).toMatchObject({ code: "foreign" });
+		expect(await unlinkCli(io, { ...req, confirmReplacement: true, expectedTarget: userCli })).toMatchObject({ code: "foreign" });
+		expect(await readlink(linkPath)).toBe(userCli);
+	});
+
+	it("keeps the old link and marker when replacement fails", async () => {
+		const { linkDirectory, dataDir, apps } = await layout();
+		const oldCli = await executable(path.join(apps, "old"), "ao", "1.0.0");
+		const appCliPath = await executable(path.join(apps, "new"), "ao", "2.0.0");
+		const io = nodeCliLinkIo();
+		const linkPath = path.join(linkDirectory, "ao");
+		await io.symlink(oldCli, linkPath);
+		await io.writeText(path.join(dataDir, CLI_LINK_MARKER_FILE), JSON.stringify({ version: 1, linkPath, targetPath: oldCli }));
+		const failing: CliLinkIo = { ...io, rename: async () => { throw Object.assign(new Error("disk failed"), { code: "EIO" }); } };
+		const result = await linkCli(failing, request({ appCliPath, linkDirectory, dataDir, confirmReplacement: true, expectedTarget: oldCli }));
+		expect(result).toMatchObject({ ok: false, code: "io" });
+		expect(await readlink(linkPath)).toBe(oldCli);
+		expect(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE), "utf8")).toContain(oldCli);
+	});
+
+	it("does not mutate the link when staged version verification fails", async () => {
+		const { linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const io = nodeCliLinkIo();
+		let calls = 0;
+		const failing: CliLinkIo = { ...io, version: async (file) => {
+			if (++calls === 2) throw new Error("timeout");
+			return io.version(file);
+		} };
+		expect(await linkCli(failing, request({ appCliPath, linkDirectory, dataDir }))).toMatchObject({ ok: false, code: "version" });
+		expect(await lstat(path.join(linkDirectory, "ao")).catch(() => null)).toBeNull();
+	});
+
+	it("does not create a link when writing its marker fails", async () => {
+		const { linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const io = nodeCliLinkIo();
+		const failing: CliLinkIo = { ...io, writeText: async () => { throw Object.assign(new Error("marker denied"), { code: "EACCES" }); } };
+		expect(await linkCli(failing, request({ appCliPath, linkDirectory, dataDir }))).toMatchObject({ ok: false, code: "permission" });
+		expect(await lstat(path.join(linkDirectory, "ao")).catch(() => null)).toBeNull();
+	});
+
+	it("refuses translocated and mounted macOS app bundles", async () => {
+		const { linkDirectory, dataDir } = await layout();
+		for (const appCliPath of ["/private/var/folders/tmp/AppTranslocation/id/AO.app/Contents/Resources/daemon/ao", "/Volumes/AO/AO.app/Contents/Resources/daemon/ao"]) {
+			expect(await inspectCliLink(nodeCliLinkIo(), request({ appCliPath, linkDirectory, dataDir }))).toMatchObject({ ok: false, code: "unsupported" });
+		}
+	});
+
+	it("reports the executable a fresh login shell finds first", async () => {
+		const { root, linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const earlier = path.join(root, "earlier");
+		await executable(earlier, "ao", "other");
+		const result = await inspectCliLink(nodeCliLinkIo(), request({
+			appCliPath, linkDirectory, dataDir, shellPath: `${earlier}:${linkDirectory}`,
+		}));
+		expect(result.ok && result.status.message).toContain(path.join(earlier, "ao"));
+	});
+
+	it("rejects a stale target changed since the confirmation dialog opened", async () => {
+		const { linkDirectory, dataDir, apps } = await layout();
+		const oldCli = await executable(path.join(apps, "old"), "ao", "1.0.0");
+		const appCliPath = await executable(path.join(apps, "new"), "ao", "2.0.0");
+		const linkPath = path.join(linkDirectory, "ao");
+		const io = nodeCliLinkIo();
+		await io.symlink(oldCli, linkPath);
+		await io.writeText(path.join(dataDir, CLI_LINK_MARKER_FILE), JSON.stringify({ version: 1, linkPath, targetPath: oldCli }));
+		const req = request({ appCliPath, linkDirectory, dataDir, confirmReplacement: true, expectedTarget: "a different target" });
+		expect(await linkCli(io, req)).toMatchObject({ ok: false, code: "confirmation-required" });
+		expect(await unlinkCli(io, req)).toMatchObject({ ok: false, code: "confirmation-required" });
+		expect(await readlink(linkPath)).toBe(oldCli);
+	});
+
+	it("reports a missing link directory as IO instead of permission denial", async () => {
+		const { root, dataDir, apps } = await layout();
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const result = await linkCli(nodeCliLinkIo(), request({ appCliPath, dataDir, linkDirectory: path.join(root, "absent") }));
+		expect(result).toMatchObject({ ok: false, code: "io" });
+		expect(result.ok || result.message).toMatch(/does not exist/);
 	});
 });

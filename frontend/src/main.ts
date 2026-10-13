@@ -2225,7 +2225,9 @@ registerCliLinkIpc({
 	isPackaged: () => app.isPackaged,
 	resourcesPath: process.resourcesPath,
 	appImage: process.env.APPIMAGE,
-	dataDir: () => resolveDesktopDataDir(process.env, os.homedir(), process.cwd(), app.isPackaged),
+	dataDir: desktopDataDir,
+	appVersion: app.getVersion(),
+	shellPath: () => cachedShellEnv?.PATH ?? process.env.PATH,
 });
 
 ipcMain.handle("daemon:getStatus", () => refreshDaemonStatus());
