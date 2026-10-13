@@ -50,7 +50,7 @@ async function openAgentManagement(label: string) {
 	await userEvent.click(await screen.findByLabelText(label));
 	const action = screen.queryByRole("menuitem", { name: /^Manage agents(?:…)?$/ }) ?? screen.getByRole("option", { name: /^Manage agents(?:…)?$/ });
 	await userEvent.click(action);
-	await screen.findByRole("textbox", { name: "Search harnesses" });
+	await screen.findByRole("searchbox", { name: "Search harnesses" });
 }
 
 function requireCodexLogin(client?: QueryClient) {
@@ -153,7 +153,7 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
 		const trigger = await screen.findByLabelText("Worker agent");
 		await openAgentManagement("Worker agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await screen.findByRole("searchbox", { name: "Search harnesses" });
 
 		act(() => client.setQueryData(agentReadinessQueryKey, {
 			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
@@ -179,7 +179,7 @@ describe("Settings recovery modal integration", () => {
 		requireCodexLogin(client);
 		await openAgentManagement("Worker agent");
 
-		const search = await screen.findByRole("textbox", { name: "Search harnesses" });
+		const search = await screen.findByRole("searchbox", { name: "Search harnesses" });
 		await userEvent.type(search, "Claude");
 		expect(search).toHaveValue("Claude");
 		await userEvent.click(screen.getByRole("button", { name: "Back" }));
@@ -195,7 +195,7 @@ describe("Settings recovery modal integration", () => {
 		requireCodexLogin();
 		renderDialogs("new-task");
 		await openAgentManagement("Agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await screen.findByRole("searchbox", { name: "Search harnesses" });
 		await userEvent.keyboard("{Escape}");
 
 		expect(await screen.findByRole("textbox", { name: "Task" })).toBeInTheDocument();
@@ -216,7 +216,7 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
 		const form = document.getElementById("project-settings-form");
 		await openAgentManagement("Worker agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await screen.findByRole("searchbox", { name: "Search harnesses" });
 
 		expect(form).not.toBeNull();
 		if (dismiss === "Escape") await userEvent.keyboard("{Escape}");
