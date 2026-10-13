@@ -2580,7 +2580,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await screen.findByLabelText("Worker agent");
 
 		const prefix = screen.getByRole("textbox", { name: "Workspace name prefix" });
-		expect(prefix).toHaveAttribute("placeholder", "ao");
+		expect(prefix).toHaveAttribute("placeholder", "app");
 		expect(screen.getByText("Coder workspaces are named <prefix>-<id>. Leave empty to use the project name.")).toBeInTheDocument();
 		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
 

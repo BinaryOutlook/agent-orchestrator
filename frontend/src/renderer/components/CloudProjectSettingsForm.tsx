@@ -14,7 +14,7 @@ import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
 import { CLOUD_AGENT_PROVIDERS, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { agentLabel } from "../lib/agent-options";
-import { DEFAULT_CODER_WORKSPACE_NAME_PREFIX, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
+import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import type { CloudCpProject, CloudCpProjectCoderConfig } from "../lib/cloud-cp";
 import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectRoleDraft, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
@@ -229,7 +229,7 @@ function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 	return <>
 		<ProjectSettingsInputRow id="coderWorkspaceNamePrefix" label={label} editLabel={t("settings.field.edit", { label })}
 			editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />}
-			value={draft} placeholder={DEFAULT_CODER_WORKSPACE_NAME_PREFIX} onChange={setDraft} />
+			value={draft} placeholder={coderWorkspaceNamePrefixFor(project.displayName)} onChange={setDraft} />
 		{invalid ? (
 			<p className="-mt-1.5 pb-2 pl-3 text-xs text-error" role="alert">{t("coder.workspacePrefix.invalid")}</p>
 		) : save.isError ? (
