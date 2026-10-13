@@ -96,7 +96,7 @@ func TestBackgroundForkIsEphemeralAndReadOnly(t *testing.T) {
 	if err := json.Unmarshal(srv.awaitFrame(func(f frame) bool { return f.Method == "thread/fork" }).Params, &params); err != nil {
 		t.Fatal(err)
 	}
-	if params["ephemeral"] != true || params["sandbox"] != "read-only" || params["approvalPolicy"] != "never" {
+	if params["ephemeral"] != true || params["excludeTurns"] != true || params["sandbox"] != "read-only" || params["approvalPolicy"] != "never" {
 		t.Fatalf("fork policies=%+v", params)
 	}
 	if conv.(ports.ChatSandboxNetwork).SandboxAllowsNetwork("") {
