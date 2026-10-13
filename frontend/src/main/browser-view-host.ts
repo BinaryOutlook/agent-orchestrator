@@ -1025,6 +1025,16 @@ export function createBrowserViewHost(
     const isCurrentEntry = () =>
       entries.get(session.viewId) === session &&
       session.tabs.get(entry.tabId) === entry;
+    // A page can close its own tab: window.close() is allowed when the tab has
+    // a single history entry, which is exactly what OAuth popup handlers do
+    // after sign-in. Electron then destroys the WebContents and the view's
+    // `webContents` becomes undefined, so the tab must leave the session before
+    // the next layout or IPC call dereferences it.
+    const webContentsId = view.webContents.id;
+    view.webContents.on("destroyed", () => {
+      if (!isCurrentEntry()) return;
+      forgetSelfClosedTab(session, entry, webContentsId);
+    });
     view.webContents.on("found-in-page", (_event, result) => {
       if (
         !isCurrentEntry() ||
@@ -1599,6 +1609,42 @@ export function createBrowserViewHost(
     return state;
   }
 
+  // The page already destroyed its WebContents, so this mirrors closeTab
+  // without touching the dead contents. Closing the last tab leaves a fresh
+  // blank tab, matching the panel's "always one tab" invariant.
+  function forgetSelfClosedTab(
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+    webContentsId: number,
+  ): void {
+    const { tabId } = entry;
+    const wasActive = tabId === session.activeTabId;
+    const closedTab = {
+      id: tabId,
+      url: entry.state.url,
+      title: entry.state.title,
+      active: false,
+      ...(entry.favicon ? { favicon: entry.favicon } : {}),
+      untrustedExternalContent: true as const,
+    };
+    disposeNetworkCapture(entry, "tab-closed");
+    if (session.networkTabId === tabId) session.networkTabId = undefined;
+    if (session.nativeActiveTabId === tabId)
+      session.nativeActiveTabId = undefined;
+    session.tabs.delete(tabId);
+    tabsByWebContentsId.delete(webContentsId);
+    if (!options.mainWindow.isDestroyed?.())
+      options.mainWindow.contentView.removeChildView?.(entry.view);
+    // A profile switch rebuilds every tab itself; just drop the dead one.
+    if (session.profileReplacing) return;
+    if (session.tabs.size === 0) {
+      createTab(session, true);
+    } else if (wasActive) {
+      activateTab(session, [...session.tabs.keys()].at(-1)!, false);
+    }
+    pushTabsState(options, session, { kind: "closed", tabId, tab: closedTab });
+  }
+
   const openUserTab = async (
     session: BrowserSessionEntry,
     url?: string,
@@ -2029,7 +2075,9 @@ export function createBrowserViewHost(
     }
     // Keep the initialized blank target available to automation, but let the
     // renderer show AO's empty-page UI instead of Chromium's white about:blank.
-    const currentURL = entry.view.webContents.getURL();
+    // A destroyed WebContents (page called window.close()) leaves the view's
+    // `webContents` undefined until the "destroyed" handler drops the tab.
+    const currentURL = entry.view.webContents?.getURL();
     if (!currentURL || currentURL === "about:blank") {
       applyBrowserViewBounds(entry.view, session.bounds, false);
       return;
