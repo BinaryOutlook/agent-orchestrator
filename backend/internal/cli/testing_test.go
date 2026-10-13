@@ -65,6 +65,7 @@ func TestTestingVerbsSendOneRequestEach(t *testing.T) {
 		{"check start c1", "POST /testing/checks/c1/start", M{}},
 		{"compare c1", "POST /testing/checks/c1/compare", M{}},
 		{"check end c1 --result fail --note clipped", "POST /testing/checks/c1/end", M{"result": "fail", "note": "clipped"}},
+		{"check end c2 --result absent --note nopicker", "POST /testing/checks/c2/end", M{"result": "absent", "note": "nopicker"}},
 		{"submit", "POST /testing/submit", M{}},
 		{"submit --verdict-file " + verdict, "POST /testing/submit", M{"summary": "head only"}},
 		{"submit --blocked --reason prepare-refused", "POST /testing/submit", M{"blocked": true, "reason": "prepare-refused"}},
@@ -150,7 +151,7 @@ func TestTestingStartSpawnsThroughTheDaemon(t *testing.T) {
 		t.Fatalf("out=%q err=%v", out, err)
 	}
 	if got.method != "POST" || got.path != "/api/v1/testing/start" ||
-		fmt.Sprint(got.body) != fmt.Sprint(map[string]any{"projectId": "p1", "harness": "claude-code", "prUrl": pr}) {
+		fmt.Sprint(got.body) != fmt.Sprint(map[string]any{"projectId": "p1", "prUrl": pr, "sessionId": "w1"}) { // no harness: the daemon picks it; the caller lets the daemon refuse a tester
 		t.Fatalf("request = %s %s %v", got.method, got.path, got.body)
 	}
 
@@ -164,14 +165,13 @@ func TestTestingStartSpawnsThroughTheDaemon(t *testing.T) {
 		t.Fatalf("--no-evidence: err=%v body=%v", err, got.body)
 	}
 
-	got = testingDaemon(t, http.StatusOK, reply("codex")) // the project's worker is not claude-code
-	for _, args := range [][]string{{"start", "--pr", pr, "--project", "p1"}, {"start", "--pr", pr, "--project", "p1", "--harness", "codex"}} {
-		if _, err := runTesting(t, args...); ExitCode(err) != 2 || !strings.Contains(err.Error(), "claude-code only") || got.path == "/api/v1/testing/start" {
-			t.Fatalf("%v: err=%v last request %s", args, err, got.path)
-		}
+	got = testingDaemon(t, http.StatusOK, reply("codex"))
+	if _, err := runTesting(t, "start", "--pr", pr, "--project", "p1", "--harness", "codex"); err != nil || got.path != "/api/v1/testing/start" || got.body["harness"] != "codex" {
+		t.Fatalf("--harness codex: err=%v request %s %v", err, got.path, got.body)
 	}
-	if _, err := runTesting(t, "start", "--pr", pr, "--project", "p1", "--harness", "claude-code"); err != nil || got.path != "/api/v1/testing/start" {
-		t.Fatalf("explicit claude-code over a codex project: err=%v path %s", err, got.path)
+	got = testingDaemon(t, http.StatusOK, reply("codex"))
+	if _, err := runTesting(t, "start", "--pr", pr, "--project", "p1", "--harness", "aider"); ExitCode(err) != 2 || !strings.Contains(err.Error(), "claude-code or codex") || got.path == "/api/v1/testing/start" {
+		t.Fatalf("--harness aider: err=%v last request %s", err, got.path)
 	}
 }
 
@@ -192,13 +192,13 @@ func TestTestingSubmitPrintsWhatBecameOfTheComment(t *testing.T) {
 func TestTestingPruneSendsFlagsAndPrintsLines(t *testing.T) {
 	got := testingDaemon(t, http.StatusOK, `{"dryRun":true,"lines":["would remove checkout repos/o__r/abc (1.0 KB)","would prune: 1 checkouts, 0 runs, 0.0 GB freed"]}`)
 	out, err := runTesting(t, "prune", "--keep-runs", "5", "--keep-checkouts", "0", "--dry-run")
-	if err != nil || got.path != "/api/v1/testing/prune" || fmt.Sprint(got.body) != "map[dryRun:true keepCheckouts:0 keepRuns:5]" {
+	if err != nil || got.path != "/api/v1/testing/prune" || fmt.Sprint(got.body) != "map[dryRun:true keepCheckouts:0 keepRuns:5 sessionId:w1]" {
 		t.Fatalf("request = %s %v err=%v", got.path, got.body, err)
 	}
 	if !strings.Contains(out, "would remove checkout repos/o__r/abc") || !strings.HasSuffix(strings.TrimSpace(out), "0.0 GB freed") {
 		t.Fatalf("out = %q", out)
 	}
-	if _, err := runTesting(t, "prune"); err != nil || fmt.Sprint(got.body) != "map[]" {
+	if _, err := runTesting(t, "prune"); err != nil || fmt.Sprint(got.body) != "map[sessionId:w1]" { // only the caller; the flags stay unset
 		t.Fatalf("defaults must be left to the daemon: body=%v err=%v", got.body, err)
 	}
 }
@@ -219,12 +219,20 @@ func TestTestingPanelVerbs(t *testing.T) {
 			method: "POST", path: "/testing/rerun", body: M{"runId": "run_ao-25"}, want: `spawned session ao-26 "litmus: PR #7", run run_ao-26`},
 		{args: "rerun run_ao-25 --project p2", reply: `{}`, method: "POST", path: "/testing/rerun", body: M{"runId": "run_ao-25", "projectId": "p2"}},
 		{args: "post run_ao-25", reply: `{"id":"run_ao-25","state":"submitted","repo":"o/r","prNumber":7,"commentState":"posted","commentUrl":"https://github.com/o/r/pull/7#issuecomment-9"}`,
-			method: "POST", path: "/testing/runs/run_ao-25/post", body: M{}, want: "comment posted: https://github.com/o/r/pull/7#issuecomment-9"},
+			method: "POST", path: "/testing/runs/run_ao-25/post", body: M{"sessionId": "w1"}, want: "comment posted: https://github.com/o/r/pull/7#issuecomment-9"},
 		{args: "discard run_ao-25", reply: `{"id":"run_ao-25","state":"cleaned","repo":"o/r","prNumber":7,"commentState":"discarded"}`,
-			method: "POST", path: "/testing/runs/run_ao-25/discard", body: M{}, want: "comment discarded"},
+			method: "POST", path: "/testing/runs/run_ao-25/discard", body: M{"sessionId": "w1"}, want: "comment discarded"},
 		{args: "settings --project p1", reply: `{"askBeforePosting":true}`, method: "GET", path: "/testing/projects/p1/settings", want: "ask-before-posting on"},
 		{args: "settings --project p1 --ask-before-posting off", reply: `{"askBeforePosting":false}`, method: "PUT", path: "/testing/projects/p1/settings", body: M{"askBeforePosting": false}, want: "ask-before-posting off"},
 		{args: "settings --project p1 --ask-before-posting on", reply: `{"askBeforePosting":true}`, method: "PUT", path: "/testing/projects/p1/settings", body: M{"askBeforePosting": true}, want: "ask-before-posting on"},
+		// A set reads the stored settings first and sends them back with only the given flags changed.
+		{args: "settings --project p1 --model opus --effort max", reply: `{"askBeforePosting":true}`, method: "PUT", path: "/testing/projects/p1/settings",
+			body: M{"askBeforePosting": true, "model": "opus", "effort": "max"}, want: "ask-before-posting on"},
+		{args: "settings --project p1 --model=", reply: `{"askBeforePosting":true,"model":"opus","effort":"max"}`, method: "PUT", path: "/testing/projects/p1/settings",
+			body: M{"askBeforePosting": true, "effort": "max"}},
+		{args: "settings --project p1 --harness codex --model gpt-6.1-sol --effort high", reply: `{"askBeforePosting":true,"harness":"codex","model":"gpt-6.1-sol","effort":"high"}`, method: "PUT", path: "/testing/projects/p1/settings",
+			body: M{"askBeforePosting": true, "harness": "codex", "model": "gpt-6.1-sol", "effort": "high"}, want: "harness codex | model gpt-6.1-sol | effort high"},
+		{args: "settings --project p1", reply: `{"askBeforePosting":false,"model":"opus"}`, method: "GET", path: "/testing/projects/p1/settings", want: "harness (default) | model opus | effort (default)"},
 	} {
 		t.Run(tc.args, func(t *testing.T) {
 			got := testingDaemon(t, http.StatusOK, tc.reply)
@@ -246,5 +254,22 @@ func TestTestingPanelVerbs(t *testing.T) {
 	t.Setenv("AO_PROJECT_ID", "envproj") // the environment names the project when no flag does
 	if _, err := runTesting(t, "runs"); err != nil || got.path != "/api/v1/testing/runs?projectId=envproj" {
 		t.Fatalf("path %s err %v", got.path, err)
+	}
+}
+
+// A stored model belongs to the old harness, so a harness change must restate the model (or clear it).
+func TestTestingSettingsHarnessChangeNeedsTheModel(t *testing.T) {
+	t.Setenv("AO_PROJECT_ID", "")
+	got := testingDaemon(t, http.StatusOK, `{"askBeforePosting":true,"harness":"claude-code","model":"opus"}`)
+	_, err := runTesting(t, "settings", "--project", "p1", "--harness", "codex")
+	if ExitCode(err) != 2 || err == nil || !strings.Contains(err.Error(), "--model") || got.method == "PUT" {
+		t.Fatalf("harness change kept the stored model: err=%v method=%s", err, got.method)
+	}
+	if _, err := runTesting(t, "settings", "--project", "p1", "--harness", "codex", "--model", ""); err != nil || got.method != "PUT" {
+		t.Fatalf("clearing the model with the harness change: err=%v method=%s", err, got.method)
+	}
+	got = testingDaemon(t, http.StatusOK, `{"askBeforePosting":true}`)
+	if _, err := runTesting(t, "settings", "--project", "p1", "--harness", "codex"); err != nil || got.method != "PUT" {
+		t.Fatalf("harness change with no stored model: err=%v method=%s", err, got.method)
 	}
 }

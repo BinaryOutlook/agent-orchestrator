@@ -247,7 +247,10 @@ func TestLitmusSkillFrontmatterWordCapAndInstall(t *testing.T) {
 	if n := len(strings.Fields(string(body))); n > 900 {
 		t.Fatalf("litmus SKILL.md is %d words, want at most 900", n)
 	}
-	for _, verb := range []string{"intake", "prepare", "launch", "check add", "snapshot", "compare", "submit", "ao testing test --leg head --dir backend --", "--leg base", "only through `ao testing`", "never push or post to GitHub", "You have 25 minutes", "gate notes"} {
+	for _, verb := range []string{"intake", "prepare", "launch", "check add", "snapshot", "compare", "submit", "ao testing test --leg head --dir backend --", "--leg base", "only through `ao testing`", "never push or post to GitHub", "You have 25 minutes", "gate notes",
+		"at most 4 for a PR over 30 files, 6 otherwise", "Litmus accepts at most 6 checks; a main twin is free", "split a check that mixes two things", "it is done only when it has a result on both",
+		"end the main side as `absent` with a screenshot of where it would be; `fail` means the feature is there and broken", "--result pass|fail|partial|absent|skipped", "add another pair", "never a check on the PR build alone", "Never open another run's folder; it is not evidence.",
+		"Never import, export, sign in to or read the owner's real browser profiles, cookies, passwords, keychain or accounts; check such a feature only with data created in the test window, or end it as `skipped` with that reason."} {
 		if !strings.Contains(string(body), verb) {
 			t.Fatalf("litmus SKILL.md does not mention %q", verb)
 		}

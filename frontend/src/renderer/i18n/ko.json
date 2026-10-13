@@ -2726,6 +2726,8 @@
 	"litmus.drawer.checks": "검사",
 	"litmus.drawer.noChecks": "기록된 검사가 없습니다.",
 	"litmus.drawer.verdict": "판정 상세",
+	"litmus.drawer.gaps_one": "누락 {{count}}건",
+	"litmus.drawer.gaps_other": "누락 {{count}}건",
 	"litmus.checks.name": "검사",
 	"litmus.checks.leg": "빌드",
 	"litmus.checks.legHead": "PR 빌드",

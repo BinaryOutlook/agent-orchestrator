@@ -147,11 +147,23 @@ func TestProjectSettingsRoundTrip(t *testing.T) {
 	}
 	is(t, "")(svc.SetProjectSettings(ctx, "p1", ProjectSettings{AskBeforePosting: true}))
 	is(t, "")(svc.SetProjectSettings(ctx, "p2", ProjectSettings{}))
-	if got, _ := svc.ProjectSettings(ctx, "p1"); !got.AskBeforePosting {
+	is(t, "")(svc.SetProjectSettings(ctx, "p3", ProjectSettings{Model: "opus", Effort: "max"}))
+	if got, _ := svc.ProjectSettings(ctx, "p1"); !got.AskBeforePosting || got.Model != "" || got.Effort != "" {
 		t.Fatalf("p1 = %+v", got)
 	}
 	if got, _ := svc.ProjectSettings(ctx, "p2"); got.AskBeforePosting {
 		t.Fatalf("p2 = %+v", got)
+	}
+	if got, _ := svc.ProjectSettings(ctx, "p3"); got != (ProjectSettings{Model: "opus", Effort: "max"}) {
+		t.Fatalf("p3 = %+v", got)
+	}
+	dataDir := svc.store.dataDir() // the session manager reads the same file without a Service
+	if got, err := LoadProjectSettings(dataDir, "p3"); err != nil || got.Model != "opus" || got.Effort != "max" {
+		t.Fatalf("LoadProjectSettings = %+v err %v", got, err)
+	}
+	is(t, "")(svc.SetProjectSettings(ctx, "p3", ProjectSettings{})) // empty clears
+	if got, _ := svc.ProjectSettings(ctx, "p3"); got != (ProjectSettings{}) {
+		t.Fatalf("p3 after clearing = %+v", got)
 	}
 	for _, bad := range []string{"", "..", "a/b", " "} {
 		is(t, "TESTING_PROJECT_INVALID")(svc.ProjectSettings(ctx, bad))

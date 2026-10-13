@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
@@ -59,6 +61,9 @@ func TestSpawnTestingProfileLaunchesInRunDirUnderPolicy(t *testing.T) {
 	if rt.lastCfg.Env["GIT_CONFIG_COUNT"] == "" || rt.lastCfg.Env["GIT_CONFIG_KEY_0"] != "url.litmus-blocks-push://.pushInsteadOf" {
 		t.Fatalf("tester env has no push block: %v", rt.lastCfg.Env)
 	}
+	if gh, ok := rt.lastCfg.Env["GH_TOKEN"]; !ok || gh != "" || rt.lastCfg.Env["GH_CONFIG_DIR"] != filepath.Join(runDir, "gh-config") {
+		t.Fatalf("tester env keeps a gh login: token %q config %q", gh, rt.lastCfg.Env["GH_CONFIG_DIR"])
+	}
 	if info, err := os.Stat(runDir); err != nil || !info.IsDir() {
 		t.Fatalf("run dir not created: %v", err)
 	}
@@ -73,16 +78,140 @@ func TestSpawnTestingProfileLaunchesInRunDirUnderPolicy(t *testing.T) {
 	if agent.lastLaunch.Permissions == ports.PermissionModeDontAsk || len(agent.lastLaunch.AllowedTools)+len(agent.lastLaunch.DisallowedTools) != 0 || rt.lastCfg.Env[litmus.EnvRun] != "" {
 		t.Fatalf("ordinary spawn got the testing profile: %+v", agent.lastLaunch)
 	}
+	if _, has := rt.lastCfg.Env["GH_TOKEN"]; has || rt.lastCfg.Env["GH_CONFIG_DIR"] != "" {
+		t.Fatalf("ordinary spawn lost its gh login: %v", rt.lastCfg.Env)
+	}
 	if c := agent.lastLaunch.Config; c.Model != "" || c.Effort != "" || rt.lastCfg.Env["GIT_CONFIG_COUNT"] != "" {
 		t.Fatalf("ordinary spawn got the tester's model or the push block: %q %q %v", c.Model, c.Effort, rt.lastCfg.Env)
 	}
 }
 
+func TestSpawnTestingProfileModelOrder(t *testing.T) {
+	catalog := tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "sonnet", IsDefault: true, Efforts: []string{"low", "high"}},
+		{ID: "opus", Efforts: []string{"high", "max"}},
+		{ID: "haiku", Efforts: []string{"low"}},
+	}}}
+	for _, tc := range []struct {
+		name                       string
+		worker                     domain.RoleOverride
+		settingsFile               bool // a settings file exists, whatever it holds
+		settingModel, settingEffrt string
+		wantModel, wantEffort      string
+	}{
+		{name: "default", wantModel: litmus.TesterModel, wantEffort: litmus.TesterEffort},
+		{name: "project config beats default", worker: domain.RoleOverride{Harness: domain.HarnessClaudeCode, AgentConfig: domain.AgentConfig{Model: "haiku", Effort: "low"}},
+			wantModel: "haiku", wantEffort: "low"},
+		{name: "setting beats project config", worker: domain.RoleOverride{Harness: domain.HarnessClaudeCode, AgentConfig: domain.AgentConfig{Model: "haiku", Effort: "low"}},
+			settingModel: "opus", settingEffrt: "max", wantModel: "opus", wantEffort: "max"},
+		{name: "setting beats default", settingModel: "opus", settingEffrt: "max", wantModel: "opus", wantEffort: "max"},
+		{name: "empty setting falls through", settingsFile: true, worker: domain.RoleOverride{Harness: domain.HarnessClaudeCode, AgentConfig: domain.AgentConfig{Model: "haiku", Effort: "low"}},
+			wantModel: "haiku", wantEffort: "low"},
+		{name: "setting model alone keeps the default effort", settingModel: "opus", wantModel: "opus", wantEffort: litmus.TesterEffort},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, agent, _, _, dataDir := newTestingManager(t, domain.HarnessClaudeCode)
+			m.SetModelCatalog(catalog)
+			p := st.projects["mer"]
+			if tc.worker.Harness != "" {
+				p.Config.Worker = tc.worker
+				st.projects["mer"] = p
+			}
+			if tc.settingsFile || tc.settingModel != "" || tc.settingEffrt != "" {
+				svc := litmus.New(litmus.NewStore(dataDir), time.Now)
+				if _, err := svc.SetProjectSettings(ctx, "mer", litmus.ProjectSettings{Model: tc.settingModel, Effort: tc.settingEffrt}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			testingSpawn(t, m)
+			if c := agent.lastLaunch.Config; c.Model != tc.wantModel || c.Effort != tc.wantEffort {
+				t.Fatalf("tester runs on %q at %q, want %q at %q", c.Model, c.Effort, tc.wantModel, tc.wantEffort)
+			}
+		})
+	}
+}
+
+func TestSpawnTestingProfileSettingNeverReachesOrdinarySpawns(t *testing.T) {
+	m, _, agent, _, _, dataDir := newTestingManager(t, domain.HarnessClaudeCode)
+	svc := litmus.New(litmus.NewStore(dataDir), time.Now)
+	if _, err := svc.SetProjectSettings(ctx, "mer", litmus.ProjectSettings{Model: "opus", Effort: "max"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI}); err != nil {
+		t.Fatal(err)
+	}
+	if c := agent.lastLaunch.Config; c.Model != "" || c.Effort != "" {
+		t.Fatalf("an ordinary spawn took the tester's setting: %q %q", c.Model, c.Effort)
+	}
+}
+
 func TestSpawnTestingProfileRefusesOtherHarnesses(t *testing.T) {
-	m, st, _, rt, ws, _ := newTestingManager(t, domain.HarnessCodex)
+	m, st, _, rt, ws, _ := newTestingManager(t, domain.HarnessAider)
 	_, _, _, err := m.Spawn(WithTestingProfile(ctx), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI})
 	if !errors.Is(err, ErrTestingHarness) || len(st.sessions) != 0 || ws.createCount != 0 || rt.created != 0 {
 		t.Fatalf("err %v sessions %d workspaces %d runtimes %d", err, len(st.sessions), ws.createCount, rt.created)
+	}
+}
+
+// A Codex tester has no tool lists: it launches unattended in its run dir with the same env, the model and effort from
+// the project's Litmus settings, and the litmus skill in its system prompt.
+func TestSpawnTestingProfileOnCodex(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		settings              litmus.ProjectSettings
+		wantModel, wantEffort string
+	}{
+		{name: "settings", settings: litmus.ProjectSettings{Model: "gpt-6.1-sol", Effort: "xhigh"}, wantModel: "gpt-6.1-sol", wantEffort: "xhigh"},
+		{name: "defaults keep codex's own model", wantEffort: litmus.TesterEffort},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, agent, rt, ws, dataDir := newTestingManager(t, domain.HarnessCodex)
+			if _, err := litmus.New(litmus.NewStore(dataDir), time.Now).SetProjectSettings(ctx, "mer", tc.settings); err != nil {
+				t.Fatal(err)
+			}
+			rec := testingSpawn(t, m)
+			runDir := litmus.RunDir(dataDir, string(rec.ID))
+
+			l := agent.lastLaunch
+			if l.Permissions != ports.PermissionModeBypassPermissions || len(l.AllowedTools)+len(l.DisallowedTools) != 0 {
+				t.Fatalf("codex tester policy = %q allow %v deny %v, want bypass and no tool lists", l.Permissions, l.AllowedTools, l.DisallowedTools)
+			}
+			if l.Config.Model != tc.wantModel || l.Config.Effort != tc.wantEffort {
+				t.Fatalf("tester runs on %q at %q, want %q at %q", l.Config.Model, l.Config.Effort, tc.wantModel, tc.wantEffort)
+			}
+			if l.WorkspacePath != runDir || rt.lastCfg.WorkspacePath != runDir || ws.createCount != 0 {
+				t.Fatalf("cwd launch %q runtime %q creates %d, want the run dir %q", l.WorkspacePath, rt.lastCfg.WorkspacePath, ws.createCount, runDir)
+			}
+			if rt.lastCfg.Env[litmus.EnvRun] != "run_"+string(rec.ID) || rt.lastCfg.Env["GIT_CONFIG_KEY_0"] != "url.litmus-blocks-push://.pushInsteadOf" {
+				t.Fatalf("tester env lacks the run id or the push block: %v", rt.lastCfg.Env)
+			}
+			skill := skillassets.LitmusDir(dataDir) + "/SKILL.md"
+			if !strings.Contains(l.SystemPrompt, skill) || strings.Contains(l.SystemPrompt, skillassets.Dir(dataDir)) {
+				t.Fatalf("codex system prompt does not point only at the litmus skill:\n%s", l.SystemPrompt)
+			}
+			if st.sessions[rec.ID].Harness != domain.HarnessCodex {
+				t.Fatalf("session harness = %q", st.sessions[rec.ID].Harness)
+			}
+		})
+	}
+}
+
+func TestRelaunchTestingSessionOnCodexKeepsItsPolicy(t *testing.T) {
+	m, st, agent, _, _, dataDir := newTestingManager(t, domain.HarnessCodex)
+	runDir := litmus.RunDir(dataDir, "mer-1")
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Metadata: domain.SessionMetadata{WorkspacePath: runDir, Prompt: "Test PR", RuntimeHandleID: "h1"}}
+	st.sessions[rec.ID] = rec
+	info, err := m.restoreSessionWorkspace(ctx, st.projects["mer"], rec)
+	if err != nil || info.Path != runDir {
+		t.Fatalf("workspace %+v err %v", info, err)
+	}
+	if _, err := m.relaunchSession(ctx, "restore", rec, st.projects["mer"], info, nil); err != nil {
+		t.Fatal(err)
+	}
+	l := agent.lastLaunch
+	if l.Permissions != ports.PermissionModeBypassPermissions || len(l.AllowedTools)+len(l.DisallowedTools) != 0 || l.Config.Model != "" || l.Config.Effort != litmus.TesterEffort {
+		t.Fatalf("relaunched codex tester: %q allow %v deny %v on %q at %q", l.Permissions, l.AllowedTools, l.DisallowedTools, l.Config.Model, l.Config.Effort)
 	}
 }
 

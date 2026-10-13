@@ -2,8 +2,10 @@ package litmus
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -14,17 +16,27 @@ type fakeRunner struct {
 	calls   []string
 	node    map[string]string // node binary -> `--version` output
 	heads   map[string]string // clone dir -> checked-out SHA
-	missing map[string]bool   // SHAs the local checkout lacks until fetched
+	missing map[string]bool   // SHAs the mirror lacks until fetched
 	noFetch bool
 	sh      func(script string) error
-	shOut   string            // what a failing `sh` step printed
-	gitOut  map[string]string // `git -C dir <sub> <arg>` output, keyed "<sub> <arg>"
-	gitErr  map[string]error  // the same key, for a git call that fails
+	shOut   string // what a failing `sh` step printed
+	// gitOut and gitErr answer a git call by its subcommand and arguments after `-C dir` and any `-c setting`: the
+	// whole of them ("fetch --no-tags origin abc"), else the first two ("fetch --no-tags").
+	gitOut map[string]string
+	gitErr map[string]error
 }
 
 func (f *fakeRunner) Run(_ context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, dir+"|"+name+" "+strings.Join(args, " "))
 	last := args[len(args)-1]
+	sub := args // the git subcommand and its arguments
+	for name == "git" && len(sub) > 1 && (sub[0] == "-C" || sub[0] == "-c") {
+		sub = sub[2:]
+	}
+	keys := []string{strings.Join(sub, " ")}
+	if len(sub) > 1 {
+		keys = append(keys, sub[0]+" "+sub[1])
+	}
 	switch {
 	case strings.HasSuffix(name, "node"):
 		return []byte(f.node[name]), nil
@@ -36,27 +48,41 @@ func (f *fakeRunner) Run(_ context.Context, dir string, _ []string, name string,
 		return nil, os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0o750)
 	case name != "git":
 		return nil, nil
-	case args[0] == "clone":
-		if err := os.MkdirAll(filepath.Join(last, "frontend"), 0o750); err != nil {
+	}
+	for _, k := range keys {
+		if err := f.gitErr[k]; err != nil {
 			return nil, err
 		}
-		os.MkdirAll(filepath.Join(last, ".git"), 0o750)
-		return nil, os.WriteFile(filepath.Join(last, "frontend", "package-lock.json"), []byte("lock"), 0o600)
-	case len(args) > 3 && f.gitErr[args[2]+" "+args[3]] != nil:
-		return nil, f.gitErr[args[2]+" "+args[3]]
-	case len(args) > 3 && f.gitOut[args[2]+" "+args[3]] != "":
-		return []byte(f.gitOut[args[2]+" "+args[3]]), nil
-	case args[2] == "checkout":
+		if out, ok := f.gitOut[k]; ok {
+			return []byte(out), nil
+		}
+	}
+	switch {
+	case sub[0] == "clone" && slices.Contains(sub, "--bare"): // a mirror: bare, so HEAD sits at its root
+		if err := os.MkdirAll(last, 0o750); err != nil {
+			return nil, err
+		}
+		return nil, os.WriteFile(filepath.Join(last, "HEAD"), []byte("ref: refs/heads/main\n"), 0o600)
+	case sub[0] == "clone": // a shared clone borrows the source's objects
+		if err := errors.Join(os.MkdirAll(filepath.Join(last, "frontend"), 0o750), os.MkdirAll(filepath.Join(last, ".git", "objects", "info"), 0o750)); err != nil {
+			return nil, err
+		}
+		alternates := filepath.Join(sub[len(sub)-2], "objects") + "\n"
+		return nil, errors.Join(os.WriteFile(filepath.Join(last, ".git", "objects", "info", "alternates"), []byte(alternates), 0o600),
+			os.WriteFile(filepath.Join(last, "frontend", "package-lock.json"), []byte("lock"), 0o600))
+	case sub[0] == "checkout":
 		f.heads[args[1]] = last
-	case args[2] == "rev-parse" && args[3] == "HEAD":
+	case sub[0] == "rev-parse" && sub[1] == "HEAD":
 		return []byte(f.heads[args[1]]), nil
-	case args[2] == "rev-parse":
+	case sub[0] == "rev-parse":
 		if sha := strings.TrimSuffix(last, "^{commit}"); !f.missing[sha] {
 			return []byte(sha + "\n"), nil
 		}
 		return nil, os.ErrNotExist
-	case args[2] == "fetch" && !f.noFetch:
-		delete(f.missing, last)
+	case sub[0] == "fetch" && !f.noFetch:
+		for _, id := range sub[slices.Index(sub, "origin")+1:] {
+			delete(f.missing, id)
+		}
 	}
 	return nil, nil
 }
@@ -99,9 +125,13 @@ func TestPrepareLegCacheDecisions(t *testing.T) {
 		return leg, readManifest(leg.Worktree)
 	}
 
+	mirror := svc.store.mirrorDir(DefaultRepo)
 	leg, m := prep(shaA) // first clone: nothing to copy from, so a real install
-	if m.Install != "npm ci" || f.count("npm ci") != 1 || f.count("clone --shared --no-checkout /local "+leg.Worktree) != 1 || f.count("npm run predev") != 1 {
+	if m.Install != "npm ci" || f.count("npm ci") != 1 || f.count("clone --shared --no-checkout "+mirror+" "+leg.Worktree) != 1 || f.count("npm run predev") != 1 {
 		t.Fatalf("manifest %+v calls %q", m, f.calls)
+	}
+	if f.count("clone --bare --single-branch https://github.com/"+DefaultRepo+".git "+mirror+".tmp") != 1 || !fileExists(filepath.Join(mirror, "HEAD")) || pathExists(mirror+".tmp") || f.count("update-ref refs/litmus/keep/"+shaA+" "+shaA) != 1 || !borrowsFrom(leg.Worktree, mirror) {
+		t.Fatalf("the copy is not a pinned shared clone of the mirror: %q", f.calls)
 	}
 	if m.NodeVersion != "v24.21.0" || !strings.HasSuffix(m.NodePath, "v24/node") || m.SHA != shaA || m.InstalledAt.IsZero() || m.PredevAt.IsZero() || m.Durations["install"] < 0 {
 		t.Fatalf("manifest %+v", m)
@@ -116,8 +146,16 @@ func TestPrepareLegCacheDecisions(t *testing.T) {
 	}
 
 	before := len(f.calls)
-	if _, m = prep(shaA); m.Install != "warm" || f.count("clone") != 2 || f.count("npm run predev") != 2 || len(f.calls)-before > 4 { // only git probes
+	if _, m = prep(shaA); m.Install != "warm" || f.count("clone --shared") != 2 || f.count("npm run predev") != 2 || len(f.calls)-before > 5 { // only the node probes, the rev-parse, the pin and the HEAD probe
 		t.Fatalf("warm rerun: %+v calls %q", m, f.calls[before:])
+	}
+	// A copy borrowing its history from anywhere but the mirror is remade; one borrowing from the mirror is kept.
+	is(t, "")(nil, os.WriteFile(filepath.Join(leg.Worktree, ".git", "objects", "info", "alternates"), []byte("/Users/someone/checkout/.git/objects\n"), 0o600))
+	if _, m = prep(shaA); m.Install == "warm" || f.count("clone --shared") != 3 || !borrowsFrom(leg.Worktree, mirror) {
+		t.Fatalf("a copy borrowing from elsewhere was kept: %+v calls %q", m, f.calls[before:])
+	}
+	if _, m = prep(shaA); m.Install != "warm" || f.count("clone --shared") != 3 || f.count("clone --bare") != 1 {
+		t.Fatalf("a copy borrowing from the mirror was remade: %+v", m)
 	}
 
 	h1, _ := lockHash(leg.Worktree, r.Install.CacheKey, "24")
@@ -125,6 +163,46 @@ func TestPrepareLegCacheDecisions(t *testing.T) {
 	os.WriteFile(filepath.Join(leg.Worktree, "frontend", "package-lock.json"), []byte("changed"), 0o600)
 	if h3, _ := lockHash(leg.Worktree, r.Install.CacheKey, "24"); h1 == h2 || h1 == h3 {
 		t.Fatal("lock hash ignores node major or lock contents")
+	}
+}
+
+// partialCloneRunner is a git whose bare clone writes some of the mirror and then dies.
+type partialCloneRunner struct{ *fakeRunner }
+
+func (p partialCloneRunner) Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	if name == "git" && slices.Contains(args, "clone") {
+		dest := args[len(args)-1]
+		return nil, errors.Join(os.MkdirAll(filepath.Join(dest, "objects"), 0o750), os.WriteFile(filepath.Join(dest, "config"), []byte("[core]\n"), 0o600), errors.New("fatal: early EOF"))
+	}
+	return p.fakeRunner.Run(ctx, dir, env, name, args...)
+}
+
+// A mirror exists only once it is whole: a clone that fails, or whose setup fails, leaves neither the mirror nor its
+// .tmp, and the next call makes it.
+func TestEnsureMirrorLeavesNothingWhenTheCloneFails(t *testing.T) {
+	for name, fail := range map[string]func(svc *Service, f *fakeRunner){
+		"clone dies midway":   func(svc *Service, f *fakeRunner) { svc.runner = partialCloneRunner{f} },
+		"config fails":        func(_ *Service, f *fakeRunner) { f.gitErr["config gc.auto"] = errors.New("fatal: boom") },
+		"clone fails at once": func(_ *Service, f *fakeRunner) { f.gitErr["clone --bare"] = errors.New("fatal: unable to access") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, _ := newSvc(t)
+			f := svc.runner.(*fakeRunner)
+			mirror := svc.store.mirrorDir("acme/widgets")
+			fail(svc, f)
+			if err := svc.ensureMirror(ctx, "acme/widgets"); err == nil {
+				t.Fatal("ensureMirror succeeded")
+			}
+			if pathExists(mirror) || pathExists(mirror+".tmp") {
+				t.Fatalf("a failed clone left %v (mirror) %v (tmp)", pathExists(mirror), pathExists(mirror+".tmp"))
+			}
+			svc.runner = f
+			delete(f.gitErr, "config gc.auto")
+			delete(f.gitErr, "clone --bare")
+			if err := svc.ensureMirror(ctx, "acme/widgets"); err != nil || !fileExists(filepath.Join(mirror, "HEAD")) || pathExists(mirror+".tmp") {
+				t.Fatalf("the next call did not make the mirror: %v", err)
+			}
+		})
 	}
 }
 
@@ -136,8 +214,8 @@ func TestPrepareLegFailures(t *testing.T) {
 
 	svc, f := prepSvc(t, map[string]string{"v24": "v24.1.0"})
 	is(t, "TESTING_SHA_INVALID")(svc.prepareLeg(ctx, DefaultRepo, r, "head", "main"))
-	f.missing[sha] = true // absent locally: one fetch from origin makes it appear
-	if _, err := svc.prepareLeg(ctx, DefaultRepo, r, "head", sha); err != nil || f.count("fetch origin "+sha) != 1 {
+	f.missing[sha] = true // absent from the mirror: one fetch from origin makes it appear, and it is pinned
+	if _, err := svc.prepareLeg(ctx, DefaultRepo, r, "head", sha); err != nil || f.count("fetch --no-tags origin "+sha) != 1 || f.count("update-ref refs/litmus/keep/"+sha) != 1 {
 		t.Fatalf("err %v calls %q", err, f.calls)
 	}
 	for name, resolve := range map[string]RepoResolver{

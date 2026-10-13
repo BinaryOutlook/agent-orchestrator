@@ -3,6 +3,7 @@ package litmus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 // EnvRun is set in a testing session's environment to the id of the run it owns.
@@ -26,10 +29,12 @@ const SweepInterval = 15 * time.Second
 // user's gh login for reading. The deny list names what must never happen:
 // publishing or changing anything on GitHub (Litmus posts the one comment
 // itself, after approval when the project asks for it), and any ao command that
-// reaches other sessions, the daemon or the desktop app. Deny beats allow. It
+// reaches other sessions, the daemon or the desktop app, and Read of a run's comment.md or verdict.md (an earlier
+// run's verdict is not evidence for this one). Deny beats allow. It
 // stops mistakes, not a determined agent: a prefix rule does not match the same
 // command inside `sh -c`. GuardEnv adds a git-level push block for the common
-// remotes.
+// remotes. A Codex tester gets no deny list (Codex has no per-command rules in AO's launch): it runs unattended and is
+// held back by GuardEnv and the skill alone.
 var (
 	allowedTools = []string{"Bash", "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Grep", "Glob", "LS",
 		"WebFetch", "WebSearch", "Agent", "Task", "TodoWrite"}
@@ -38,14 +43,16 @@ var (
 		"Bash(gh pr create:*)", "Bash(gh pr ready:*)", "Bash(gh pr reopen:*)", "Bash(gh pr revert:*)", "Bash(gh pr lock:*)",
 		"Bash(gh pr unlock:*)", "Bash(gh pr update-branch:*)", "Bash(gh issue:*)", "Bash(gh api:*)", "Bash(gh release:*)",
 		"Bash(gh repo:*)", "Bash(gh workflow:*)", "Bash(gh run:*)", "Bash(gh gist:*)", "Bash(gh label:*)", "Bash(gh secret:*)",
-		"Bash(gh variable:*)", "Bash(gh ssh-key:*)", "Bash(gh gpg-key:*)", "Bash(gh cache:*)", "Bash(gh agent-task:*)",
-		"Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)",
+		"Bash(gh variable:*)", "Bash(gh ssh-key:*)", "Bash(gh gpg-key:*)", "Bash(gh cache:*)", "Bash(gh agent-task:*)", "Bash(gh auth:*)",
+		"Bash(ao testing start:*)", "Bash(ao testing post:*)", "Bash(ao testing prune:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)",
 		"Bash(ao review:*)", "Bash(ao project:*)", "Bash(ao orchestrator:*)", "Bash(ao automation:*)", "Bash(ao cue:*)",
 		"Bash(ao stop:*)", "Bash(ao start:*)", "Bash(ao import:*)", "Bash(ao remote-host:*)", "Bash(ao browser:*)",
-		"Bash(ao preview:*)", "Bash(ao render:*)", "Bash(ao dev:*)"}
+		"Bash(ao preview:*)", "Bash(ao render:*)", "Bash(ao dev:*)",
+		"Read(**/litmus/runs/run_*/comment.md)", "Read(**/litmus/runs/run_*/verdict.md)"}
 )
 
 // TesterModel and TesterEffort are what a tester runs on when the project's worker settings name no model or effort.
+// TesterModel is a Claude alias: a Codex tester without a model runs on Codex's own default.
 const (
 	TesterModel  = "sonnet"
 	TesterEffort = "high"
@@ -58,8 +65,13 @@ var pushPrefixes = []string{"https://", "http://", "ssh://", "git://", "git@", "
 // remote helper that does not exist, whether `git push` runs directly or inside
 // a script. It covers remotes in pushPrefixes form; a relative path, an explicit
 // pushurl, or a shell that clears the setting gets past it. Fetch and clone are
-// untouched. Settings already in env are kept: the block is appended after them.
-func GuardEnv(env map[string]string) {
+// untouched. Settings already in env are kept: the block is appended after them. It also points gh at an empty config
+// dir inside runDir and empties GH_TOKEN, so `gh` in a run has no login to post or comment with (the user's gh login
+// stays the daemon's, not the tester's).
+func GuardEnv(env map[string]string, runDir string) {
+	ghDir := filepath.Join(runDir, "gh-config")
+	_ = os.MkdirAll(ghDir, 0o700) // best effort: gh treats a missing config dir as empty too
+	env["GH_CONFIG_DIR"], env["GH_TOKEN"] = ghDir, ""
 	base, _ := strconv.Atoi(env["GIT_CONFIG_COUNT"])
 	base = max(base, 0)
 	for i, prefix := range pushPrefixes {
@@ -67,6 +79,21 @@ func GuardEnv(env map[string]string) {
 		env["GIT_CONFIG_VALUE_"+strconv.Itoa(base+i)] = prefix
 	}
 	env["GIT_CONFIG_COUNT"] = strconv.Itoa(base + len(pushPrefixes))
+}
+
+// RefuseTester refuses a verb only the user may run (start, post, prune) when the request names a tester's own session:
+// one that has a run or a spawn marker. The CLI sends AO_SESSION_ID, so this holds for any harness, whatever its tool
+// rules; the deny list and GuardEnv stay as the first line. A request that names no session is the user's.
+func (s *Service) RefuseTester(sessionID, verb string) error {
+	id := RunID(sessionID)
+	if id == "" {
+		return nil
+	}
+	_, spawnedBy := s.store.spawnedSession(sessionID)
+	if _, gerr := s.store.Get(id); gerr == nil || spawnedBy {
+		return apierr.Forbidden("TESTING_TESTER_FORBIDDEN", fmt.Sprintf("`ao testing %s` is for the user: a Litmus tester cannot start runs, post comments or prune; end the run with `ao testing submit`", verb))
+	}
+	return nil
 }
 
 // ToolPolicy returns copies of the allow and deny lists for a testing session.
@@ -223,6 +250,13 @@ func (s *Service) gaveUp(ctx context.Context, sessionID string, sp spawned) bool
 	}
 	state, since, found := s.activity(ctx, sessionID)
 	return found && (state == "exited" || state == "idle" && now.Sub(since) > IdleBudget)
+}
+
+// anyInFlight reports whether a long verb of any run is still running.
+func (s *Service) anyInFlight() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.busy) > 0
 }
 
 // inFlight reports whether a long verb of the run is still running.

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,12 @@ type TestResult struct {
 	TimedOut bool     `json:"timedOut,omitempty"`
 	Seconds  float64  `json:"seconds"`
 	Summary  string   `json:"summary,omitempty"` // counts, when the output has them
+	// Ran is how many tests the runner counted (0: none; nil: the runner prints no counts). NotBuilt is set when the PR's
+	// test files did not compile against main, which says nothing about main's behaviour. Failing is set when the output
+	// names a failing test.
+	Ran      *int `json:"ran,omitempty"`
+	NotBuilt bool `json:"notBuilt,omitempty"`
+	Failing  bool `json:"failing,omitempty"`
 	// WithTestsFrom and CopiedFiles are set when the PR's test files were run against the base checkout.
 	WithTestsFrom string   `json:"withTestsFrom,omitempty"`
 	CopiedFiles   []string `json:"copiedFiles,omitempty"`
@@ -113,6 +120,7 @@ var (
 	goFail     = regexp.MustCompile(`(?m)^FAIL[ \t]+\S`)
 	goTestFail = regexp.MustCompile(`(?m)^\s*--- FAIL`)
 	jsCounts   = regexp.MustCompile(`(?m)^\s*Tests:?\s+.*\b(passed|failed)\b.*$`)
+	jsCount    = regexp.MustCompile(`(\d+) (?:passed|failed)`)
 )
 
 // testSummary is one line of counts for go test, or the "Tests: N passed, M failed" line of vitest and jest.
@@ -124,6 +132,37 @@ func testSummary(argv []string, out string) string {
 		return fmt.Sprintf("%d ok, %d FAIL, %d --- FAIL", len(goOK.FindAllString(out, -1)), len(goFail.FindAllString(out, -1)), len(goTestFail.FindAllString(out, -1)))
 	}
 	return strings.TrimSpace(jsCounts.FindString(out))
+}
+
+// failingTest matches the line a runner prints for a failing test: go's "--- FAIL", TAP's "not ok", mocha's "N failing",
+// playwright's "N failed" and the cross marks of vitest, jest and playwright.
+var failingTest = regexp.MustCompile(`(?m)^\s*(?:--- FAIL: |not ok \d+|\d+ failing\b|\d+ failed\b|[✘✗×✕] )`)
+
+// testsRan is how many tests the runner counted: the passed and failed of the "Tests:" line for vitest and jest, and for
+// go test the packages that ran tests (go prints no per-test line), not "[no tests to run]" or a build or setup failure.
+// nil when the runner prints no counts: go vet, and the scripts npm and pnpm run when their output has no "Tests:" line.
+func testsRan(argv []string, out string) *int {
+	n := 0
+	if argv[0] != "go" {
+		line := jsCounts.FindString(out)
+		if line == "" && argv[0] != "npx" {
+			return nil
+		}
+		for _, m := range jsCount.FindAllStringSubmatch(line, -1) {
+			c, _ := strconv.Atoi(m[1])
+			n += c
+		}
+		return &n
+	}
+	if argv[1] != "test" {
+		return nil
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if (goOK.MatchString(l) || goFail.MatchString(l)) && !strings.Contains(l, "[no tests to run]") && !strings.Contains(l, "[build failed]") && !strings.Contains(l, "[setup failed]") {
+			n++
+		}
+	}
+	return &n
 }
 
 // Test runs an allow-listed test command inside a prepared leg's checkout, capped at three minutes and at the
@@ -167,15 +206,18 @@ func (s *Service) Test(ctx context.Context, sessionID, leg, dir string, argv []s
 		nodeDir = filepath.Dir(p)
 	}
 	runDir := filepath.Join(s.store.root, run.ID)
-	if n := len(slices.DeleteFunc(readActions(runDir), func(a actionRec) bool { return a.Action != "test" || cmp.Or(a.Leg, "head") != leg })); n >= maxTests {
+	if n := len(slices.DeleteFunc(readActions(runDir), func(a actionRec) bool { return a.Action != "test" || a.NoTests || cmp.Or(a.Leg, "head") != leg })); n >= maxTests {
 		return TestResult{}, conflict("TESTING_TEST_LIMIT", fmt.Sprintf("at most %d test runs per leg; use what you have", maxTests))
 	}
 
 	var files []string
 	headDir := ""
 	if withTestsFrom != "" {
-		patch, _ := os.ReadFile(filepath.Join(runDir, "diff.patch"))
-		if files = prTestFiles(string(patch)); len(files) == 0 {
+		list, rerr := os.ReadFile(filepath.Join(runDir, "files.txt"))
+		if rerr != nil { // a run from a daemon that predates files.txt has a diff but no list
+			return TestResult{}, invalid("TESTING_TEST_NOT_ALLOWED", "this run has no files.txt (its intake predates it); start a new run")
+		}
+		if files = prTestFiles(string(list)); len(files) == 0 {
 			return TestResult{}, invalid("TESTING_TEST_NOT_ALLOWED", "the PR adds no test files")
 		}
 		h := slices.IndexFunc(run.Legs, func(l Leg) bool { return l.Name == "head" && l.Worktree != "" })
@@ -205,8 +247,10 @@ func (s *Service) Test(ctx context.Context, sessionID, leg, dir string, argv []s
 	}
 	res.Leg, res.Args, res.Receipt, res.Seq = leg, argv, file, seq
 
-	rec := actionRec{Seq: seq, Leg: leg, Action: "test", Args: argv, At: s.clock(), MS: int64(res.Seconds * 1000), Exit: &res.Exit, WithTestsFrom: res.WithTestsFrom, CopiedFiles: res.CopiedFiles}
-	s.attach(run.ID, &rec, Receipt{Seq: seq, Leg: leg, Action: "test", Args: argv, OutputPath: file, At: rec.At})
+	// A run whose runner counted no tests, and failed nothing, did not use up one of the maxTests runs.
+	rec := actionRec{Seq: seq, Leg: leg, Action: "test", Args: argv, At: s.clock(), MS: int64(res.Seconds * 1000), Exit: &res.Exit, WithTestsFrom: res.WithTestsFrom, CopiedFiles: res.CopiedFiles,
+		NoTests: res.Exit == 0 && res.Summary != "" && res.Ran != nil && *res.Ran == 0}
+	s.attach(run.ID, &rec, Receipt{Seq: seq, Leg: leg, Action: "test", Args: argv, OutputPath: file, At: rec.At, Exit: &res.Exit, NotBuilt: res.NotBuilt, Ran: res.Ran, Failing: res.Failing})
 	return res, nil
 }
 
@@ -261,7 +305,7 @@ func execTest(ctx context.Context, cwd string, argv, env []string, limit time.Du
 		return TestResult{}, err
 	}
 	res.Output = lastLines([]byte(b.String()), testTail)
-	res.Summary = testSummary(argv, string(out.buf))
+	res.Summary, res.Ran, res.Failing = testSummary(argv, string(out.buf)), testsRan(argv, string(out.buf)), failingTest.Match(out.buf)
 	return res, nil
 }
 
@@ -276,41 +320,22 @@ func isTestFile(p string) bool {
 	return slices.Contains(strings.Split(path.Dir(p), "/"), "__tests__")
 }
 
-// prTestFiles lists, in diff order, the test files a unified diff adds, changes or renames to (deleted files are
-// not listed). Paths are relative to the repo root.
-func prTestFiles(diff string) []string {
-	var (
-		files   []string
-		cur     string
-		deleted bool
-	)
-	flush := func() {
-		if cur != "" && !deleted && filepath.IsLocal(cur) && isTestFile(cur) && !slices.Contains(files, cur) {
-			files = append(files, cur)
+// prTestFiles lists, in the order of files.txt (status, added, deleted, path, then the old path of a rename), the
+// test files the PR adds, changes or renames to; deleted files are not listed. Paths are relative to the repo root.
+// files.txt is complete where diff.patch is cut, so a big PR's tests are never missed.
+func prTestFiles(list string) []string {
+	var files []string
+	for _, line := range strings.Split(list, "\n") {
+		cols := strings.Split(line, "\t")
+		if strings.HasPrefix(line, "#") || len(cols) < 4 || strings.HasPrefix(cols[0], "D") {
+			continue
 		}
-		cur, deleted = "", false
-	}
-	for _, line := range strings.Split(diff, "\n") {
-		switch {
-		case strings.HasPrefix(line, "diff --git "):
-			flush()
-			if _, b, ok := strings.Cut(line, " b/"); ok { // fallback for a binary or mode-only change, which has no +++ line
-				cur = gitPath(b)
-			}
-		case strings.HasPrefix(line, "deleted file mode"):
-			deleted = true
-		case strings.HasPrefix(line, "rename to "):
-			cur = gitPath(strings.TrimPrefix(line, "rename to "))
-		case strings.HasPrefix(line, "+++ b/"):
-			cur = gitPath(strings.TrimPrefix(line, "+++ b/"))
+		if p := strings.TrimRight(cols[3], "\r"); p != "" && filepath.IsLocal(p) && isTestFile(p) && !slices.Contains(files, p) {
+			files = append(files, p)
 		}
 	}
-	flush()
 	return files
 }
-
-// gitPath drops the tab git appends after names with spaces.
-func gitPath(p string) string { return strings.TrimRight(p, "\t\r") }
 
 // testWithHeadTests runs argv in a throwaway worktree of the base checkout that holds the PR's test files copied
 // from the head checkout. The worktree is removed whatever happens; the base checkout's own files are never written.
@@ -375,16 +400,24 @@ func (s *Service) testWithHeadTests(ctx context.Context, runDir, baseDir, headDi
 	if err := os.WriteFile(receipt, append([]byte(pre), full...), 0o600); err != nil {
 		return TestResult{}, err
 	}
-	if res.Exit != 0 && argv[0] == "go" {
+	switch {
+	case res.Exit == 0:
+	case argv[0] == "go":
 		if n := uncompiledTestFiles(string(full), files); n > 0 {
+			res.NotBuilt = true
 			res.Summary = fmt.Sprintf("%d test files from the PR do not compile against main", n)
 			if n == 1 {
 				res.Summary = "1 test file from the PR does not compile against main"
 			}
 		}
+	case jsCompileErr.Match(full):
+		res.NotBuilt, res.Summary = true, "the PR's test files do not compile against main"
 	}
 	return res, nil
 }
+
+// jsCompileErr is what vitest, jest and tsc print when a copied test file cannot load against main's code.
+var jsCompileErr = regexp.MustCompile(`Failed to resolve import|Cannot find module|SyntaxError|\berror TS\d+`)
 
 var goCompileErr = regexp.MustCompile(`(?m)^(?:\./)?(\S+\.go):\d+(?::\d+)?: `)
 

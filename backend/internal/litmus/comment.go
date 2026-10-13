@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -270,21 +271,28 @@ func rowLabel(checks []Check, c Check) string {
 }
 
 // cellWords are the table's words for a result.
-var cellWords = map[string]string{"pass": "works", "fail": "fails", "partial": "partly", "skipped": "not reached", "observed": "looked at", "not compared on base": "not compared", "-": "not compared"}
+var cellWords = map[string]string{"pass": "works", "fail": "fails", "partial": "partly", "absent": "not there", "skipped": "not reached", "observed": "looked at", "not compared on base": "not compared", "-": "not compared"}
 
 func cellWord(s string) string { return cmp.Or(cellWords[s], s) }
 
 // tally counts the head checks by what they showed.
-type tally struct{ passed, shown, pre, prePartial, notCompared, failed, partial, unreached int }
+type tally struct {
+	passed, shown, pre, prePartial, notCompared, failed, partial, unreached int
+	compared, notRun                                                        int  // head checks with and without a result on main (baseCoverage)
+	testsOnly                                                               bool // no window was driven: every receipt is a test run
+}
 
 func count(checks []Check) (t tally) {
+	t.testsOnly = testsOnly(checks)
+	compared, notRun := baseCoverage(checks)
+	t.compared, t.notRun = len(compared), len(notRun)
 	for _, c := range checks {
 		if c.onLeg() != "head" {
 			continue
 		}
 		base := baseResult(checks, c)
 		switch {
-		case c.State == CheckSkipped:
+		case c.unreached():
 			t.unreached++
 			continue
 		case preExisting(checks, c):
@@ -300,7 +308,7 @@ func count(checks []Check) (t tally) {
 		}
 		if c.State == CheckPass {
 			t.passed++
-			if base == string(CheckFail) {
+			if failedOnBase(checks, c) {
 				t.shown++
 			}
 		}
@@ -314,6 +322,10 @@ func count(checks []Check) (t tally) {
 // verdictLine is the sentence after "Result:", from the overall verdict and what the checks showed.
 func verdictLine(overall CheckState, t tally, main string) string {
 	left := t.notCompared + t.partial + t.unreached
+	fine := "fine to merge from my side"
+	if t.testsOnly {
+		fine = "tests only, the app was not opened; fine to merge from my side as far as the tests go"
+	}
 	switch {
 	case overall == CheckBlocked:
 		return "could not test this one"
@@ -326,11 +338,18 @@ func verdictLine(overall CheckState, t tally, main string) string {
 	case overall == CheckPartial && left == 0:
 		return "the PR build works, but nothing differed from " + main + "; read the diff before merging"
 	case left == 0:
-		return "the PR does what it says; fine to merge from my side"
+		return "the PR does what it says; " + fine
+	case overall == CheckPartial && t.compared > 0:
+		few := func(n int, one, many string) string { return map[bool]string{true: one, false: many}[n == 1] }
+		line := "the PR build works as far as I could check; " + fmt.Sprint(t.compared) + few(t.compared, " check was", " checks were") + " compared on " + main + " and showed no difference"
+		if t.notRun > 0 {
+			line += ", " + fmt.Sprint(t.notRun) + few(t.notRun, " was", " were") + " not"
+		}
+		return line + "; read the diff before merging"
 	case overall == CheckPartial:
 		return "the PR build works as far as I could check; nothing was compared against " + main + ", so read the diff before merging"
 	}
-	return "the fix works; fine to merge from my side. " + leftover(t.notCompared+t.partial, t.unreached)
+	return "the fix works; " + fine + ". " + leftover(t.notCompared+t.partial, t.unreached)
 }
 
 // leftover says what the checks that did not finish as a comparison came to: some only ran on the PR build, some could
@@ -363,7 +382,7 @@ func plainReason(r, main string) string {
 	return mdText(r, 300)
 }
 
-var outcomeWords = map[CheckState]string{CheckPass: "it worked", CheckFail: "it did not work", CheckPartial: "it only partly worked"}
+var outcomeWords = map[CheckState]string{CheckPass: "it worked", CheckFail: "it did not work", CheckPartial: "it only partly worked", CheckAbsent: "it is not there"}
 
 // checkPara tells one check the way a teammate would: what was tried, what happened on the PR build, then on main.
 func checkPara(run Run, v Verdict, c Check, n, i int) string {
@@ -372,7 +391,7 @@ func checkPara(run Run, v Verdict, c Check, n, i int) string {
 		notes = append(notes, x.Note, x.Expect)
 	}
 	label, main := lowerLead(mdText(clause(cmp.Or(c.Expect, strings.ReplaceAll(c.Name, "-", " ")), 160), 400), notes...), run.baseName()
-	if c.State == CheckSkipped {
+	if c.unreached() {
 		return strings.TrimSpace(fmt.Sprintf("I could not check that %s. %s", label, recase(plainSentence(c.Note, n), true)))
 	}
 	if c.onLeg() == "head" && outcomeWords[c.State] == "" && plainSentence(c.Note, n) == "" { // nothing was seen on the PR build
@@ -394,6 +413,8 @@ func checkPara(run Run, v Verdict, c Check, n, i int) string {
 		out = append(out, say(main, c))
 	case twin >= 0 && v.Checks[twin].State == CheckSkipped:
 		out = append(out, "I did not repeat this on "+main+skipWhy(v.Checks[twin].Note)+".")
+	case twin >= 0 && v.Checks[twin].State == CheckAbsent: // main has no such feature: it is new, not something that failed there
+		out = append(out, "This is new in the PR; "+main+" does not have this"+skipWhy(v.Checks[twin].Note)+".")
 	case twin >= 0:
 		out = append(out, say(main, v.Checks[twin]))
 	case baseResult(v.Checks, c) != "":
@@ -407,6 +428,8 @@ func checkPara(run Run, v Verdict, c Check, n, i int) string {
 	case preExisting(v.Checks, c) && c.State == CheckPartial && baseResult(v.Checks, c) == string(CheckPartial): // the main sentence already says what was seen
 	case preExisting(v.Checks, c):
 		out = append(out, "The same thing happens on "+main+", so the PR did not cause it.")
+	case (c.State == CheckFail || c.State == CheckPartial) && baseResult(v.Checks, c) == string(CheckAbsent):
+		out = append(out, "Since "+main+" has no such feature, this is the PR's own problem.")
 	}
 	return strings.Join(out, " ")
 }
@@ -419,7 +442,7 @@ func skipWhy(note string) string {
 	return ""
 }
 
-// lasted is how long the run lasted, in whole minutes, for the first line: "7 minutes".
+// lasted is how long a stretch of the run lasted, in whole minutes, for the first line: "7 minutes".
 func lasted(d time.Duration) string {
 	switch m := int(d.Round(time.Minute) / time.Minute); {
 	case m < 1:
@@ -483,11 +506,35 @@ func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) s
 	both := slices.ContainsFunc(v.Checks, func(c Check) bool {
 		return c.onLeg() == "base" || slices.ContainsFunc(c.Receipts, func(r Receipt) bool { return r.onLeg() == "base" })
 	})
-	add("Litmus tried #%d%s on the PR build%s (%s).", run.PRNumber, issuesFor(run.Issues), map[bool]string{true: " and on " + main}[both], lasted(now.Sub(run.CreatedAt)))
-	add("**Result: %s.**", verdictLine(v.Overall, count(v.Checks), main))
 	blocked := v.Overall == CheckBlocked // no check ran: the result line and the reason below say it all
+	// started: something was built or seen; a blocked run with no leg and no receipt never got that far
+	started := len(run.Legs) > 0 || !blocked || slices.ContainsFunc(v.Checks, func(c Check) bool { return len(c.Receipts) > 0 })
+	if started {
+		took := "(" + lasted(now.Sub(run.CreatedAt)) + ")" // a run that never finished preparing has no testing time to split out
+		if run.prepared() {
+			builds, testing := run.buildsAndTesting(now)
+			took = "(builds " + lasted(builds) + ", testing " + lasted(testing) + ")"
+		}
+		add("Litmus tried #%d%s on the PR build%s %s.", run.PRNumber, issuesFor(run.Issues), map[bool]string{true: " and on " + main + run.atBranchPoint()}[both], took)
+	} else { // nothing was built: say so, not "tried on the PR build"
+		why := ""
+		if blocked && len(v.Reasons) > 0 {
+			why = " (" + lowerFirst(mdText(clause(v.Reasons[0], 120), 200)) + ")"
+		}
+		add("Litmus could not start on #%d%s%s. %s", run.PRNumber, issuesFor(run.Issues), why, run.builtLine())
+	}
+	add("**Result: %s.**", verdictLine(v.Overall, count(v.Checks), main))
 	if why := lowerFirst(mdText(clause(v.SkipBase, 200), 400)); why != "" && !blocked {
-		add("I did not run %s: %s.", main, why)
+		switch compared, notRun := baseCoverage(v.Checks); { // each paragraph below says why; this says how much
+		case len(compared) == 0:
+			add("I did not run %s: %s.", main, why)
+		case len(notRun) > 0:
+			labels := make([]string, len(notRun))
+			for i, c := range notRun {
+				labels[i] = strings.ReplaceAll(c.Name, "-", " ")
+			}
+			add("I compared %d %s on %s; %d %s not run there: %s.", len(compared), map[bool]string{true: "check", false: "checks"}[len(compared) == 1], main, len(notRun), map[bool]string{true: "was", false: "were"}[len(notRun) == 1], strings.Join(labels, ", "))
+		}
 	}
 	if blocked {
 		rows = nil
@@ -521,24 +568,30 @@ func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) s
 		}
 		add("%s\n\n</details>", strings.Join(parts, "\n\n"))
 	}
-	limits := slices.Clone(ev.limits)
-	for _, r := range v.Reasons { // a reason that opens with a check's id and name is that check's note, already told above
+	var gaps, limits []string
+	for _, g := range run.Gaps { // what intake could not get, as the pack and verdict.md say it: in full at every fit, the other limits give way
+		gaps = append(gaps, mdText(g, math.MaxInt))
+	}
+	limits = append(limits, ev.limits...)
+	for i, r := range v.Reasons { // a reason that opens with a check's id and name is that check's note, already told above
 		switch {
-		case v.Overall == CheckBlocked:
+		case blocked && !started && i == 0 && clause(r, 120) == strings.TrimRight(strings.Join(strings.Fields(r), " "), " .,;:"): // the first line carries all of it
+		case blocked:
 			limits = append(limits, "I could not run the checks. "+recase(plainSentence(r, 300), true))
 		case r == reasonNoneReached && count(v.Checks).unreached > 0: // every check was skipped: the result line says so
 		case !slices.ContainsFunc(v.Checks, func(c Check) bool { return strings.HasPrefix(r, c.ID+" "+c.Name+": ") }):
 			limits = append(limits, plainReason(r, main))
 		}
 	}
+	room := max(f.bullets-len(gaps), 0) // the gaps take bullets first and are never clipped or folded into "And N more."
 	for i, l := range limits {
-		if i == f.bullets {
+		if i == room {
 			limits = append(limits[:i], fmt.Sprintf("And %d more.", len(limits)-i))
 			break
 		}
 		limits[i] = clip(l, f.limit)
 	}
-	if len(limits) > 0 {
+	if limits = append(gaps, limits...); len(limits) > 0 {
 		add("%s", strings.Join(limits, "\n"))
 	}
 	return strings.Join(blocks, "\n\n")

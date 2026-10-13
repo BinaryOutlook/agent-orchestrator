@@ -29,6 +29,7 @@ type TestingService interface {
 	Drive(ctx context.Context, sessionID, action string, args []string) (map[string]any, error)
 	Test(ctx context.Context, sessionID, leg, dir string, argv []string, withTestsFrom string) (litmus.TestResult, error)
 	RecipeValidate(ctx context.Context, path string) (litmus.Recipe, error)
+	RefuseTester(sessionID, verb string) error
 	Prune(ctx context.Context, keepRuns, keepCheckouts int) (litmus.PruneReport, error)
 	PruneDryRun(ctx context.Context, keepRuns, keepCheckouts int) (litmus.PruneReport, error)
 	Runs(ctx context.Context, projectID string, limit int) (litmus.RunList, error)
@@ -68,7 +69,10 @@ func (c *TestingController) Register(r chi.Router) {
 		out, err := s.RunDetail(r.Context(), chi.URLParam(r, "id"))
 		writeTesting(w, r, out, err)
 	})
-	r.Post("/testing/runs/{id}/post", testingPost(func(r *http.Request, _ TestingRequest) (litmus.Run, error) {
+	r.Post("/testing/runs/{id}/post", testingPost(func(r *http.Request, in TestingRequest) (litmus.Run, error) {
+		if err := s.RefuseTester(in.SessionID, "post"); err != nil {
+			return litmus.Run{}, err
+		}
 		return s.Post(r.Context(), chi.URLParam(r, "id"))
 	}))
 	r.Post("/testing/runs/{id}/discard", testingPost(func(r *http.Request, _ TestingRequest) (litmus.Run, error) {
@@ -91,6 +95,9 @@ func (c *TestingController) Register(r chi.Router) {
 		writeTesting(w, r, out, err)
 	})
 	r.Post("/testing/start", testingPost(func(r *http.Request, in TestingRequest) (litmus.Started, error) {
+		if err := s.RefuseTester(in.SessionID, "start"); err != nil {
+			return litmus.Started{}, err
+		}
 		return s.Start(r.Context(), litmus.StartRequest{ProjectID: in.ProjectID, Harness: in.Harness, PRURL: in.PRURL, NoComment: in.NoComment, NoEvidence: in.NoEvidence})
 	}))
 	r.Post("/testing/intake", testingPost(func(r *http.Request, in TestingRequest) (litmus.Run, error) {
@@ -133,6 +140,9 @@ func (c *TestingController) Register(r chi.Router) {
 		return s.RecipeValidate(r.Context(), in.Path)
 	}))
 	r.Post("/testing/prune", testingPost(func(r *http.Request, in TestingRequest) (litmus.PruneReport, error) {
+		if err := s.RefuseTester(in.SessionID, "prune"); err != nil {
+			return litmus.PruneReport{}, err
+		}
 		keepRuns, keepCheckouts := litmus.DefaultKeepRuns, litmus.DefaultKeepCheckouts
 		if in.KeepRuns != nil {
 			keepRuns = *in.KeepRuns

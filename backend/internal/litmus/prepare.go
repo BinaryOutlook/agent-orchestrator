@@ -1,6 +1,7 @@
 package litmus
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -30,26 +31,38 @@ func MatchRepo(rawURL, owner, repo string) bool {
 // A failure to find one carries the message the worker sees.
 type RepoResolver func(ctx context.Context, names ...string) (string, error)
 
-// localCheckout resolves names to a registered project's checkout, or a TESTING_REPO_UNRESOLVED error.
-func (s *Service) localCheckout(ctx context.Context, names ...string) (string, error) {
+// localCheckout checks that names resolve to a registered project's checkout, else TESTING_REPO_UNRESOLVED. The
+// registration is a gate (Litmus tests the repos the user added to AO), not where the code comes from: that is the mirror.
+func (s *Service) localCheckout(ctx context.Context, names ...string) error {
 	names = slices.Compact(slices.DeleteFunc(slices.Clone(names), func(n string) bool { return n == "" }))
-	var local string
 	err := errors.New("no project registry is wired")
 	if s.resolve != nil {
+		var local string
 		if local, err = s.resolve(ctx, names...); err == nil && local == "" {
 			err = fmt.Errorf("no registered AO project matches %s; add the checkout with `ao project add`", strings.Join(names, " or "))
 		}
 	}
 	if err != nil {
-		return "", apierr.NotFound("TESTING_REPO_UNRESOLVED", err.Error())
+		return apierr.NotFound("TESTING_REPO_UNRESOLVED", err.Error())
 	}
-	return local, nil
+	return nil
 }
 
 // Runner runs a command to completion and returns its combined output; a nil env
 // inherits the daemon's. Tests swap it so no git or npm ever runs.
 type Runner interface {
 	Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error)
+}
+
+// stdoutRunner is a Runner that can keep stdout apart from stderr, for git output that is parsed.
+type stdoutRunner interface {
+	RunOut(ctx context.Context, dir string, env []string, name string, args ...string) (stdout []byte, err error)
+}
+
+// cappedRunner is a Runner that can keep the first limit bytes of stdout and stop the command there, for output that may
+// be huge when its start is enough (a patch). cut says the command had more to say.
+type cappedRunner interface {
+	RunCapped(ctx context.Context, dir string, env []string, limit int, name string, args ...string) (stdout []byte, cut bool, err error)
 }
 
 type execRunner struct{}
@@ -62,6 +75,67 @@ func (execRunner) Run(ctx context.Context, dir string, env []string, name string
 		err = fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, lastLines(out, 20))
 	}
 	return out, err
+}
+
+// RunOut returns stdout alone; stderr only goes into the error, so a git warning never lands in parsed output.
+func (execRunner) RunOut(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	cmd := process.CommandContext(ctx, name, args...)
+	cmd.Dir, cmd.Env = dir, env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if err != nil {
+		detail := stderr.Bytes()
+		if len(bytes.TrimSpace(detail)) == 0 {
+			detail = stdout.Bytes()
+		}
+		err = fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, lastLines(detail, 20))
+	}
+	return stdout.Bytes(), err
+}
+
+// RunCapped keeps the first limit bytes of stdout. A command that writes more is stopped there and that is cut, not a
+// failure: memory stays bounded by limit whatever the command would have printed.
+func (execRunner) RunCapped(ctx context.Context, dir string, env []string, limit int, name string, args ...string) ([]byte, bool, error) {
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+	cmd := process.CommandContext(ctx, name, args...)
+	cmd.Dir, cmd.Env, cmd.WaitDelay = dir, env, 2*time.Second
+	out, stderr := &cutWriter{limit: limit, stop: stop}, &capWriter{max: 64 << 10}
+	cmd.Stdout, cmd.Stderr = out, stderr
+	err := cmd.Run()
+	if out.cut {
+		return out.buf, true, nil
+	}
+	if err != nil {
+		err = fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, lastLines(stderr.buf, 20))
+	}
+	return out.buf, false, err
+}
+
+// cutWriter keeps the first limit bytes written to it. The write that goes past limit calls stop, which kills the
+// command, and is refused, as is every write after it.
+type cutWriter struct {
+	buf   []byte
+	limit int
+	cut   bool
+	stop  context.CancelFunc
+}
+
+var errOutputCut = errors.New("output cut")
+
+func (w *cutWriter) Write(p []byte) (int, error) {
+	if w.cut {
+		return 0, errOutputCut
+	}
+	room := w.limit - len(w.buf)
+	if len(p) <= room {
+		w.buf = append(w.buf, p...)
+		return len(p), nil
+	}
+	w.buf, w.cut = append(w.buf, p[:room]...), true
+	w.stop()
+	return room, errOutputCut
 }
 
 func lastLines(b []byte, n int) string {
@@ -147,8 +221,32 @@ func writeManifest(dir string, m Manifest) error {
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 
 func (s *Service) git(ctx context.Context, dir string, args ...string) (string, error) {
-	out, err := s.runner.Run(ctx, "", baseEnv(""), "git", append([]string{"-C", dir}, args...)...)
-	return strings.TrimSpace(string(out)), err
+	out, err := s.gitRaw(ctx, dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+// gitRaw is git's output untrimmed, and stdout only when the runner can separate it, for output that is parsed.
+func (s *Service) gitRaw(ctx context.Context, dir string, args ...string) (string, error) {
+	full := append([]string{"-C", dir}, args...)
+	var out []byte
+	var err error
+	if r, ok := s.runner.(stdoutRunner); ok {
+		out, err = r.RunOut(ctx, "", baseEnv(""), "git", full...)
+	} else {
+		out, err = s.runner.Run(ctx, "", baseEnv(""), "git", full...)
+	}
+	return string(out), err
+}
+
+// gitCapped is gitRaw for output that may be huge: at most limit bytes of stdout; cut says git had more and was
+// stopped. A runner that cannot stop the command (the tests' fake) returns it whole and it is cut here.
+func (s *Service) gitCapped(ctx context.Context, dir string, limit int, args ...string) (string, bool, error) {
+	if r, ok := s.runner.(cappedRunner); ok {
+		out, cut, err := r.RunCapped(ctx, "", baseEnv(""), limit, "git", append([]string{"-C", dir}, args...)...)
+		return string(out), cut, err
+	}
+	out, err := s.gitRaw(ctx, dir, args...)
+	return out[:min(len(out), limit)], len(out) > limit, err
 }
 
 func (s *Service) sh(ctx context.Context, dir string, env []string, script string) ([]byte, error) {
@@ -156,48 +254,26 @@ func (s *Service) sh(ctx context.Context, dir string, env []string, script strin
 }
 
 // prepareLeg makes <dataDir>/litmus/repos/<owner>__<repo>/<sha> ready to launch: a
-// shared clone (never a worktree, so sessions inside the private AO cannot register
-// worktrees in the user's .git), node_modules reused or installed, predev run.
+// shared clone of the repo's mirror (never a worktree, so sessions inside the private AO
+// cannot register worktrees in the mirror), node_modules reused or installed, predev run.
+// The registered AO project is only the gate: Litmus tests the repos the user added.
 func (s *Service) prepareLeg(ctx context.Context, repo string, r Recipe, leg, sha string, aka ...string) (Leg, error) {
 	if !shaPattern.MatchString(sha) {
 		return Leg{}, invalid("TESTING_SHA_INVALID", "not a commit SHA: "+sha)
 	}
-	local, err := s.localCheckout(ctx, append([]string{repo}, aka...)...)
-	if err != nil {
+	if err := s.localCheckout(ctx, append([]string{repo}, aka...)...); err != nil {
 		return Leg{}, err
 	}
 	nodeBin, nodeVersion, err := s.probeNode(ctx, r.Toolchain.Node)
 	if err != nil {
 		return Leg{}, err
 	}
-	rev := func() (string, error) { return s.git(ctx, local, "rev-parse", "--verify", "--quiet", sha+"^{commit}") }
-	full, err := rev()
-	if err != nil { // the checkout may predate the PR's commits
-		if _, ferr := s.git(ctx, local, "fetch", "origin", sha); ferr == nil {
-			full, err = rev()
-		}
-	}
+	dir, full, m, err := s.cloneLeg(ctx, repo, sha)
 	if err != nil {
-		return Leg{}, apierr.Unavailable("TESTING_SHA_MISSING", fmt.Sprintf("commit %s is not in %s and could not be fetched", sha, local))
+		return Leg{}, err
 	}
-
-	dir := filepath.Join(s.store.reposDir(repo), full)
-	m := readManifest(dir)
 	took := func(step string, since time.Time) {
 		m.Durations[step] = time.Since(since).Round(time.Millisecond).Seconds()
-	}
-	t := time.Now()
-	_, gitErr := os.Stat(filepath.Join(dir, ".git"))
-	if head, err := s.git(ctx, dir, "rev-parse", "HEAD"); gitErr != nil || err != nil || head != full {
-		_ = os.RemoveAll(dir) // absent, or an interrupted clone
-		m = Manifest{Durations: map[string]float64{}}
-		if _, err := s.runner.Run(ctx, "", baseEnv(""), "git", "clone", "--shared", "--no-checkout", local, dir); err != nil {
-			return Leg{}, err
-		}
-		if _, err := s.git(ctx, dir, "checkout", "--detach", full); err != nil {
-			return Leg{}, err
-		}
-		took("clone", t)
 	}
 	m.SHA, m.NodePath, m.NodeVersion, m.UsedAt = full, nodeBin, nodeVersion, s.clock()
 	env := baseEnv("")
@@ -210,7 +286,7 @@ func (s *Service) prepareLeg(ctx context.Context, repo string, r Recipe, leg, sh
 		if err != nil {
 			return Leg{}, err
 		}
-		t = time.Now()
+		t := time.Now()
 		if err := s.install(ctx, r, dir, hash, env, &m); err != nil {
 			return Leg{}, err
 		}
@@ -222,7 +298,7 @@ func (s *Service) prepareLeg(ctx context.Context, repo string, r Recipe, leg, sh
 		}
 	}
 	if r.Build.Cmd != "" && m.PredevAt.IsZero() {
-		t = time.Now()
+		t := time.Now()
 		if _, err := s.sh(ctx, filepath.Join(dir, r.Build.Dir), env, r.Build.Cmd); err != nil {
 			return Leg{}, err
 		}
@@ -230,6 +306,49 @@ func (s *Service) prepareLeg(ctx context.Context, repo string, r Recipe, leg, sh
 		took("predev", t)
 	}
 	return Leg{Name: leg, Worktree: dir, BuildManifest: manifestPath(dir), State: "prepared"}, writeManifest(dir, m)
+}
+
+// cloneLeg leaves a shared clone of the mirror at <reposDir>/<full sha>, checked out at the commit, and pins the
+// commit in the mirror. A commit the mirror lacks is fetched by id. A copy that is absent, interrupted, at another
+// commit or borrowing its history from anywhere but the mirror is remade. The mirror lock is held for the git work
+// only, not for the install and build that follow.
+func (s *Service) cloneLeg(ctx context.Context, repo, sha string) (dir, full string, m Manifest, err error) {
+	mirror := s.store.mirrorDir(repo)
+	mu := s.mirrorLock(mirror)
+	mu.Lock()
+	defer mu.Unlock()
+	if err := s.ensureMirror(ctx, repo); err != nil {
+		return "", "", m, fmt.Errorf("make the mirror of %s: %w", repo, err)
+	}
+	rev := func() (string, error) { return s.git(ctx, mirror, "rev-parse", "--verify", "--quiet", sha+"^{commit}") }
+	full, err = rev()
+	if err != nil { // the mirror may predate the PR's commits
+		if ferr := s.fetchInto(ctx, mirror, sha); ferr == nil {
+			full, err = rev()
+		}
+	}
+	if err != nil {
+		return "", "", m, apierr.Unavailable("TESTING_SHA_MISSING", fmt.Sprintf("commit %s is not in the mirror of %s and could not be fetched", sha, repo))
+	}
+	if err := s.pin(ctx, mirror, full); err != nil {
+		return "", "", m, err
+	}
+	dir = filepath.Join(s.store.reposDir(repo), full)
+	m = readManifest(dir)
+	t := time.Now()
+	_, gitErr := os.Stat(filepath.Join(dir, ".git"))
+	if head, err := s.git(ctx, dir, "rev-parse", "HEAD"); gitErr != nil || err != nil || head != full || !borrowsFrom(dir, mirror) {
+		_ = os.RemoveAll(dir) // absent, an interrupted clone, or a copy borrowing from a checkout of the user's
+		m = Manifest{Durations: map[string]float64{}}
+		if _, err := s.runner.Run(ctx, "", baseEnv(""), "git", "clone", "--shared", "--no-checkout", mirror, dir); err != nil {
+			return "", "", m, err
+		}
+		if _, err := s.git(ctx, dir, "checkout", "--detach", full); err != nil {
+			return "", "", m, err
+		}
+		m.Durations["clone"] = time.Since(t).Round(time.Millisecond).Seconds()
+	}
+	return dir, full, m, nil
 }
 
 // pruneClone forgets the worktrees of a shared clone whose directories are gone and deletes the ao/litmus-*
@@ -357,12 +476,20 @@ func (s *Service) prepare(ctx context.Context, run Run, done func()) (Run, error
 	if err != nil {
 		return Run{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute) // a CLI timeout must not kill an install halfway
+	detached := context.WithoutCancel(ctx) // a CLI timeout must not kill an install halfway
+	ctx, cancel := context.WithTimeout(detached, s.prepareBudget)
 	defer cancel()
 	var legs []Leg
 	for _, l := range []struct{ name, sha string }{{"head", run.HeadSHA}, {"base", run.BaseSHA}} {
 		leg, err := s.prepareLeg(ctx, run.Repo, recipe, l.name, l.sha, run.RequestedRepo)
 		if err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) { // stuck: the budget ran out inside this leg
+				ready := make([]string, len(legs))
+				for i, done := range legs {
+					ready[i] = done.Name
+				}
+				return Run{}, s.blockStuckPrepare(detached, run, l.name, ready)
+			}
 			var typed *apierr.Error
 			if !errors.As(err, &typed) { // a git, install or build failure: the tester gets the last lines, not a bare 500
 				slog.Warn("litmus: prepare failed", "run", run.ID, "leg", l.name, "sha", l.sha, "error", err)
@@ -375,7 +502,36 @@ func (s *Service) prepare(ctx context.Context, run Run, done func()) (Run, error
 		}
 		legs = append(legs, leg)
 	}
-	return s.update(run.ID, func(cur *Run) { cur.Legs, cur.State, cur.Error = legs, RunPrepared, "" })
+	return s.update(run.ID, func(cur *Run) {
+		if cur.State == RunIntake { // the tester's time starts when the builds are ready; a repeat prepare does not extend it
+			cur.Deadline = s.clock().Add(RunBudget)
+		}
+		cur.Legs, cur.State, cur.Error = legs, RunPrepared, ""
+	})
+}
+
+// blockStuckPrepare closes a run whose prepare ran past s.prepareBudget as blocked, the way the tester's own
+// `submit --blocked` would, and returns the error prepare answers with. ready names the builds that did finish, for the
+// comment. A submit already in flight closes the run itself.
+func (s *Service) blockStuckPrepare(ctx context.Context, run Run, leg string, ready []string) error {
+	reason := fmt.Sprintf("the builds were not ready after %d minutes (the %s build was still going)", int(s.prepareBudget.Minutes()), leg)
+	slog.Warn("litmus: prepare ran past its budget", "run", run.ID, "leg", leg, "budget", s.prepareBudget)
+	s.mu.Lock()
+	done, err := s.markBusy(run.ID, "submit")
+	s.mu.Unlock()
+	if err == nil {
+		defer done()
+		var checks []Check
+		if run, err = s.update(run.ID, func(cur *Run) { cur.Ready = ready }); err == nil {
+			if checks, err = s.store.Checks(run.ID); err == nil {
+				_, err = s.closeRun(ctx, run, checks, "", reason, "")
+			}
+		}
+	}
+	if err != nil {
+		slog.Warn("litmus: could not close a run whose prepare ran too long", "run", run.ID, "error", err)
+	}
+	return apierr.Unavailable("TESTING_PREPARE_TIMEOUT", "prepare: "+reason+"; the run is closed as blocked")
 }
 
 // statable reports whether p can be stat-ed, whatever it is.

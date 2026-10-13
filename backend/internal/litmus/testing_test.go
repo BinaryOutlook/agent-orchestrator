@@ -18,10 +18,13 @@ const prURL = "https://github.com/aoagents/agent-orchestrator/pull/6394"
 
 var ctx = context.Background()
 
+// newSvc is a service over a temp data dir whose gh and git answer from the recorded PR 6394, so no network is reached.
 func newSvc(t *testing.T) (*Service, *time.Time) {
 	t.Helper()
 	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
-	return New(NewStore(t.TempDir()), func() time.Time { return now }).WithGH(fixtureGH(t)), &now
+	svc := New(NewStore(t.TempDir()), func() time.Time { return now }).WithGH(fixtureGH(t))
+	svc.runner, svc.retryPause = gitFixture(t), 0
+	return svc, &now
 }
 
 // is returns a checker for a call's outcome: is(t, "CODE")(svc.Verb(...)) wants

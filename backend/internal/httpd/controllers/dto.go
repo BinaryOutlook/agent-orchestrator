@@ -3332,7 +3332,7 @@ type TestingProjectIDParam struct {
 // TestingRequest is the body of every POST /api/v1/testing verb; each verb reads
 // only the fields it needs. SessionID attributes the call to the worker's run; start and recipe validate need none.
 type TestingRequest struct {
-	SessionID     string   `json:"sessionId,omitempty"`
+	SessionID     string   `json:"sessionId,omitempty" description:"the calling session; start, post and prune refuse it when it is a Litmus tester's own session."`
 	ProjectID     string   `json:"projectId,omitempty" description:"start: the project the worker runs in; rerun: only for a run that did not record its project."`
 	RunID         string   `json:"runId,omitempty" description:"rerun only: the run whose pull request is tested again."`
 	Harness       string   `json:"harness,omitempty"`
@@ -3340,7 +3340,7 @@ type TestingRequest struct {
 	Leg           string   `json:"leg,omitempty" enum:"base,head"`
 	Name          string   `json:"name,omitempty"`
 	Expect        string   `json:"expect,omitempty"`
-	Result        string   `json:"result,omitempty" enum:"pass,fail,partial,skipped"`
+	Result        string   `json:"result,omitempty" enum:"pass,fail,partial,absent,skipped"`
 	Note          string   `json:"note,omitempty"`
 	Summary       string   `json:"summary,omitempty"`
 	Blocked       bool     `json:"blocked,omitempty" description:"submit only: close the run as blocked instead of judging checks."`

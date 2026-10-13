@@ -116,6 +116,9 @@ func TestIntakeRecordsRequestedRepoAndBlocksWhenUnresolved(t *testing.T) {
 		!slices.Equal(asked, []string{run.Repo, run.RequestedRepo}) {
 		t.Fatalf("run %+v asked %v", run, asked)
 	}
+	if f := svc.runner.(*fakeRunner); len(f.calls) != 0 || len(run.Gaps) != 1 || !strings.HasPrefix(run.Gaps[0], "I did not read the PR's code with git") { // no clone of a repo nobody registered
+		t.Fatalf("git calls %q gaps %q", f.calls, run.Gaps)
+	}
 	const msg = "blocked at prepare: no registered AO project matches orchestratorinc/agent-orchestrator or aoagents/agent-orchestrator"
 	if st, err := svc.Status(ctx, "s1"); err != nil || st.Run.Error != msg {
 		t.Fatalf("status %+v err %v", st.Run, err)

@@ -134,6 +134,20 @@ func noSlop(t *testing.T, body string) {
 	}
 }
 
+// The builds finish before the tester's clock starts: the first line gives the build time and the testing time apart,
+// and the testing time is what the budget is measured against.
+func TestCommentSplitsBuildTimeFromTestingTime(t *testing.T) {
+	run := commentRun
+	run.Deadline = run.CreatedAt.Add(3*time.Minute + RunBudget) // prepare finished 3 minutes in
+	now := run.CreatedAt.Add(10 * time.Minute)
+	if got := renderComment(run, commentVerdict(commentChecks()), evidence{}, now); !strings.HasPrefix(got, "Litmus tried #7 on the PR build and on main (builds 3 minutes, testing 7 minutes).") {
+		t.Errorf("comment: %q", got[:min(len(got), 120)])
+	}
+	if md := renderVerdict(run, commentVerdict(commentChecks()), false, nil, t.TempDir(), now, nil); !strings.Contains(md, "Duration: builds 3m0s, testing 7m0s of a 25m0s budget.") {
+		t.Errorf("verdict.md: %q", md[:min(len(md), 300)])
+	}
+}
+
 func TestRenderCommentGolden(t *testing.T) {
 	now := commentRun.CreatedAt.Add(4*time.Minute + 3*time.Second)
 	got := renderComment(commentRun, commentVerdict(commentChecks()), evidence{}, now)
@@ -190,10 +204,90 @@ func TestRenderCommentFitsTheCapAndClipsTableRowsLast(t *testing.T) {
 	}
 }
 
+// After a prepare timeout the comment says which build was ready, from the legs that finished.
+func TestBlockedCommentNamesTheBuildThatWasReady(t *testing.T) {
+	v := Verdict{Overall: CheckBlocked, Reasons: []string{"the builds were not ready after 20 minutes"}}
+	run := commentRun
+	run.Ready = []string{"head"}
+	if got := renderComment(run, v, evidence{}, run.CreatedAt); !strings.Contains(got, "The PR build was ready; main was not. Nothing was checked.") || strings.Contains(got, "Nothing was built") {
+		t.Errorf("head ready:\n%s", got)
+	}
+	run.Ready = []string{"base"}
+	if got := renderComment(run, v, evidence{}, run.CreatedAt); !strings.Contains(got, "Main was ready; the PR build was not. Nothing was checked.") {
+		t.Errorf("base ready:\n%s", got)
+	}
+}
+
 func TestBlockedCommentCarriesTheReason(t *testing.T) {
-	got := renderComment(commentRun, Verdict{Overall: CheckBlocked, Reasons: []string{"prepare refused: no checkout"}}, evidence{}, commentRun.CreatedAt)
-	if !strings.HasPrefix(got, "Litmus tried #7 on the PR build (under a minute).\n\n**Result: could not test this one.**\n") || !strings.Contains(got, "\nI could not run the checks. Prepare refused: no checkout.\n") || strings.Contains(got, "| what was checked |") {
+	v := Verdict{Overall: CheckBlocked, Reasons: []string{"prepare refused: no checkout"}}
+	got := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt) // no leg and no receipt: nothing was built
+	if !strings.HasPrefix(got, "Litmus could not start on #7 (prepare refused: no checkout). Nothing was built or checked.\n\n**Result: could not test this one.**\n") || strings.Contains(got, "I could not run the checks") || strings.Contains(got, "| what was checked |") {
 		t.Fatalf("blocked comment:\n%s", got)
+	}
+	built := commentRun
+	built.Legs = []Leg{{Name: "head", State: "cleaned"}}
+	got = renderComment(built, v, evidence{}, commentRun.CreatedAt)
+	if !strings.HasPrefix(got, "Litmus tried #7 on the PR build (under a minute).\n\n**Result: could not test this one.**\n") || !strings.Contains(got, "\nI could not run the checks. Prepare refused: no checkout.\n") {
+		t.Fatalf("blocked comment after a build:\n%s", got)
+	}
+}
+
+func TestBlockedRunKeepsTheReasonsTheFirstLineLeavesOut(t *testing.T) {
+	long := strings.Repeat("word ", 40)
+	v := Verdict{Overall: CheckBlocked, Reasons: []string{"prepare refused: no checkout", strings.TrimSpace(long)}}
+	got := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt) // no leg and no receipt: nothing was built
+	if !strings.HasPrefix(got, "Litmus could not start on #7 (prepare refused: no checkout). Nothing was built or checked.\n\n") || strings.Count(got, "I could not run the checks.") != 1 || !strings.Contains(got, "\nI could not run the checks. Word word ") {
+		t.Fatalf("second reason is not the one Limits bullet:\n%s", got)
+	}
+	v.Reasons = []string{strings.TrimSpace(long)} // a first reason the first line clips keeps its full text as a bullet
+	got = renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
+	if strings.Count(got, "I could not run the checks.") != 1 {
+		t.Fatalf("a clipped first reason is lost:\n%s", got)
+	}
+}
+
+func TestCommentSaysTheGapsAsLimitsWithoutChangingTheResult(t *testing.T) {
+	now := commentRun.CreatedAt.Add(4 * time.Minute)
+	plain := renderComment(commentRun, commentVerdict(commentChecks()), evidence{}, now)
+	run := commentRun
+	run.Gaps = []string{"I could not read the linked issue #123 (not found).", "The PR's patch is longer than 5.0 MB; I was shown the first 5.0 MB of it and read the rest with git (files.txt lists every file)."}
+	got := renderComment(run, commentVerdict(commentChecks()), evidence{}, now)
+	result := func(s string) string { return strings.SplitN(s, "\n", 4)[2] }
+	if result(got) != result(plain) || !strings.HasPrefix(result(got), "**Result: ") {
+		t.Fatalf("the result line changed: %q vs %q", result(got), result(plain))
+	}
+	if !strings.Contains(got, "\n"+run.Gaps[0]+"\n"+run.Gaps[1]+"\n\n<!-- litmus:comment") {
+		t.Fatalf("gaps are not the Limits bullets:\n%s", got)
+	}
+	noSlop(t, got)
+
+	v := commentVerdict(commentChecks()) // with Limits text far over the cap, the gaps are not what gets folded
+	for i := 0; i < 30; i++ {
+		v.Reasons = append(v.Reasons, fmt.Sprintf("reason %d %s", i, strings.Repeat("n", 300)))
+	}
+	got = renderComment(run, v, evidence{}, now)
+	if !strings.Contains(got, run.Gaps[0]) || !strings.Contains(got, run.Gaps[1]) || !strings.Contains(got, "\nAnd ") {
+		t.Fatalf("the cap folded the gaps:\n%s", got)
+	}
+}
+
+// A gap is never clipped or folded into "And N more." at any fit, the tightest included: the other limits give way.
+func TestCommentKeepsEveryGapWholeAtEveryFit(t *testing.T) {
+	run := commentRun
+	long := "I could not read the PR's file list with git (" + strings.Repeat("fatal: the object is missing ", 6) + "), so the areas it changes are unknown."
+	run.Gaps = []string{long, "I could not read the linked issue #123 (not found)."}
+	v := commentVerdict(commentChecks())
+	for i := 0; i < 5; i++ {
+		v.Reasons = append(v.Reasons, fmt.Sprintf("reason %d %s", i, strings.Repeat("n", 200)))
+	}
+	for _, f := range commentFits {
+		got := commentBody(run, v, evidence{}, run.CreatedAt, f)
+		if !strings.Contains(got, "\n"+mdText(long, len(long))+"\n"+run.Gaps[1]) {
+			t.Errorf("fit %+v lost or clipped a gap:\n%s", f, got)
+		}
+		if f.bullets <= len(run.Gaps) && !strings.HasSuffix(got, "\nAnd 5 more.") {
+			t.Errorf("fit %+v: the other limits are not folded into one line:\n%s", f, got[max(len(got)-400, 0):])
+		}
 	}
 }
 
@@ -203,13 +297,11 @@ func TestBlockedRunSkipsTheCheckParagraphs(t *testing.T) {
 	checks := []Check{{ID: "c1", Name: "artifactversions-tests", Expect: "the artifactversions package tests pass: files are captured after two stable ticks", Receipts: nil}}
 	v := Verdict{Overall: CheckBlocked, Checks: checks, Reasons: []string{"prepare refused: no checkout"}}
 	got := renderComment(run, v, evidence{}, run.CreatedAt.Add(7*time.Minute))
-	const want = `Litmus tried #7 on the PR build (7 minutes).
+	const want = `Litmus could not start on #7 (prepare refused: no checkout). Nothing was built or checked.
 
 **Result: could not test this one.**
 
 Not checked by this run: tests (4 files).
-
-I could not run the checks. Prepare refused: no checkout.
 
 <!-- litmus:comment o/r#7 -->`
 	if got != want {
@@ -356,7 +448,8 @@ func TestSubmitCommentModesAndFailure(t *testing.T) {
 
 func TestStartNoCommentSetsTheRunsMode(t *testing.T) {
 	ids := []string{"s8", "s9"}
-	svc := New(NewStore(t.TempDir()), nil).WithGH(fixtureGH(t)).WithSpawner(func(context.Context, SpawnRequest) (string, error) {
+	svc, _ := newSvc(t)
+	svc.WithSpawner(func(context.Context, SpawnRequest) (string, error) {
 		id := ids[0]
 		ids = ids[1:]
 		return id, nil
@@ -414,6 +507,44 @@ func TestVerdictLineSentences(t *testing.T) {
 	}
 	if got := verdictLine(CheckPartial, tally{passed: 1}, "develop"); got != "the PR build works, but nothing differed from develop; read the diff before merging" {
 		t.Errorf("a run against another base branch names it: %q", got)
+	}
+}
+
+func TestVerdictLineSaysWhenOnlyTestsRan(t *testing.T) {
+	const tests = "tests only, the app was not opened; fine to merge from my side as far as the tests go"
+	for _, c := range []struct {
+		overall CheckState
+		t       tally
+		want    string
+	}{
+		{CheckPass, tally{passed: 1, shown: 1, testsOnly: true}, "the PR does what it says; " + tests},
+		{CheckPass, tally{passed: 3, shown: 1, notCompared: 2, testsOnly: true}, "the fix works; " + tests + ". A few checks only ran on the PR build"},
+		{CheckFail, tally{failed: 1, testsOnly: true}, "something broke; do not merge yet"},
+		{CheckPartial, tally{passed: 1, testsOnly: true}, "the PR build works, but nothing differed from main; read the diff before merging"},
+	} {
+		if got := verdictLine(c.overall, c.t, "main"); got != c.want {
+			t.Errorf("%s %+v:\n got %q\nwant %q", c.overall, c.t, got, c.want)
+		}
+	}
+	zero, one := 0, 1
+	test := func(leg string, state CheckState, r Receipt) Check {
+		r.Action, r.Leg = "test", leg
+		return Check{Name: "pkg", Expect: "the tests pass", State: state, Leg: leg, Receipts: []Receipt{r}}
+	}
+	head := test("head", CheckPass, Receipt{Exit: &zero, Ran: ranN(3)})
+	if c := count([]Check{head, test("base", CheckFail, Receipt{Exit: &one, Ran: ranN(2)})}); !c.testsOnly || c.shown != 1 || c.passed != 1 {
+		t.Errorf("tests that failed on main are a pass shown against it: %+v", c)
+	}
+	if c := count([]Check{head, test("base", CheckFail, Receipt{Exit: &one, NotBuilt: true})}); !c.testsOnly || c.shown != 0 {
+		t.Errorf("tests that did not compile on main show nothing: %+v", c)
+	}
+	if c := count(commentChecks()); c.testsOnly {
+		t.Errorf("a run that clicked through the app is not tests only: %+v", c)
+	}
+	// The same line reaches the comment.
+	v := commentVerdict([]Check{head, test("base", CheckFail, Receipt{Exit: &one, Ran: ranN(2)})})
+	if body := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt.Add(time.Minute)); !strings.Contains(body, "**Result: the PR does what it says; "+tests+".**") {
+		t.Errorf("comment lacks the tests-only result:\n%s", body)
 	}
 }
 
@@ -518,17 +649,72 @@ func TestCommentSaysWholeSentencesInTheReadersWords(t *testing.T) {
 	for _, want := range []string{
 		"I checked that with sidebar expanded and brand shown, Collapse, Go back and Go forward buttons are all visible. The PR build shows the arrows. On main, expanded sidebar shows only Collapse.",
 		"Next I checked that Back/forward navigate and stay visible. On the PR build, forward did not land. History visible needs the arrows to navigate, so it cannot run there (see history visible).\n",
-		"\n\nI did not run main: history visible has no arrows; main has none when expanded, the PR build is slow.\n\n",
 		"I also checked that " + strings.TrimSuffix(strings.Repeat("the sidebar keeps every button ", 5), " ") + ". On the PR build, fine.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no %q in\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "....") || strings.Contains(got, "Worth a look") || strings.Contains(got, "could not compare this") || strings.Count(got, "I did not run") != 1 {
-		t.Errorf("clipped sentence, the old closing line, or the skip reason not said exactly once:\n%s", got)
+	if strings.Contains(got, "....") || strings.Contains(got, "Worth a look") || strings.Contains(got, "could not compare this") || strings.Contains(got, "I did not run") {
+		t.Errorf("clipped sentence, the old closing line, or a run-wide skip over a run that compared a check:\n%s", got)
 	}
 	noSlop(t, got)
+
+	checks[1].State = CheckSkipped // nothing ran on main: the reason stands for the whole run, said once
+	v = commentVerdict(checks)
+	v.SkipBase = "C2 has no arrows; base has none when expanded, head is slow"
+	got = renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
+	if !strings.Contains(got, "\n\nI did not run main: history visible has no arrows; main has none when expanded, the PR build is slow.\n\n") || strings.Count(got, "I did not run") != 1 {
+		t.Errorf("skip reason not said exactly once:\n%s", got)
+	}
+	noSlop(t, got)
+}
+
+// A run that compared some checks on main says which, and never claims it did not run main.
+func TestCommentSaysWhichChecksWereComparedOnMain(t *testing.T) {
+	checks := commentChecks() // c1 compared, c3 has no main result, c4 could not be reached
+	v := commentVerdict(checks)
+	v.SkipBase = "main took too long to start"
+	got := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
+	if want := "\n\nI compared 1 check on main; 1 was not run there: last model.\n\n"; !strings.Contains(got, want) {
+		t.Errorf("no %q in\n%s", want, got)
+	}
+	if strings.Contains(got, "I did not run") {
+		t.Errorf("the comment says main was not run:\n%s", got)
+	}
+	noSlop(t, got)
+
+	checks = append(checks, Check{ID: "c5", Name: "last model", Expect: "the last model is remembered", State: CheckSkipped, Leg: "base", Note: "main took too long to start"}, Check{ID: "c6", Name: "pick", Expect: "the picker opens", State: CheckPass, Receipts: []Receipt{{Seq: 3, Leg: "head"}}})
+	v = commentVerdict(checks)
+	v.SkipBase = "main took too long to start"
+	got = renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
+	if want := "I compared 1 check on main; 2 were not run there: last model, pick."; !strings.Contains(got, want) {
+		t.Errorf("no %q in\n%s", want, got)
+	}
+	if !strings.Contains(got, "I did not repeat this on main: main took too long to start.") {
+		t.Errorf("the skipped twin's reason is not on its row:\n%s", got)
+	}
+}
+
+// The result line says how many checks ran on main when some did, and keeps "nothing was compared" for when none did.
+func TestVerdictLineSaysHowManyChecksWereComparedOnMain(t *testing.T) {
+	if got := count(commentChecks()); got.compared != 1 || got.notRun != 1 {
+		t.Errorf("commentChecks compared %d, not run %d on main, want 1 and 1", got.compared, got.notRun)
+	}
+	for _, c := range []struct {
+		t    tally
+		want string
+	}{
+		{tally{passed: 7, notCompared: 2, compared: 5, notRun: 2}, "the PR build works as far as I could check; 5 checks were compared on main and showed no difference, 2 were not; read the diff before merging"},
+		{tally{passed: 2, notCompared: 1, compared: 1, notRun: 1}, "the PR build works as far as I could check; 1 check was compared on main and showed no difference, 1 was not; read the diff before merging"},
+		{tally{passed: 2, notCompared: 2}, "the PR build works as far as I could check; nothing was compared against main, so read the diff before merging"},
+	} {
+		got := verdictLine(CheckPartial, c.t, "main")
+		if got != c.want {
+			t.Errorf("verdictLine(%+v) = %q, want %q", c.t, got, c.want)
+		}
+		noSlop(t, got)
+	}
 }
 
 func TestHeroCaptionSaysWhatEachSideShowedInNinetyCharacters(t *testing.T) {
@@ -618,5 +804,82 @@ func TestCommentFirstLineNamesTheClosedIssues(t *testing.T) {
 	}
 	if first, _, _ := strings.Cut(commentBody(run, one, evidence{}, run.CreatedAt, commentFits[0]), "\n"); first != "Litmus tried #6403 (for [#6390]("+url(6390)+")) on the PR build (under a minute)." {
 		t.Errorf("head-only first line %q", first)
+	}
+}
+
+// A run whose base build is main at the PR's branch point says so where the comment introduces the two builds; every
+// other mention of main stays, and a PR build alone has no main to qualify.
+func TestCommentFirstLineSaysMainAtTheBranchPoint(t *testing.T) {
+	run := commentRun
+	run.PRNumber = 6403
+	run.Gaps = []string{forkGapPrefix + "main 9 commits ago; 'main' in this report is that branch point (fca1b72c), not today's main."}
+	got := renderComment(run, commentVerdict(commentChecks()), evidence{}, run.CreatedAt.Add(time.Minute))
+	if first, _, _ := strings.Cut(got, "\n"); first != "Litmus tried #6403 on the PR build and on main at the PR's branch point (1 minute)." {
+		t.Errorf("first line %q", first)
+	}
+	if !strings.Contains(got, "not today's main") {
+		t.Errorf("the gap is missing from the comment:\n%s", got)
+	}
+	run.Gaps = []string{"GitHub counts 3 changed files and git found 2 from the fork point."}
+	got = renderComment(run, commentVerdict(commentChecks()), evidence{}, run.CreatedAt.Add(time.Minute))
+	if first, _, _ := strings.Cut(got, "\n"); first != "Litmus tried #6403 on the PR build and on main (1 minute)." {
+		t.Errorf("first line without the fork gap %q", first)
+	}
+}
+
+func TestMainAbsentIsNewNotFailing(t *testing.T) {
+	rc := func(leg string) []Receipt { return []Receipt{{Seq: 1, Leg: leg, Action: "click", AfterPath: "x.png"}} }
+	for _, c := range []struct {
+		name    string
+		head    CheckState
+		note    string
+		result  string // the result line
+		para    []string
+		banned  []string
+		partial bool
+	}{
+		{"head fail", CheckFail, "Clicking the Agent row closed the picker without switching.", "something broke; do not merge yet",
+			[]string{"clicking the Agent row closed the picker without switching.", "main does not have this: no agent picker there", "Since main has no such feature, this is the PR's own problem."},
+			[]string{"happens on main", "did not cause it", "nothing differed", "fails on main", "On main, it did not work"}, false},
+		{"head partial", CheckPartial, "The list showed but the Agent row did nothing.", "",
+			[]string{"the list showed but the Agent row did nothing.", "main does not have this", "Since main has no such feature, this is the PR's own problem."},
+			[]string{"happens on main", "did not cause it", "fails on main"}, true},
+		{"head pass", CheckPass, "The picker switched agents.", "the PR does what it says; fine to merge from my side",
+			[]string{"the picker switched agents.", "This is new in the PR; main does not have this: no agent picker there."},
+			[]string{"happens on main", "did not cause it", "nothing differed", "fails on main", "own problem"}, false},
+	} {
+		checks := []Check{
+			{ID: "c1", Name: "agent-row", Expect: "clicking the Agent row switches the agent", State: c.head, Note: c.note, Receipts: rc("head")},
+			{ID: "c2", Name: "agent-row", Expect: "clicking the Agent row switches the agent", State: CheckAbsent, Leg: "base", Note: "no agent picker there", Receipts: rc("base")},
+		}
+		got := renderComment(commentRun, commentVerdict(checks), evidence{}, commentRun.CreatedAt)
+		if c.result != "" && !strings.Contains(got, "**Result: "+c.result) {
+			t.Errorf("%s: result line lacks %q:\n%s", c.name, c.result, got)
+		}
+		for _, want := range c.para {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: comment lacks %q:\n%s", c.name, want, got)
+			}
+		}
+		for _, banned := range c.banned {
+			if strings.Contains(got, banned) {
+				t.Errorf("%s: comment says %q:\n%s", c.name, banned, got)
+			}
+		}
+		noSlop(t, got)
+		if cellWord(string(CheckAbsent)) == "fails" {
+			t.Errorf("%s: an absent cell reads as a failure", c.name)
+		}
+	}
+}
+
+func TestHeadAbsentReadsAsNotReached(t *testing.T) {
+	checks := []Check{
+		{ID: "c1", Name: "agent-row", Expect: "the Agent row is there", State: CheckAbsent, Note: "The picker has no Agent row.", Receipts: []Receipt{{Seq: 1, Action: "click", AfterPath: "x.png"}}},
+		{ID: "c2", Name: "agent-row", Expect: "the Agent row is there", State: CheckAbsent, Leg: "base", Note: "No picker.", Receipts: []Receipt{{Seq: 1, Leg: "base", Action: "click", AfterPath: "x.png"}}},
+	}
+	got := renderComment(commentRun, commentVerdict(checks), evidence{}, commentRun.CreatedAt)
+	if !strings.Contains(got, "I could not check that the Agent row is there. The picker has no Agent row.") || !strings.Contains(got, "**Result: could not test this from the app") {
+		t.Errorf("head absent is not told as not reached:\n%s", got)
 	}
 }

@@ -52,17 +52,35 @@ func TestChecksPlanRules(t *testing.T) {
 	if refused() {
 		t.Fatal("launch with two checks still refused")
 	}
-	for i := 3; i <= maxChecks; i++ {
+	for i := 2; i <= maxChecks; i++ { // "menu opens" and its twin are one pair; these fill the cap
 		is(t, "")(svc.CheckAdd(ctx, "s1", fmt.Sprint("check ", i), "x", ""))
 	}
-	is(t, "TESTING_CHECK_LIMIT")(svc.CheckAdd(ctx, "s1", "one too many", "x", ""))
+	_, err = svc.CheckAdd(ctx, "s1", "one too many", "x", "")
+	is(t, "TESTING_CHECK_LIMIT")(nil, err)
+	if !strings.Contains(err.Error(), "at most 6 pairs of checks") {
+		t.Errorf("limit message %q does not name the pairs", err)
+	}
+	for _, name := range []string{"check 2", "CHECK 6"} { // a main twin of a check on a full cap is never refused
+		c, err := svc.CheckAdd(ctx, "s1", name, "x", "base")
+		is(t, "")(nil, err)
+		if c.Leg != "base" {
+			t.Errorf("twin %+v", c)
+		}
+	}
+	is(t, "TESTING_CHECK_LIMIT")(svc.CheckAdd(ctx, "s1", "check 2", "x", "base")) // a second twin is a new pair
 }
 
 func TestDeriveOverall(t *testing.T) {
 	head := func(id string, st CheckState) Check { return Check{ID: id, Name: id, State: st} }
 	base := func(id string, st CheckState) Check {
-		return Check{ID: "b" + id, Name: strings.ToUpper(id), State: st, Leg: "base"}
-	} // same name as head(id), any case
+		return Check{ID: "b" + id, Name: strings.ToUpper(id), State: st, Leg: "base", Receipts: []Receipt{{Leg: "base", Action: "click"}}}
+	} // same name as head(id), any case, with a screenshot receipt like every ended check
+	exit := func(n int) *int { return &n }
+	baseTest := func(id string, st CheckState, r Receipt) Check { // a base check whose only receipt is a test run
+		r.Leg, r.Action = "base", "test"
+		return Check{ID: "b" + id, Name: strings.ToUpper(id), State: st, Leg: "base", Receipts: []Receipt{r}}
+	}
+	unbuilt, passing, failing := Receipt{Exit: exit(1), NotBuilt: true}, Receipt{Exit: exit(0), Ran: ranN(3)}, Receipt{Exit: exit(1), Ran: ranN(3)}
 	for i, c := range []struct {
 		checks []Check
 		want   CheckState
@@ -78,15 +96,35 @@ func TestDeriveOverall(t *testing.T) {
 		{[]Check{head("x", CheckFail), base("x", CheckPass), head("y", CheckPartial)}, CheckFail}, // any head fail wins
 		{[]Check{head("x", CheckPass), base("x", CheckFail), head("y", CheckSkipped)}, CheckPass}, // could not reach: left out
 		{[]Check{head("x", CheckSkipped), head("y", CheckPass), base("y", CheckFail)}, CheckPass},
-		{[]Check{head("x", CheckPass), head("y", CheckSkipped)}, CheckPartial},                                             // nothing differs
-		{[]Check{head("x", CheckSkipped)}, CheckPartial},                                                                   // nothing was reached
-		{[]Check{base("x", CheckFail)}, CheckPartial},                                                                      // a base-only check never decides
-		{[]Check{head("x", CheckPass), base("x", CheckSkipped)}, CheckPartial},                                             // the base could not be reached either
-		{[]Check{head("x", CheckPartial), base("x", CheckPartial), head("y", CheckPass), base("y", CheckFail)}, CheckPass}, // x is pre-existing: it does not block
-		{[]Check{head("x", CheckFail), base("x", CheckFail), head("y", CheckPass), base("y", CheckFail)}, CheckPass},       // so is a head fail that fails on the base
-		{[]Check{head("x", CheckFail), base("x", CheckPass), head("y", CheckPass), base("y", CheckFail)}, CheckFail},       // a base pass makes it the PR's regression
-		{[]Check{head("x", CheckPartial), base("x", CheckSkipped)}, CheckPartial},                                          // the base was not reached: not pre-existing
-		{[]Check{head("x", CheckFail), base("x", CheckFail)}, CheckPartial},                                                // nothing else to carry a pass
+		{[]Check{head("x", CheckPass), head("y", CheckSkipped)}, CheckPartial},                                                    // nothing differs
+		{[]Check{head("x", CheckSkipped)}, CheckPartial},                                                                          // nothing was reached
+		{[]Check{base("x", CheckFail)}, CheckPartial},                                                                             // a base-only check never decides
+		{[]Check{head("x", CheckPass), base("x", CheckSkipped)}, CheckPartial},                                                    // the base could not be reached either
+		{[]Check{head("x", CheckPartial), base("x", CheckPartial), head("y", CheckPass), base("y", CheckFail)}, CheckPass},        // x is pre-existing: it does not block
+		{[]Check{head("x", CheckFail), base("x", CheckFail), head("y", CheckPass), base("y", CheckFail)}, CheckPass},              // so is a head fail that fails on the base
+		{[]Check{head("x", CheckFail), base("x", CheckPass), head("y", CheckPass), base("y", CheckFail)}, CheckFail},              // a base pass makes it the PR's regression
+		{[]Check{head("x", CheckPartial), base("x", CheckSkipped)}, CheckPartial},                                                 // the base was not reached: not pre-existing
+		{[]Check{head("x", CheckFail), base("x", CheckFail)}, CheckPartial},                                                       // nothing else to carry a pass
+		{[]Check{head("x", CheckPass), baseTest("x", CheckFail, failing)}, CheckPass},                                             // a base test that ran and failed is the difference
+		{[]Check{head("x", CheckPass), baseTest("x", CheckFail, unbuilt)}, CheckPartial},                                          // tests that do not compile on main are no difference
+		{[]Check{head("x", CheckPass), baseTest("x", CheckFail, passing)}, CheckPartial},                                          // nor is a base "fail" whose run exited 0
+		{[]Check{head("x", CheckPass), {ID: "bx", Name: "x", State: CheckFail, Leg: "base"}}, CheckPartial},                       // nor one with no receipt at all
+		{[]Check{head("x", CheckPass), baseTest("x", CheckFail, Receipt{Exit: nil})}, CheckPartial},                               // nor a test receipt from before exit codes
+		{[]Check{head("x", CheckFail), base("x", CheckSkipped), head("y", CheckPass), base("y", CheckFail)}, CheckFail},           // a head fail beside a base skip is not pre-existing
+		{[]Check{head("x", CheckFail), base("x", CheckPartial), head("y", CheckPass), base("y", CheckFail)}, CheckFail},           // nor beside a base partial
+		{[]Check{head("x", CheckFail), baseTest("x", CheckFail, unbuilt), head("y", CheckPass), base("y", CheckFail)}, CheckFail}, // nor beside a base fail that never ran
+		{[]Check{head("x", CheckFail), baseTest("x", CheckFail, failing), head("y", CheckPass), base("y", CheckFail)}, CheckPass}, // but a base test that ran and failed makes it so
+		{[]Check{head("x", CheckPass), base("x", CheckAbsent)}, CheckPass},                                                        // a feature main lacks is a difference in the PR's favour
+		{[]Check{head("x", CheckFail), base("x", CheckAbsent)}, CheckFail},                                                        // a head fail beside an absent main is the PR's own
+		{[]Check{head("x", CheckFail), base("x", CheckAbsent), head("y", CheckPass), base("y", CheckFail)}, CheckFail},            // it is never pre-existing, whatever else passes
+		{[]Check{head("x", CheckPartial), base("x", CheckAbsent)}, CheckPartial},                                                  // a head partial still counts against the PR
+		{[]Check{head("x", CheckPartial), base("x", CheckAbsent), head("y", CheckPass), base("y", CheckFail)}, CheckPartial},      // and is not pre-existing
+		{[]Check{head("x", CheckAbsent), base("x", CheckAbsent)}, CheckPartial},                                                   // nothing to compare
+		{[]Check{head("x", CheckAbsent)}, CheckPartial},                                                                           // a head absent alone is a skip
+		{[]Check{head("x", CheckAbsent), head("y", CheckPass), base("y", CheckFail)}, CheckPass},                                  // left out like a skip
+		{[]Check{head("x", CheckAbsent), base("x", CheckPass), head("y", CheckPass), base("y", CheckAbsent)}, CheckPass},          // a head absent beside a base pass decides nothing
+		{[]Check{head("x", CheckPass), base("x", CheckAbsent), head("y", CheckPass)}, CheckPass},                                  // y was never compared; the difference on x carries it
+		{[]Check{base("x", CheckAbsent)}, CheckPartial},                                                                           // a base-only check never decides
 	} {
 		if got, _ := derive(c.checks); got != c.want {
 			t.Errorf("case %d: %s, want %s", i, got, c.want)
@@ -99,7 +137,10 @@ func TestDeriveOverall(t *testing.T) {
 		{[]Check{head("x", CheckSkipped), head("y", CheckSkipped)}, "no head check could be reached"},
 		{[]Check{base("x", CheckFail)}, "no head check could be reached"},
 		{[]Check{head("x", CheckPass), head("y", CheckSkipped)}, "no check passed on the head while failing on the base"},
-		{[]Check{head("x", CheckFail), base("x", CheckPartial)}, "did not pass also did not pass on the base"},
+		{[]Check{head("x", CheckFail), base("x", CheckFail)}, "did not pass also did not pass on the base"},
+		{[]Check{head("x", CheckPartial), base("x", CheckPartial)}, "was partial on the base too"},
+		{[]Check{head("x", CheckAbsent), base("x", CheckAbsent)}, "no head check could be reached"},
+		{[]Check{head("x", CheckPass), base("x", CheckPass), head("y", CheckAbsent)}, "no check passed on the head while failing on the base"},
 	} {
 		if _, reasons := derive(c.checks); !slices.ContainsFunc(reasons, func(r string) bool { return strings.Contains(r, c.want) }) {
 			t.Errorf("reason case %d: %q lacks %q", i, reasons, c.want)
@@ -470,22 +511,24 @@ func TestSlideshowFallbackIsPerLeg(t *testing.T) {
 }
 
 func TestNotesAndReasonsMustBeWrittenForThePRAuthor(t *testing.T) {
-	const msg = "write this for the PR author: say 'the PR build' and 'main', name what you saw, no check ids, two sentences at most"
 	svc, _ := newSvc(t)
 	is(t, "")(svc.Intake(ctx, "s1", prURL))
 	is(t, "")(svc.CheckAdd(ctx, "s1", "reach the menu", "opens", ""))
 	is(t, "")(svc.CheckStart(ctx, "s1", "c1"))
-	for name, text := range map[string]string{
-		"check id": "c2 needs history buttons", "upper-case check id": "Needs C12 first", "head": "Head shows both", "base": "the base has none", "leg": "the second leg was empty",
-		"snapshot": "the snapshot lacks it", "ref": "ref @e3 went stale", "receipt": "receipt 4 shows it", "too long": strings.Repeat("a", 241),
+	for name, c := range map[string]struct{ text, tripped string }{ // the refusal names what tripped
+		"check id": {"c2 needs history buttons", "the word 'c2'"}, "upper-case check id": {"Needs C12 first", "the word 'C12'"}, "head": {"Head shows both", "the word 'Head'"},
+		"base": {"the base has none", "the word 'base'"}, "leg": {"the second leg was empty", "the word 'leg'"}, "snapshot": {"the snapshot lacks it", "the word 'snapshot'"},
+		"ref": {"ref @e3 went stale", "the word 'ref'"}, "receipt": {"receipt 4 shows it", "the word 'receipt'"}, "too long": {strings.Repeat("a", 241), "241 of 240 characters"},
+		"both": {"snapshot " + strings.Repeat("a", 240), "249 of 240 characters and the word 'snapshot'"},
 	} {
+		text := c.text
 		for verb, call := range map[string]func() error{
 			"check add": func() error { _, err := svc.CheckAdd(ctx, "s1", "x", text, ""); return err },
 			"check end": func() error { _, err := svc.CheckEnd(ctx, "s1", "c1", CheckSkipped, text); return err },
 			"submit":    func() error { _, err := svc.Submit(ctx, "s1", "", text); return err },
 		} {
 			var e *apierr.Error
-			if err := call(); !errors.As(err, &e) || e.Code != "TESTING_NOTE_FOR_AUTHOR" || e.Kind != apierr.KindInvalid || e.Message != msg {
+			if err := call(); !errors.As(err, &e) || e.Code != "TESTING_NOTE_FOR_AUTHOR" || e.Kind != apierr.KindInvalid || !strings.Contains(e.Message, "refused: "+c.tripped+".") || strings.Contains(e.Message, "the PR build") {
 				t.Errorf("%s with %s: err = %v", verb, name, err)
 			}
 		}
@@ -712,8 +755,8 @@ func TestSubmitRefusesAnUnlaunchedBaseUnlessSkipped(t *testing.T) {
 	}{
 		{"prepared base, time left", "TESTING_BASE_NOT_RUN", "", prepared, 10 * time.Minute},
 		{"exactly the guard window left", "TESTING_BASE_NOT_RUN", "", prepared, baseGuardLeft},
-		{"skipped with a reason while time is left", "TESTING_BASE_NOT_RUN", "a comparison would not change the verdict", prepared, 10 * time.Minute},
-		{"skipped with a reason, base running", "TESTING_BASE_NOT_RUN", "main is slow", []Leg{head, {Name: "base", State: "running"}}, 10 * time.Minute},
+		{"skipped with a reason while time is left", "", "a comparison would not change the verdict", prepared, 10 * time.Minute},
+		{"skipped with a reason, base running", "", "main is slow", []Leg{head, {Name: "base", State: "running"}}, 10 * time.Minute},
 		{"skipped with a reason, under the guard window", "", "the main build\nis broken", prepared, baseGuardLeft - time.Second},
 		{"skipped with a reason, base failed to launch", "", "the main build\nis broken", []Leg{head, {Name: "base", State: "failed"}}, 10 * time.Minute},
 		{"skipped without a reason", "TESTING_REASON_REQUIRED", "  ", prepared, 10 * time.Minute},
@@ -741,7 +784,8 @@ func TestSubmitRefusesAnUnlaunchedBaseUnlessSkipped(t *testing.T) {
 				t.Errorf("%s: message %q does not teach the way out", c.name, err)
 			}
 		case c.skip != "":
-			if !strings.Contains(string(md), "- base not run: the main build is broken") || !strings.Contains(string(md), "## Summary\n\nx\n") {
+			// submitSvc's c1 has a base result and c3 has none: main ran for one check, so the line says which was not
+			if want := "- base compared on 1 of 2 checks; not run there: c3: " + strings.Join(strings.Fields(c.skip), " "); !strings.Contains(string(md), want) || strings.Contains(string(md), "base not run:") || !strings.Contains(string(md), "## Summary\n\nx\n") {
 				t.Errorf("%s: verdict.md:\n%s", c.name, md)
 			}
 		case strings.Contains(string(md), "base not run:"):
@@ -809,7 +853,7 @@ func TestPreExistingHeadFailureIsLimitedNotBlocking(t *testing.T) {
 	long := strings.Repeat("n", 200)
 	checks := []Check{
 		{ID: "c1", Name: "x", State: CheckFail, Note: long, Receipts: []Receipt{{Leg: "head"}}},
-		{ID: "c2", Name: "X", State: CheckPartial, Leg: "base"},
+		{ID: "c2", Name: "X", State: CheckFail, Leg: "base", Receipts: []Receipt{{Leg: "base", Action: "click"}}},
 		{ID: "c3", Name: "y", State: CheckFail, Note: "regressed"},
 		{ID: "c4", Name: "y", State: CheckPass, Leg: "base"},
 	}
@@ -819,7 +863,104 @@ func TestPreExistingHeadFailureIsLimitedNotBlocking(t *testing.T) {
 	if got := checkLimit(checks, checks[2]); got != "" { // it passes on the base: the PR broke it
 		t.Errorf("a regression got the limit %q", got)
 	}
+	checks[1].State = CheckPartial // a base partial is not the same thing: the head fail may be the PR's
+	if got := checkLimit(checks, checks[0]); strings.Contains(got, "pre-existing") {
+		t.Errorf("a head fail beside a base partial got the limit %q", got)
+	}
 	if !strings.Contains(headlineRule, "pre-existing") {
 		t.Error("the result rule does not mention pre-existing checks")
+	}
+}
+
+// --skip-base is honoured at any time. Where main ran on some checks, each check without a main result gets a skipped
+// main side carrying the tester's reason; where main ran on none, the reason stays run-wide.
+func TestSubmitSkipBaseRecordsTheMainSideOfUnrepeatedChecks(t *testing.T) {
+	legs := []Leg{{Name: "head", State: "running"}, {Name: "base", State: "running"}}
+	rc := func(leg string) []Receipt { return []Receipt{{Seq: 9, Leg: leg, Action: "click", AfterPath: "x.png"}} }
+	a := Check{ID: "c1", Name: "a", State: CheckPass, Receipts: rc("head")}
+	aMain := Check{ID: "c2", Name: "a", State: CheckFail, Leg: "base", Receipts: rc("base")}
+	b := Check{ID: "c3", Name: "b", State: CheckPartial, Receipts: rc("head")}
+	for _, c := range []struct {
+		name         string
+		checks       []Check
+		wantChecks   int
+		wantLimit    string
+		wantTwinNote string
+	}{
+		{"main ran on one of two", []Check{a, aMain, b}, 4, "- base compared on 1 of 2 checks; not run there: c3: main took too long", "main took too long"},
+		{"main ran on none", []Check{a, b}, 2, "- base not run: main took too long", ""},
+	} {
+		svc, _, runDir, _ := submitSvc(t)
+		is(t, "")(nil, svc.store.SaveChecks("run_s1", c.checks))
+		_, err := svc.update("run_s1", func(r *Run) { r.Legs, r.Deadline = legs, svc.clock().Add(20*time.Minute) }) // far from the deadline
+		is(t, "")(nil, err)
+		is(t, "TESTING_BASE_INCOMPLETE")(svc.Submit(ctx, "s1", "x", "")) // without the flag the missing main result is still refused
+		v, err := svc.Submit(ctx, "s1", "x", "main took too long")
+		is(t, "")(nil, err)
+		if len(v.Checks) != c.wantChecks {
+			t.Fatalf("%s: %d checks, want %d: %+v", c.name, len(v.Checks), c.wantChecks, v.Checks)
+		}
+		if c.wantTwinNote != "" {
+			twin := v.Checks[len(v.Checks)-1]
+			if twin.Name != "b" || twin.Leg != "base" || twin.State != CheckSkipped || twin.Note != c.wantTwinNote || twin.ID != "c4" {
+				t.Errorf("%s: twin %+v", c.name, twin)
+			}
+		}
+		md, _ := os.ReadFile(filepath.Join(runDir, "verdict.md"))
+		if !strings.Contains(string(md), c.wantLimit) {
+			t.Errorf("%s: verdict.md lacks %q:\n%s", c.name, c.wantLimit, md)
+		}
+	}
+}
+
+// A head partial beside a base fail is not "pre-existing": the feature may exist on the PR build and not on main, so
+// neither the Limits line nor the comment says it happens on main too.
+func TestHeadPartialBesideBaseFailIsNeverPreExisting(t *testing.T) {
+	rc := func(leg string) []Receipt { return []Receipt{{Seq: 1, Leg: leg, Action: "click", AfterPath: "x.png"}} }
+	checks := []Check{
+		{ID: "c1", Name: "picker", Expect: "the picker lists agents", State: CheckPartial, Note: "the list shows, the Agent row does nothing", Receipts: rc("head")},
+		{ID: "c2", Name: "picker", Expect: "the picker lists agents", State: CheckFail, Leg: "base", Note: "there is no agent list", Receipts: rc("base")},
+	}
+	if preExisting(checks, checks[0]) {
+		t.Fatal("a head partial beside a base fail is pre-existing")
+	}
+	if got := checkLimit(checks, checks[0]); strings.Contains(got, "pre-existing") {
+		t.Errorf("limit %q", got)
+	}
+	overall, reasons := derive(checks)
+	if overall != CheckPartial || slices.Contains(reasons, reasonPrePartial) || slices.Contains(reasons, reasonPreOnly) || slices.Contains(reasons, reasonPreBoth) {
+		t.Errorf("derive = %s %q", overall, reasons)
+	}
+	got := renderComment(commentRun, commentVerdict(checks), evidence{}, commentRun.CreatedAt)
+	for _, banned := range []string{"happens on main", "on main too", "on main either", "did not cause it"} {
+		if strings.Contains(got, banned) {
+			t.Errorf("the comment says %q:\n%s", banned, got)
+		}
+	}
+}
+
+func TestAbsentIsNeverTheEqualState(t *testing.T) {
+	rc := func(leg string) []Receipt { return []Receipt{{Seq: 1, Leg: leg, Action: "click", AfterPath: "x.png"}} }
+	for _, st := range []CheckState{CheckFail, CheckPartial, CheckAbsent, CheckPass} {
+		checks := []Check{
+			{ID: "c1", Name: "picker", State: st, Note: "no row", Receipts: rc("head")},
+			{ID: "c2", Name: "picker", State: CheckAbsent, Leg: "base", Note: "no picker", Receipts: rc("base")},
+		}
+		if preExisting(checks, checks[0]) {
+			t.Errorf("a head %s beside an absent base is pre-existing", st)
+		}
+		if got := checkLimit(checks, checks[0]); strings.Contains(got, "pre-existing") {
+			t.Errorf("head %s: limit %q", st, got)
+		}
+	}
+	// An absent main is not a failure that ran: only the difference rule reads it.
+	if ranAndFailed(Check{State: CheckAbsent, Receipts: rc("base")}) {
+		t.Error("absent ran and failed")
+	}
+	if !failedOnBase([]Check{{Name: "x"}, {Name: "x", State: CheckAbsent, Leg: "base", Receipts: rc("base")}}, Check{Name: "x"}) {
+		t.Error("an absent base is no difference")
+	}
+	if !strings.Contains(headlineRule, "absent") {
+		t.Error("verdict.md does not state the absent rule")
 	}
 }

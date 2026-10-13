@@ -185,6 +185,23 @@ describe("LitmusView", () => {
 		expect(mocks.setSettings).toHaveBeenCalledWith({ askBeforePosting: false });
 	});
 
+	it("lists intake gaps in the drawer only when there are any", async () => {
+		mocks.runs = { isLoading: false, error: null, data: [run({ id: "run_1" })] };
+		const withGaps = { id: "run_1", sessionId: "s1", repo: "acme/widgets", prNumber: 12, state: "submitted", createdAt: "2026-10-12T10:00:00Z", deadline: "2026-10-12T10:15:00Z", gaps: ["I could not read the linked issue #123 (not found).", "No screenshots were attached."] };
+		mocks.detail = { data: detail({ run: withGaps }), isLoading: false, error: null };
+		const { unmount } = renderView();
+		await userEvent.click(screen.getByRole("button", { name: "Fix the widget" }));
+		const gaps = within(await screen.findByRole("dialog")).getByTestId("litmus-gaps");
+		expect(within(gaps).getByRole("heading", { name: "2 gaps" })).toBeInTheDocument();
+		expect(within(gaps).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["I could not read the linked issue #123 (not found).", "No screenshots were attached."]);
+		unmount();
+		mocks.detail = { data: detail(), isLoading: false, error: null };
+		renderView();
+		await userEvent.click(screen.getByRole("button", { name: "Fix the widget" }));
+		await screen.findByRole("dialog");
+		expect(screen.queryByTestId("litmus-gaps")).not.toBeInTheDocument();
+	});
+
 	it("opens the drawer with the rendered comment and checks", async () => {
 		mocks.runs = { isLoading: false, error: null, data: [run({ id: "run_1" })] };
 		mocks.detail = { data: detail(), isLoading: false, error: null };

@@ -5,11 +5,18 @@ package litmus
 
 import (
 	"cmp"
+	"fmt"
+	"slices"
+	"strings"
 	"time"
 )
 
-// RunBudget is how long a run may live, measured from intake.
+// RunBudget is how long the tester has once the builds are ready: the run's deadline moves to that long after prepare
+// finishes. Until then the deadline is that long after intake, which prepare (PrepareBudget at most) must fit inside.
 const RunBudget = 25 * time.Minute
+
+// PrepareBudget caps one prepare, both builds together. A prepare past it is stuck: the run closes as blocked.
+const PrepareBudget = 20 * time.Minute
 
 // A tester that has not run intake is reaped when its session has been exited or idle for IdleBudget, or SpawnBudget after it was spawned.
 const (
@@ -71,6 +78,11 @@ type Run struct {
 	RepoID     int64             `json:"repoId,omitempty"`
 	VideoState string            `json:"videoState,omitempty"` // attached | partial | off | failed:<reason>
 	VideoURLs  map[string]string `json:"videoUrls,omitempty"`  // by leg (head | base): the GitHub link of the uploaded video
+	// Gaps are what intake could not get, one plain sentence each (a linked issue it could not read, the PR's text when
+	// GitHub was down); the pack, verdict.md and the comment's Limits show them. A gap never changes the result.
+	Gaps []string `json:"gaps,omitempty"`
+	// Ready names the builds (head, base) that were finished when prepare ran out of time, so the comment can say which.
+	Ready []string `json:"ready,omitempty"`
 }
 
 // IssueRef is an issue the PR says it closes.
@@ -109,7 +121,7 @@ type Leg struct {
 	RecordFPS       string    `json:"recordFps,omitempty"`    // the capture rate asked of `record start --fps`
 }
 
-// CheckState is a check's progress; pass, fail, partial and skipped are its outcomes.
+// CheckState is a check's progress; pass, fail, partial, absent and skipped are its outcomes.
 type CheckState string
 
 // Check states.
@@ -119,6 +131,9 @@ const (
 	CheckPass    CheckState = "pass"
 	CheckFail    CheckState = "fail"
 	CheckPartial CheckState = "partial"
+	// CheckAbsent is "this build does not have the feature at all": it needs a screenshot of where the feature would be,
+	// and a fail is the feature being there and broken. On the head it counts as skipped.
+	CheckAbsent CheckState = "absent"
 	// CheckSkipped is the tester's "could not reach": the check needs no receipt and stays out of the headline.
 	CheckSkipped CheckState = "skipped"
 	// CheckBlocked is only ever a verdict's overall: the tester could not run the checks.
@@ -137,8 +152,19 @@ type Check struct {
 	Receipts []Receipt  `json:"receipts,omitempty"`
 }
 
+// unreached is a check that shows nothing about its build: skipped, or absent on the head (the PR build is where the
+// feature is meant to be, so there is nothing to compare).
+func (c Check) unreached() bool {
+	return c.State == CheckSkipped || (c.State == CheckAbsent && c.onLeg() == "head")
+}
+
 // onLeg is the leg the check observes; checks declared without one observe the head.
 func (c Check) onLeg() string { return cmp.Or(c.Leg, "head") }
+
+// legReceipts are the check's receipts from the build it observes.
+func (c Check) legReceipts() []Receipt {
+	return slices.DeleteFunc(slices.Clone(c.Receipts), func(r Receipt) bool { return r.onLeg() != c.onLeg() })
+}
 
 // Receipt is the evidence for one state-changing action.
 type Receipt struct {
@@ -155,10 +181,63 @@ type Receipt struct {
 	// TargetRole and TargetName are what the tester's last snapshot called the element it acted on, for plain captions.
 	TargetRole string `json:"targetRole,omitempty"`
 	TargetName string `json:"targetName,omitempty"`
+	// Exit, NotBuilt, Ran and Failing are test only: the command's exit code, whether the PR's test files did not compile,
+	// how many tests the runner counted (nil: the runner prints no counts, 0: it counted none) and whether the output names
+	// a failing test. A receipt from before them has no Exit and is unjudged.
+	Exit     *int `json:"exit,omitempty"`
+	NotBuilt bool `json:"notBuilt,omitempty"`
+	Ran      *int `json:"ran,omitempty"`
+	Failing  bool `json:"failing,omitempty"`
+}
+
+// preparedAt is when the builds were ready: prepare gives the tester RunBudget from then, so the deadline says when. A run
+// that never prepared has no build time, and its testing time starts at intake.
+func (r Run) preparedAt() time.Time {
+	if p := r.Deadline.Add(-RunBudget); p.After(r.CreatedAt) {
+		return p
+	}
+	return r.CreatedAt
+}
+
+// prepared reports whether prepare finished: only then does the run have a deadline, so a testing time to split out.
+func (r Run) prepared() bool { return !r.Deadline.IsZero() }
+
+// buildsAndTesting is how long the builds took and how long the tester had them, from intake to the end at now.
+func (r Run) buildsAndTesting(now time.Time) (builds, testing time.Duration) {
+	p := r.preparedAt()
+	return max(p.Sub(r.CreatedAt), 0), max(now.Sub(p), 0)
 }
 
 // baseName is what a reader calls the base build: the PR's base branch, main when the run did not record it.
 func (r Run) baseName() string { return mdText(cmp.Or(r.BaseRef, "main"), 60) }
+
+// atBranchPoint is the words that say the base build is the base branch where the PR branched, not its tip: the run
+// carries the fork-point gap. "" otherwise.
+func (r Run) atBranchPoint() string {
+	if slices.ContainsFunc(r.Gaps, func(g string) bool { return strings.HasPrefix(g, forkGapPrefix) }) {
+		return " at the PR's branch point"
+	}
+	return ""
+}
+
+// noWords reports whether the run never read the PR's text: its ids came from git alone (see gapNoWords). Such a
+// verdict waits for approval instead of posting by itself.
+func (r Run) noWords() bool {
+	return slices.ContainsFunc(r.Gaps, func(g string) bool { return strings.HasPrefix(g, gapNoWords) })
+}
+
+// builtLine says what had been built when a run closed before any leg started: after a prepare timeout, which build was
+// ready.
+func (r Run) builtLine() string {
+	head, base := slices.Contains(r.Ready, "head"), slices.Contains(r.Ready, "base")
+	switch {
+	case head && !base:
+		return fmt.Sprintf("The PR build was ready; %s was not. Nothing was checked.", r.baseName())
+	case base && !head:
+		return fmt.Sprintf("%s was ready; the PR build was not. Nothing was checked.", recase(r.baseName(), true))
+	}
+	return "Nothing was built or checked."
+}
 
 // sideName is how prose names a leg: "the PR build" for the head, the base branch for the base.
 func (r Run) sideName(leg string) string {
@@ -169,6 +248,28 @@ func (r Run) sideName(leg string) string {
 }
 
 func (r Receipt) onLeg() string { return cmp.Or(r.Leg, "head") }
+
+// failedTest is a test run that compiled and exited non-zero: a test ran and failed, as far as the exit code says.
+func (r Receipt) failedTest() bool {
+	return r.Action == "test" && r.Exit != nil && *r.Exit != 0 && !r.NotBuilt
+}
+
+// ranAndFailed is a failedTest that shows a test ran: not a timeout or a missing command (exit 127), and the runner
+// counted at least one test or, when it prints no counts, the output names a failing one.
+func (r Receipt) ranAndFailed() bool {
+	if !r.failedTest() || *r.Exit < 0 || *r.Exit == 127 {
+		return false
+	}
+	if r.Ran != nil {
+		return *r.Ran > 0
+	}
+	return r.Failing
+}
+
+// passedTest is a test run that compiled, exited 0 and did not count zero tests (a runner with no counts is judged by its exit code).
+func (r Receipt) passedTest() bool {
+	return r.Action == "test" && r.Exit != nil && *r.Exit == 0 && !r.NotBuilt && (r.Ran == nil || *r.Ran > 0)
+}
 
 // Verdict is the submitted result: per-check outcomes with their receipts.
 type Verdict struct {
@@ -198,3 +299,6 @@ type InFlight struct {
 	Verb    string  `json:"verb"`
 	Seconds float64 `json:"seconds"`
 }
+
+// browserDataRule is the one line the tester skill and the pack's last section both carry.
+const browserDataRule = "Never import, export, sign in to or read the owner's real browser profiles, cookies, passwords, keychain or accounts; check such a feature only with data created in the test window, or end it as `skipped` with that reason."

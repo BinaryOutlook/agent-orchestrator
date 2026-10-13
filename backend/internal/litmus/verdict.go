@@ -1,6 +1,7 @@
 package litmus
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,14 +49,33 @@ func baseResult(checks []Check, c Check) string {
 	return ""
 }
 
+// ranAndFailed reports whether a base check shows main failing: it failed, backed by a screenshot or by a test that ran
+// and exited non-zero. A fail that rests only on test files that did not compile, on runs that exited 0, on a timeout or a
+// missing command (exit 127), or on a run that counted no tests, shows nothing.
+func ranAndFailed(b Check) bool {
+	return b.State == CheckFail && slices.ContainsFunc(b.legReceipts(), func(r Receipt) bool { return r.Action != "test" || r.ranAndFailed() })
+}
+
+// failedOnBase reports whether the head check's base twin shows main without the behavior: it ran and failed, or the
+// feature is not there at all (absent).
+func failedOnBase(checks []Check, c Check) bool {
+	i := baseTwin(checks, c)
+	return i >= 0 && (ranAndFailed(checks[i]) || checks[i].State == CheckAbsent)
+}
+
 // preExisting reports whether a head check that failed or was partial did the same on the base: the PR did not cause it.
+// Only the same state counts: a head fail beside a base partial, skip or absent may be the PR's. Absent never counts as
+// the equal state: a feature main does not have cannot have failed there first.
 func preExisting(checks []Check, c Check) bool {
-	b := baseResult(checks, c)
-	return c.onLeg() == "head" && (c.State == CheckFail || c.State == CheckPartial) && (b == string(CheckFail) || b == string(CheckPartial))
+	i := baseTwin(checks, c)
+	if c.onLeg() != "head" || i < 0 || checks[i].State != c.State {
+		return false
+	}
+	return c.State == CheckPartial || (c.State == CheckFail && ranAndFailed(checks[i])) // absent matches neither
 }
 
 // headlineRule is the rule derive applies, as verdict.md states it (the result is the overall verdict).
-const headlineRule = "The result is fail if any head check failed. It is pass if every head check passed and at least one passed on the head while failing on the base, which shows the difference. Otherwise it is partial. Checks the tester could not reach are left out, base-only checks are context, and a head check that failed or was partial the same way on the base is pre-existing and left out."
+const headlineRule = "The result is fail if any head check failed. It is pass if every head check passed and at least one passed on the head while failing on the base or while the base did not have the feature at all (absent), which shows the difference. A base failure counts only when a test ran and failed or it was seen on screen; tests that did not compile, or that exited 0, show nothing. A head failure or partial beside an absent base is the PR's own, never pre-existing. Otherwise it is partial. Checks the tester could not reach are left out, base-only checks are context, and a head check that failed or was partial the same way on the base is pre-existing and left out."
 
 // The reasons derive gives for a partial with nothing worse; the comment says them in its own words.
 const (
@@ -70,7 +91,7 @@ const (
 func derive(checks []Check) (overall CheckState, reasons []string) {
 	failed, allPass, differs, reached, preFail, prePartial := false, true, false, false, false, false
 	for _, c := range checks {
-		if c.onLeg() != "head" || c.State == CheckSkipped {
+		if c.onLeg() != "head" || c.unreached() {
 			continue
 		}
 		if preExisting(checks, c) {
@@ -82,7 +103,7 @@ func derive(checks []Check) (overall CheckState, reasons []string) {
 		}
 		reached = true
 		failed, allPass = failed || c.State == CheckFail, allPass && c.State == CheckPass
-		differs = differs || (c.State == CheckPass && baseResult(checks, c) == string(CheckFail))
+		differs = differs || (c.State == CheckPass && failedOnBase(checks, c))
 	}
 	switch {
 	case failed:
@@ -108,7 +129,8 @@ func derive(checks []Check) (overall CheckState, reasons []string) {
 // otherwise nothing is written and the offenders are listed.
 //
 // A prepared base that was never launched refuses the submit (TESTING_BASE_NOT_RUN) while at least baseGuardLeft of the
-// deadline remains, unless skipBase carries the reason the tester gave for not running it ("" means no skip).
+// deadline remains, unless skipBase carries the reason the tester gave for not running it ("" means no skip). A skip is
+// honoured at any time; the head checks that have no result on the base then get a skipped base twin with that reason.
 func (s *Service) Submit(ctx context.Context, sessionID, summary, skipBase string) (Verdict, error) {
 	skip := strings.Join(strings.Fields(skipBase), " ")
 	if skipBase != "" && skip == "" {
@@ -141,29 +163,67 @@ func (s *Service) Submit(ctx context.Context, sessionID, summary, skipBase strin
 	if skip == "" && s.baseFailed(run) {
 		return Verdict{}, conflict("TESTING_BASE_NOT_RUN", run.baseName()+" was prepared but failed to launch, so there are no base results; submit with `--skip-base --reason \"<say that "+run.baseName()+" failed to launch and why>\"`")
 	}
-	if (skip == "" && s.baseNeverLaunched(run, checks)) || (skip != "" && !s.maySkipBase(run)) {
+	if skip == "" && s.baseNeverLaunched(run, checks) {
 		how := "run " + run.baseName() + " (`ao testing launch base`), repeat every check there"
 		if testsOnly(checks) { // nothing on screen to repeat: the tests are enough
 			how = "run the same tests on " + run.baseName() + " (`ao testing test --leg base`)"
 		}
-		return Verdict{}, conflict("TESTING_BASE_NOT_RUN", how+" and record a result for each: pass, fail, partial, or skipped with a note saying why. --skip-base is only for a main that will not build or launch, or when under 4 minutes remain")
+		return Verdict{}, conflict("TESTING_BASE_NOT_RUN", how+" and record a result for each: pass, fail, partial, or skipped with a note saying why; or submit with `--skip-base --reason \"<why main was not run>\"`")
 	}
 	if skip == "" {
 		if ids := s.notComparedOnBase(run, checks); len(ids) > 0 {
 			return Verdict{}, conflict("TESTING_BASE_INCOMPLETE", baseMissing(run, ids))
 		}
 	}
-	return s.closeRun(ctx, run, checks, summary, "", skip)
+	return s.closeRun(ctx, run, skipOnBase(checks, skip), summary, "", skip)
+}
+
+// checkIDs lists the ids of the checks, "c11, c12".
+func checkIDs(checks []Check) string {
+	ids := make([]string, len(checks))
+	for i, c := range checks {
+		ids[i] = c.ID
+	}
+	return strings.Join(ids, ", ")
 }
 
 // baseGuardLeft is how much of the deadline must remain for an unlaunched base to refuse a submit.
 const baseGuardLeft = 4 * time.Minute
 
-// maySkipBase is true when --skip-base is honoured: Litmus saw the base fail to launch (or never got to prepare it), or
-// less than baseGuardLeft of the deadline remains. A tester's own view that a comparison would not matter is not a reason.
-func (s *Service) maySkipBase(run Run) bool {
-	i := slices.IndexFunc(run.Legs, func(l Leg) bool { return l.Name == "base" })
-	return i < 0 || run.Legs[i].State == "failed" || run.Deadline.Sub(s.clock()) < baseGuardLeft
+// baseCoverage splits the head checks the tester reached by whether they have a result on the base: a base twin that
+// was skipped, or no base look at all, is none.
+func baseCoverage(checks []Check) (compared, notRun []Check) {
+	for _, c := range checks {
+		if c.onLeg() != "head" || c.unreached() {
+			continue
+		}
+		if b := baseResult(checks, c); b == "" || b == string(CheckSkipped) {
+			notRun = append(notRun, c)
+		} else {
+			compared = append(compared, c)
+		}
+	}
+	return compared, notRun
+}
+
+// skipOnBase records the main side of every head check that has no base result as skipped, with the reason the tester
+// gave for --skip-base, so each row says it was not run there. A run with no result on the base at all keeps its
+// run-wide reason instead: there is no comparison to qualify.
+func skipOnBase(checks []Check, why string) []Check {
+	if why == "" {
+		return checks
+	}
+	compared, notRun := baseCoverage(checks)
+	if len(compared) == 0 {
+		return checks
+	}
+	out := slices.Clone(checks)
+	for _, c := range notRun {
+		if baseResult(checks, c) == "" {
+			out = append(out, Check{ID: "c" + strconv.Itoa(len(out)+1), Name: c.Name, Expect: c.Expect, State: CheckSkipped, Leg: "base", Note: why})
+		}
+	}
+	return out
 }
 
 // baseNeverLaunched is true for a run whose base leg was prepared but not launched and that still has time to launch it.
@@ -200,7 +260,7 @@ func baseMissing(run Run, ids []string) string {
 	if len(ids) > 1 {
 		who = "checks " + strings.Join(ids, ", ") + " have"
 	}
-	return who + " no result on " + main + "; repeat it there or record it with --result skipped and a note saying why"
+	return who + " no result on " + main + "; repeat it there or record it with --result skipped and a note saying why, or submit with `--skip-base --reason \"<why>\"`"
 }
 
 // notComparedOnBase lists the head checks the tester could reach that have no base result of any kind (a base check
@@ -214,7 +274,7 @@ func (s *Service) notComparedOnBase(run Run, checks []Check) (ids []string) {
 		return nil
 	}
 	for _, c := range checks {
-		if c.onLeg() == "head" && c.State != CheckSkipped && (baseResult(checks, c) == "" || baseSkippedWithoutNote(checks, c)) {
+		if c.onLeg() == "head" && !c.unreached() && (baseResult(checks, c) == "" || baseSkippedWithoutNote(checks, c)) {
 			ids = append(ids, c.ID)
 		}
 	}
@@ -261,7 +321,12 @@ func (s *Service) closeRun(ctx context.Context, run Run, checks []Check, summary
 	}
 
 	if skipBase != "" {
-		limits = append(limits, "base not run: "+clip(cell(skipBase), 300))
+		switch compared, notRun := baseCoverage(checks); {
+		case len(compared) == 0:
+			limits = append(limits, "base not run: "+clip(cell(skipBase), 300))
+		case len(notRun) > 0:
+			limits = append(limits, fmt.Sprintf("base compared on %d of %d checks; not run there: %s: %s", len(compared), len(compared)+len(notRun), checkIDs(notRun), clip(cell(skipBase), 300)))
+		}
 	}
 	claims := claimsChange(runDir)
 	v := Verdict{Checks: checks, Summary: strings.TrimSpace(summary), SkipBase: skipBase}
@@ -369,7 +434,7 @@ func compareCells(checks []Check, c Check) (head, base string, beside bool) {
 	case base == string(CheckSkipped):
 		base = "not compared on base"
 	case base != "":
-	case c.State == CheckSkipped:
+	case c.unreached():
 		base = "-"
 	default:
 		base = "not compared on base"
@@ -380,7 +445,7 @@ func compareCells(checks []Check, c Check) (head, base string, beside bool) {
 // checkLimit is the Limits line a check earns, or "": the tester could not reach it, or the base never showed it.
 func checkLimit(checks []Check, c Check) string {
 	switch {
-	case c.State == CheckSkipped:
+	case c.unreached():
 		return fmt.Sprintf("%s %s (%s leg): could not reach. %s", c.ID, c.Name, c.onLeg(), cell(c.Note))
 	case preExisting(checks, c):
 		return fmt.Sprintf("%s %s: pre-existing, same on base: %s", c.ID, c.Name, clip(cell(c.Note), 120))
@@ -393,8 +458,13 @@ func checkLimit(checks []Check, c Check) string {
 func renderVerdict(run Run, v Verdict, claims bool, videos []legVideo, runDir string, now time.Time, limits []string) string {
 	var b strings.Builder
 	p := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
-	p("# Verdict: %s\n\n%s#%d, run %s, base %s, head %s\n", v.Overall, run.Repo, run.PRNumber, run.ID, run.BaseSHA, run.HeadSHA)
-	p("Duration %s of a %s budget. Tokens: not measured by Litmus, see the session's usage. Video: %s.\n", now.Sub(run.CreatedAt).Round(time.Second), RunBudget, videoLine(videos))
+	p("# Verdict: %s\n\n%s#%d, run %s, base %s, head %s\n", v.Overall, run.Repo, run.PRNumber, run.ID, cmp.Or(run.BaseSHA, "none"), cmp.Or(run.HeadSHA, "none"))
+	duration := now.Sub(run.CreatedAt).Round(time.Second).String() + ", never prepared"
+	if run.prepared() {
+		builds, testing := run.buildsAndTesting(now)
+		duration = fmt.Sprintf("builds %s, testing %s of a %s budget", builds.Round(time.Second), testing.Round(time.Second), RunBudget)
+	}
+	p("Duration: %s. Tokens: not measured by Litmus, see the session's usage. Video: %s.\n", duration, videoLine(videos))
 	if v.Overall == CheckBlocked {
 		p("## Blocked\n\n%s\n", strings.Join(v.Reasons, "\n"))
 		if run.Error != "" {
@@ -403,6 +473,13 @@ func renderVerdict(run Run, v Verdict, claims bool, videos []legVideo, runDir st
 	}
 	if v.Summary != "" {
 		p("## Summary\n\n%s\n", v.Summary)
+	}
+	if len(run.Gaps) > 0 {
+		p("## Gaps\n\nWhat intake could not get; none of it changes the result.\n")
+		for _, g := range run.Gaps {
+			p("- %s", g)
+		}
+		p("")
 	}
 	p("## Checks\n\n| check | expect | head result | base result | receipts |\n|---|---|---|---|---|")
 	for _, c := range v.Checks {

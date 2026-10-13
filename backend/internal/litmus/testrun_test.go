@@ -90,7 +90,7 @@ func TestTestVerbRunsInTheCheckoutAndRecordsAReceipt(t *testing.T) {
 			t.Fatal(err)
 		}
 		res, err := svc.Test(ctx, "s1", leg, "", []string{"go", "test", "./pkg/", "-count=1"}, "")
-		if err != nil || res.Exit != 0 || res.TimedOut || res.Summary != "1 ok, 0 FAIL, 0 --- FAIL" || !strings.Contains(res.Output, "ok  \tfixture/pkg") {
+		if err != nil || res.Exit != 0 || res.TimedOut || res.Summary != "1 ok, 0 FAIL, 0 --- FAIL" || res.Ran == nil || *res.Ran != 1 || res.NotBuilt || !strings.Contains(res.Output, "ok  \tfixture/pkg") {
 			t.Fatalf("%s: %+v err %v", leg, res, err)
 		}
 		full, err := os.ReadFile(res.Receipt)
@@ -100,6 +100,8 @@ func TestTestVerbRunsInTheCheckoutAndRecordsAReceipt(t *testing.T) {
 		// A .txt receipt satisfies the check verb.
 		if got, err := svc.CheckEnd(ctx, "s1", c.ID, CheckPass, "all green"); err != nil || got.Receipts[0].OutputPath != res.Receipt || got.Receipts[0].AfterPath != "" {
 			t.Fatalf("check end: %+v err %v", got, err)
+		} else if r := got.Receipts[0]; r.Exit == nil || *r.Exit != 0 || r.Ran == nil || *r.Ran != 1 || r.NotBuilt {
+			t.Fatalf("the receipt does not say the run exited 0 and counted one test: %+v", r)
 		}
 	}
 	data, err := os.ReadFile(filepath.Join(runDir, "actions.jsonl"))
@@ -107,15 +109,16 @@ func TestTestVerbRunsInTheCheckoutAndRecordsAReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	var rec struct {
-		Seq    int
-		Leg    string
-		Action string
-		Args   []string
-		Exit   *int
-		After  string
+		Seq     int
+		Leg     string
+		Action  string
+		Args    []string
+		Exit    *int
+		After   string
+		NoTests bool
 	}
 	line, _, _ := strings.Cut(string(data), "\n")
-	if err := json.Unmarshal([]byte(line), &rec); err != nil || rec.Seq != 1 || rec.Leg != "head" || rec.Action != "test" || rec.Exit == nil || *rec.Exit != 0 || rec.After != "" || rec.Args[0] != "go" {
+	if err := json.Unmarshal([]byte(line), &rec); err != nil || rec.Seq != 1 || rec.Leg != "head" || rec.Action != "test" || rec.Exit == nil || *rec.Exit != 0 || rec.After != "" || rec.Args[0] != "go" || rec.NoTests {
 		t.Fatalf("actions.jsonl %q: %+v err %v", line, rec, err)
 	}
 	// ... and the submit guard.
@@ -219,7 +222,7 @@ import "testing"
 func TestBad(t *testing.T) { t.Fatal("boom") }
 `)
 	res, err := svc.Test(ctx, "s1", "head", "", []string{"go", "test", "./pkg/", "-count=1"}, "")
-	if err != nil || res.Exit != 1 || res.Summary != "0 ok, 1 FAIL, 1 --- FAIL" || !strings.Contains(res.Output, "boom") {
+	if err != nil || res.Exit != 1 || res.Summary != "0 ok, 1 FAIL, 1 --- FAIL" || res.Ran == nil || *res.Ran != 1 || res.NotBuilt || !strings.Contains(res.Output, "boom") {
 		t.Fatalf("%+v err %v", res, err)
 	}
 }
@@ -324,6 +327,88 @@ func TestTestVerbIsLimitedPerLeg(t *testing.T) {
 	}
 }
 
+func TestTestVerbDoesNotCountRunsThatRanNothing(t *testing.T) {
+	svc, runDir := testLeg(t, "package pkg\n") // a test file with no tests: go test exits 0 with "[no tests to run]"
+	res, err := svc.Test(ctx, "s1", "head", "", []string{"go", "test", "./pkg/", "-count=1"}, "")
+	if err != nil || res.Exit != 0 || res.Ran == nil || *res.Ran != 0 || res.Summary != "1 ok, 0 FAIL, 0 --- FAIL" {
+		t.Fatalf("%+v err %v", res, err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(runDir, "actions.jsonl")); !strings.Contains(string(data), `"noTests":true`) {
+		t.Fatalf("a zero-test run is not marked, so it would count toward the cap:\n%s", data)
+	}
+	// Records of runs that ran nothing do not fill the cap; counted ones do.
+	seed := func(counted, empty int) {
+		var lines string
+		for i := 1; i <= counted+empty; i++ {
+			lines += `{"seq":` + strconv.Itoa(i) + `,"leg":"head","action":"test"` + map[bool]string{true: `,"noTests":true`}[i > counted] + "}\n"
+		}
+		if err := os.WriteFile(filepath.Join(runDir, "actions.jsonl"), []byte(lines), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed(maxTests-1, 4)
+	is(t, "")(svc.Test(ctx, "s1", "head", "", []string{"go", "test", "./pkg/", "-count=1"}, ""))
+	seed(maxTests, 4)
+	is(t, "TESTING_TEST_LIMIT")(svc.Test(ctx, "s1", "head", "", []string{"go", "test", "./pkg/", "-count=1"}, ""))
+}
+
+func TestTestsRan(t *testing.T) {
+	goTest, vet := []string{"go", "test", "./..."}, []string{"go", "vet", "./..."}
+	for _, c := range []struct {
+		name string
+		argv []string
+		out  string
+		want int // -1: the runner prints no counts (nil)
+	}{
+		{"go packages that ran", goTest, "ok  \tfixture/a\t0.1s\nok  \tfixture/b\t(cached)\n?   \tfixture/c\t[no test files]\n", 2},
+		{"go package with no tests to run", goTest, "ok  \tfixture/pkg\t0.001s [no tests to run]\n", 0},
+		{"go package that did not build", goTest, "FAIL\tfixture/pkg [build failed]\n", 0},
+		{"go package that did not set up", goTest, "FAIL\tfixture/pkg [setup failed]\n", 0},
+		{"go package that failed a test", goTest, "--- FAIL: TestBad (0.00s)\nFAIL\nFAIL\tfixture/pkg\t0.1s\n", 1},
+		{"go vet prints no counts", vet, "ok  \tfixture/pkg\n", -1},
+		{"vitest", []string{"npx", "vitest", "run"}, " Test Files  1 failed | 2 passed (3)\n      Tests  1 failed | 13 passed (14)\n", 14},
+		{"jest", []string{"npx", "jest"}, "Tests:       1 failed, 13 passed, 14 total\n", 14},
+		{"npm without the script", []string{"npm", "test"}, "npm error Missing script: \"test\"\n", -1},
+		{"npm script that prints a Tests line", []string{"npm", "test"}, "Tests:       2 passed, 2 total\n", 2},
+		{"npx vitest that loaded no suite", []string{"npx", "vitest", "run"}, " Test Files  1 failed (1)\n      Tests  no tests\n", 0},
+	} {
+		got := -1
+		if n := testsRan(c.argv, c.out); n != nil {
+			got = *n
+		}
+		if got != c.want {
+			t.Errorf("%s: testsRan = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+func TestFailingTestAndJSCompileErrors(t *testing.T) {
+	for out, want := range map[string]bool{
+		"--- FAIL: TestBad (0.00s)\n":         true,
+		"not ok 3 - adds\n":                   true,
+		"  2 failing\n":                       true,
+		" \u2717 adds two numbers\n":          true,
+		"FAIL  src/a.test.ts\n":               false, // a suite that did not load names no test
+		"      Tests  1 failed | 13 passed\n": false, // the counted runners are judged by their count
+		"# pkg\nfoo.go:3:2: undefined: x\n":   false,
+	} {
+		if got := failingTest.MatchString(out); got != want {
+			t.Errorf("failingTest(%q) = %v, want %v", out, got, want)
+		}
+	}
+	for out, want := range map[string]bool{
+		"Error: Failed to resolve import \"./gone\" from \"src/a.test.ts\"": true,
+		"Error: Cannot find module './gone'":                                true,
+		"SyntaxError: Unexpected token":                                     true,
+		"src/a.test.ts(3,1): error TS2304: Cannot find name 'x'":            true,
+		"AssertionError: expected 1 to be 2":                                false,
+	} {
+		if got := jsCompileErr.MatchString(out); got != want {
+			t.Errorf("jsCompileErr(%q) = %v, want %v", out, got, want)
+		}
+	}
+}
+
 // TestTestVerbSmoke runs the verb on a real prepared checkout. It is off unless LITMUS_SMOKE_CHECKOUT names one
 // (the repo clone dir of a head SHA); the run in the host daemon is never touched.
 func TestTestVerbSmoke(t *testing.T) {
@@ -345,76 +430,31 @@ func TestTestVerbSmoke(t *testing.T) {
 }
 
 func TestPRTestFilesSelection(t *testing.T) {
-	diff := `diff --git a/backend/internal/cli/hooks.go b/backend/internal/cli/hooks.go
---- a/backend/internal/cli/hooks.go
-+++ b/backend/internal/cli/hooks.go
-@@ -1 +1 @@
--a
-+b
-diff --git a/backend/internal/cli/hooks_test.go b/backend/internal/cli/hooks_test.go
---- a/backend/internal/cli/hooks_test.go
-+++ b/backend/internal/cli/hooks_test.go
-@@ -1 +1 @@
--a
-+b
-diff --git a/frontend/src/new.test.tsx b/frontend/src/new.test.tsx
-new file mode 100644
---- /dev/null
-+++ b/frontend/src/new.test.tsx
-@@ -0,0 +1 @@
-+x
-diff --git a/frontend/src/a b.spec.ts b/frontend/src/a b.spec.ts
---- a/frontend/src/a b.spec.ts	
-+++ b/frontend/src/a b.spec.ts	
-@@ -1 +1 @@
--x
-+y
-diff --git a/frontend/src/__tests__/deep/util.ts b/frontend/src/__tests__/deep/util.ts
-new file mode 100644
---- /dev/null
-+++ b/frontend/src/__tests__/deep/util.ts
-@@ -0,0 +1 @@
-+x
-diff --git a/backend/old_test.go b/backend/old_test.go
-deleted file mode 100644
---- a/backend/old_test.go
-+++ /dev/null
-@@ -1 +0,0 @@
--x
-diff --git a/backend/was.go b/backend/moved_test.go
-similarity index 90%
-rename from backend/was.go
-rename to backend/moved_test.go
---- a/backend/was.go
-+++ b/backend/moved_test.go
-@@ -1 +1 @@
--x
-+y
-diff --git a/frontend/src/shot.spec.tsx b/frontend/src/shot.spec.tsx
-Binary files differ
-diff --git a/frontend/src/__tests__ b/frontend/src/__tests__
-new file mode 100644
-diff --git a/frontend/src/latest.tsx b/frontend/src/latest.tsx
---- a/frontend/src/latest.tsx
-+++ b/frontend/src/latest.tsx
-@@ -1,2 +1,2 @@
--a
-+b
- testing.test.ts
-diff --git a/frontend/src/helpers.go b/frontend/src/helpers.go
-`
+	list := "# status\tadded\tdeleted\tpath\t[from]\n" +
+		"M\t1\t1\tbackend/internal/cli/hooks.go\n" +
+		"M\t1\t1\tbackend/internal/cli/hooks_test.go\n" +
+		"A\t1\t0\tfrontend/src/new.test.tsx\n" +
+		"M\t1\t1\tfrontend/src/a b.spec.ts\n" +
+		"A\t1\t0\tfrontend/src/__tests__/deep/util.ts\n" +
+		"D\t0\t1\tbackend/old_test.go\n" +
+		"R\t1\t1\tbackend/moved_test.go\tbackend/was.go\n" +
+		"M\t-\t-\tfrontend/src/shot.spec.tsx\n" +
+		"M\t1\t1\tfrontend/src/latest.tsx\n" +
+		"M\t1\t1\tfrontend/src/helpers.go\n" +
+		"M\t1\t1\t../escape_test.go\n" +
+		"M\t1\t1\tbackend/internal/cli/hooks_test.go\n"
 	want := []string{
 		"backend/internal/cli/hooks_test.go", "frontend/src/new.test.tsx", "frontend/src/a b.spec.ts",
 		"frontend/src/__tests__/deep/util.ts", "backend/moved_test.go", "frontend/src/shot.spec.tsx",
 	}
-	if got := prTestFiles(diff); !slices.Equal(got, want) {
+	if got := prTestFiles(list); !slices.Equal(got, want) {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
-	if got := prTestFiles("diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n"); len(got) != 0 {
-		t.Fatalf("non-test diff selected %q", got)
+	if got := prTestFiles("M\t1\t1\tx.go\n"); len(got) != 0 {
+		t.Fatalf("non-test file selected %q", got)
 	}
 	if got := prTestFiles(""); len(got) != 0 {
-		t.Fatalf("empty diff selected %q", got)
+		t.Fatalf("empty list selected %q", got)
 	}
 }
 
@@ -433,6 +473,7 @@ func gitIn(t *testing.T, dir string, args ...string) string {
 func headTestsRun(t *testing.T, fixTest string, diffFiles ...string) (svc *Service, runDir, base string) {
 	t.Helper()
 	svc, now := newSvc(t)
+	svc.runner = execRunner{} // the scratch worktree is real git
 	run := Run{ID: "run_s1", SessionID: "s1", State: RunPrepared, Deadline: now.Add(RunBudget)}
 	for _, leg := range []string{"base", "head"} {
 		dir := filepath.Join(t.TempDir(), "checkout")
@@ -458,14 +499,14 @@ func headTestsRun(t *testing.T, fixTest string, diffFiles ...string) (svc *Servi
 	}
 	is(t, "")(nil, svc.store.Save(run))
 	runDir = filepath.Join(svc.store.root, run.ID)
-	var diff strings.Builder
+	var list strings.Builder
 	for _, f := range diffFiles {
-		diff.WriteString("diff --git a/" + f + " b/" + f + "\n--- a/" + f + "\n+++ b/" + f + "\n@@ -0,0 +1 @@\n+x\n")
+		list.WriteString("M\t1\t0\t" + f + "\n")
 	}
 	if err := os.MkdirAll(runDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runDir, "diff.patch"), []byte(diff.String()), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "files.txt"), []byte(list.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return svc, runDir, base
@@ -536,6 +577,8 @@ func TestTestVerbWithTestsFromRunsThePRsTestsOnBase(t *testing.T) {
 	}
 	if got, _ := svc.store.Checks("run_s1"); got[0].Receipts[0].OutputPath != res.Receipt {
 		t.Fatalf("the open check did not get the receipt: %+v", got)
+	} else if r := got[0].Receipts[0]; !r.failedTest() || r.NotBuilt || r.Ran == nil || *r.Ran != 1 {
+		t.Fatalf("a test that compiled, ran and failed on main must read as one: %+v", r)
 	}
 	assertScratchGone(t, runDir, base)
 }
@@ -552,7 +595,7 @@ func TestTestVerbWithTestsFromPassesWhenMainAlreadyHasTheFix(t *testing.T) {
 func TestTestVerbWithTestsFromReportsTestFilesThatDoNotCompile(t *testing.T) {
 	svc, runDir, base := headTestsRun(t, "package pkg\n\nimport \"testing\"\n\nfunc TestNew(t *testing.T) { NewThing() }\n", "pkg/fix_test.go")
 	res, err := svc.Test(ctx, "s1", "base", "", []string{"go", "test", "./pkg/", "-count=1"}, "head")
-	if err != nil || res.Exit == 0 || res.Summary != "1 test file from the PR does not compile against main" {
+	if err != nil || res.Exit == 0 || res.Summary != "1 test file from the PR does not compile against main" || !res.NotBuilt || res.Ran == nil || *res.Ran != 0 {
 		t.Fatalf("%+v err %v", res, err)
 	}
 	if !strings.Contains(res.Output, "undefined: NewThing") {
@@ -631,7 +674,7 @@ func TestTestVerbWithTestsFromRefusals(t *testing.T) {
 	is(t, "TESTING_TEST_NOT_ALLOWED")(svc.Test(ctx, "s1", "head", "", argv, "head"))
 	is(t, "TESTING_TEST_NOT_ALLOWED")(svc.Test(ctx, "s1", "base", "", argv, "base"))
 	is(t, "TESTING_TEST_NOT_ALLOWED")(svc.Test(ctx, "s1", "base", "", []string{"sh", "-c", "echo hi"}, "head"))
-	if err := os.WriteFile(filepath.Join(runDir, "diff.patch"), []byte("diff --git a/pkg/pkg.go b/pkg/pkg.go\n--- a/pkg/pkg.go\n+++ b/pkg/pkg.go\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, "files.txt"), []byte("M\t1\t1\tpkg/pkg.go\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := svc.Test(ctx, "s1", "base", "", argv, "head")
@@ -639,10 +682,13 @@ func TestTestVerbWithTestsFromRefusals(t *testing.T) {
 	if !errors.As(err, &e) || e.Code != "TESTING_TEST_NOT_ALLOWED" || !strings.Contains(e.Message, "the PR adds no test files") {
 		t.Fatalf("err = %v", err)
 	}
-	if err := os.Remove(filepath.Join(runDir, "diff.patch")); err != nil {
+	if err := os.Remove(filepath.Join(runDir, "files.txt")); err != nil {
 		t.Fatal(err)
 	}
-	is(t, "TESTING_TEST_NOT_ALLOWED")(svc.Test(ctx, "s1", "base", "", argv, "head"))
+	_, err = svc.Test(ctx, "s1", "base", "", argv, "head")
+	if !errors.As(err, &e) || e.Code != "TESTING_TEST_NOT_ALLOWED" || !strings.Contains(e.Message, "no files.txt") {
+		t.Fatalf("err = %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(runDir, "base-tests")); !os.IsNotExist(err) {
 		t.Fatalf("a refused call made a worktree: %v", err)
 	}

@@ -96,7 +96,7 @@ func planShots(checks []Check) (heroes []hero, extras []shot) {
 		case c.onLeg() == "base":
 			h.base, h.baseNote = pick(c, "base", h.label), c.Note
 		default:
-			if c.State != CheckSkipped {
+			if !c.unreached() {
 				h.pr, h.prNote = pick(c, "head", h.label), c.Note
 			}
 			if i := baseTwin(checks, c); i >= 0 {
@@ -561,10 +561,10 @@ func (s *Service) evidenceFailed(run Run, err error) evidence {
 	return evidence{state: "failed:" + reason, limits: []string{"I could not publish the screenshots and recordings. The error was " + mdText(reason, 120) + "."}}
 }
 
-// scrub hides the data dir and the home dir in a message that goes into a public comment.
+// scrub hides the data dir and the home dir in a message that goes into a public comment or the pack.
 func (s *Service) scrub(msg string) string {
 	if d := s.store.dataDir(); d != "" {
-		msg = strings.ReplaceAll(msg, d, "<data>")
+		msg = strings.ReplaceAll(msg, d, "<data dir>")
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		msg = strings.ReplaceAll(msg, home, "~")
@@ -674,8 +674,9 @@ func (s *Service) pushEvidence(ctx context.Context, run Run, stage string, names
 			return "", err
 		}
 	}
+	// "PR 7", not "#7": GitHub would list the commit on the PR's timeline as a reference.
 	steps = append(steps, []string{"add", "-f", "--", rel},
-		[]string{"commit", "-q", "--no-gpg-sign", "--no-verify", "-m", fmt.Sprintf("litmus: evidence for #%d run %s", run.PRNumber, run.ID)})
+		[]string{"commit", "-q", "--no-gpg-sign", "--no-verify", "-m", fmt.Sprintf("litmus: evidence for PR %d run %s", run.PRNumber, run.ID)})
 	for _, step := range steps {
 		if _, err := g(step...); err != nil {
 			return "", err

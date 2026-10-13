@@ -2706,6 +2706,8 @@
 	"litmus.drawer.checks": "Checks",
 	"litmus.drawer.noChecks": "No checks were recorded.",
 	"litmus.drawer.verdict": "Verdict details",
+	"litmus.drawer.gaps_one": "{{count}} gap",
+	"litmus.drawer.gaps_other": "{{count}} gaps",
 	"litmus.checks.name": "Check",
 	"litmus.checks.leg": "Build",
 	"litmus.checks.legHead": "PR build",

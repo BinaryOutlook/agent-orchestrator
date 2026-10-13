@@ -3210,7 +3210,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Pin a pull request and start the run's 15 minute budget */
+        /** Pin a pull request; the run's 25 minute budget starts when the builds are ready */
         post: operations["intakeTesting"];
         delete?: never;
         options?: never;
@@ -4915,6 +4915,11 @@ export interface components {
             name: string;
             stems?: string[];
         };
+        LitmusInFlight: {
+            /** Format: double */
+            seconds: number;
+            verb: string;
+        };
         LitmusIssueRef: {
             number: number;
             title?: string;
@@ -4932,8 +4937,11 @@ export interface components {
             args: string[];
             copiedFiles?: string[];
             exit: number;
+            failing?: boolean;
             leg: string;
+            notBuilt?: boolean;
             output: string;
+            ran?: null | number;
             receipt: string;
             /** Format: double */
             seconds: number;
@@ -6010,11 +6018,6 @@ export interface components {
             session: string;
             socketDir: string;
         };
-        TestingInFlight: {
-            /** @description How long the verb has been running. */
-            seconds: number;
-            verb: string;
-        };
         TestingLeg: {
             buildManifest?: string;
             daemonPort?: number;
@@ -6038,6 +6041,15 @@ export interface components {
         TestingProjectSettings: {
             /** @description When on, a finished run writes its comment and waits for approval instead of posting it. */
             askBeforePosting: boolean;
+            /** @description Reasoning effort the project's testers run at. Empty uses the project's worker effort, then the Litmus default. */
+            effort?: string;
+            /**
+             * @description Agent the project's testers run on: claude-code or codex. Empty uses the project's worker agent, then claude-code.
+             * @enum {string}
+             */
+            harness?: "claude-code" | "codex";
+            /** @description Model the project's testers run on. Empty uses the project's worker model, then the Litmus default. */
+            model?: string;
         };
         TestingReady: {
             daemonPath?: string;
@@ -6052,8 +6064,12 @@ export interface components {
             at: string;
             beforePath?: string;
             consoleTail?: string;
+            exit?: null | number;
+            failing?: boolean;
             leg?: string;
+            notBuilt?: boolean;
             outputPath?: string;
+            ran?: null | number;
             seq: number;
             targetName?: string;
             targetRole?: string;
@@ -6104,9 +6120,10 @@ export interface components {
             /** @description submit with blocked: what failed; required and non-empty. */
             reason?: string;
             /** @enum {string} */
-            result?: "pass" | "fail" | "partial" | "skipped";
+            result?: "pass" | "fail" | "partial" | "absent" | "skipped";
             /** @description rerun only: the run whose pull request is tested again. */
             runId?: string;
+            /** @description the calling session; start, post and prune refuse it when it is a Litmus tester's own session. */
             sessionId?: string;
             /** @description submit only: why the base was not run; lets a submit through while a prepared base is unlaunched. */
             skipBase?: string;
@@ -6137,12 +6154,14 @@ export interface components {
             evidence?: string;
             evidenceCommit?: string;
             evidenceState?: string;
+            gaps?: string[];
             headSha?: string;
             id: string;
             issues?: components["schemas"]["LitmusIssueRef"][];
             legs?: components["schemas"]["TestingLeg"][];
             prNumber: number;
             projectId?: string;
+            ready?: string[];
             repo: string;
             /** Format: int64 */
             repoId?: number;
@@ -6192,8 +6211,7 @@ export interface components {
         };
         TestingRunStatus: {
             checks: components["schemas"]["TestingCheck"][];
-            /** @description Long verbs still running for the run (prepare, launch, submit, cleanup) and for how long, so a poller can tell a long build from a stuck one. */
-            inFlight?: components["schemas"]["TestingInFlight"][];
+            inFlight?: components["schemas"]["LitmusInFlight"][];
             run: components["schemas"]["TestingRun"];
         };
         TestingRunSummary: {

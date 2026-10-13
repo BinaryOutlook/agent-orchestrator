@@ -2726,6 +2726,8 @@
 	"litmus.drawer.checks": "チェック",
 	"litmus.drawer.noChecks": "チェックは記録されていません。",
 	"litmus.drawer.verdict": "判定の詳細",
+	"litmus.drawer.gaps_one": "ギャップ {{count}} 件",
+	"litmus.drawer.gaps_other": "ギャップ {{count}} 件",
 	"litmus.checks.name": "チェック",
 	"litmus.checks.leg": "ビルド",
 	"litmus.checks.legHead": "PRのビルド",

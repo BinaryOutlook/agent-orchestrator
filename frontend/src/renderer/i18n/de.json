@@ -2726,6 +2726,8 @@
 	"litmus.drawer.checks": "Prüfungen",
 	"litmus.drawer.noChecks": "Keine Prüfungen aufgezeichnet.",
 	"litmus.drawer.verdict": "Details zum Ergebnis",
+	"litmus.drawer.gaps_one": "{{count}} Lücke",
+	"litmus.drawer.gaps_other": "{{count}} Lücken",
 	"litmus.checks.name": "Prüfung",
 	"litmus.checks.leg": "Build",
 	"litmus.checks.legHead": "PR-Build",

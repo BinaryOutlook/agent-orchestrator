@@ -299,9 +299,8 @@ func TestComposeRun14(t *testing.T) {
 }
 
 func TestPreExistingReasonSaysWhatWasLeftOut(t *testing.T) {
-	rc := []Receipt{{Seq: 1}}
 	mk := func(id, name, leg string, s CheckState) Check {
-		return Check{ID: id, Name: name, State: s, Leg: leg, Receipts: rc}
+		return Check{ID: id, Name: name, State: s, Leg: leg, Receipts: []Receipt{{Seq: 1, Leg: leg, Action: "click"}}}
 	}
 	for _, c := range []struct {
 		name   string

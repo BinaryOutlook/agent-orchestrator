@@ -93,9 +93,10 @@ func TestTestingAPIStartSpawnsWorker(t *testing.T) {
 	})
 	do := testingServer(t, httpd.APIDeps{Testing: svc})
 	do("POST", "/start", `{"projectId":"p1","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusOK, `"sessionId":"ao-7"`, `"name":"litmus: PR #6394"`)
-	do("POST", "/start", `{"prUrl":"aoagents/agent-orchestrator#6394","harness":"codex"}`, http.StatusBadRequest, "TESTING_HARNESS_UNSUPPORTED")
+	do("POST", "/start", `{"prUrl":"aoagents/agent-orchestrator#6394","harness":"aider"}`, http.StatusBadRequest, "TESTING_HARNESS_UNSUPPORTED")
 	do("POST", "/start", `{"prUrl":"nope"}`, http.StatusBadRequest, "TESTING_PR_URL_INVALID")
-	if len(spawned) != 1 || spawned[0].ProjectID != "p1" || spawned[0].Harness != "claude-code" {
+	do("POST", "/start", `{"projectId":"p2","prUrl":"aoagents/agent-orchestrator#6394","harness":"codex"}`, http.StatusOK, `"sessionId":"ao-7"`)
+	if len(spawned) != 2 || spawned[0].ProjectID != "p1" || spawned[0].Harness != "claude-code" || spawned[1].Harness != "codex" {
 		t.Fatalf("spawned = %+v", spawned)
 	}
 }
@@ -285,4 +286,20 @@ func TestTestingAPIRunsAskBeforePostingAndRerun(t *testing.T) {
 	do("POST", "/rerun", `{"runId":"run_ao-7"}`, http.StatusOK, `"sessionId":"ao-9"`, `"runId":"run_ao-9"`)
 	do("POST", "/rerun", `{"runId":"run_nope"}`, http.StatusNotFound, "TESTING_RUN_NOT_FOUND")
 	do("POST", "/rerun", `{}`, http.StatusBadRequest, "TESTING_ID_INVALID")
+}
+
+// The daemon, not the prompt, keeps a tester out of start, post and prune.
+func TestTestingAPIRefusesTheTesterOnUserVerbs(t *testing.T) {
+	svc := litmus.New(litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) { return "ao-9", nil })
+	do := testingServer(t, httpd.APIDeps{Testing: svc})
+	do("POST", "/intake", `{"sessionId":"ao-1","prUrl":"https://github.com/aoagents/agent-orchestrator/pull/6394"}`, http.StatusOK)
+
+	do("POST", "/prune", `{"sessionId":"ao-1","dryRun":true}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
+	do("POST", "/start", `{"sessionId":"ao-1","projectId":"p1","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
+	do("POST", "/runs/run_ao-1/post", `{"sessionId":"ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
+
+	// The user's own session, or no session, is allowed through.
+	do("POST", "/prune", `{"sessionId":"ao-orch","dryRun":true}`, http.StatusOK, `"dryRun":true`)
+	do("POST", "/prune", `{"dryRun":true}`, http.StatusOK, `"dryRun":true`)
+	do("POST", "/start", `{"sessionId":"ao-orch","projectId":"p1","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusOK, `"sessionId":"ao-9"`)
 }

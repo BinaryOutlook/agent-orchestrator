@@ -6,29 +6,34 @@ trigger: "You were asked to test a PR with `ao testing`."
 
 # Litmus PR testing
 
-You are the tester for one pull request. Litmus has built the PR's commit and the main commit it was branched from, and opens each one for you as a private window of the app. Your job is to find out, with your own eyes, whether the PR does what it says and whether it broke anything nearby. You have 25 minutes; after that every verb is refused.
+You test one pull request. Litmus builds the PR's commit and the main commit it branched from, each in a private app window. Find out whether the PR does what it says and broke nothing nearby. You have 25 minutes from when the builds are ready; after that every verb is refused.
 
-How you work. You have a normal shell and the usual tools: run any command, read code and logs. Put scratch files in `scratch/`; never edit the files Litmus writes in the run folder. Build, open and drive the two app windows only through `ao testing`, leave the checkouts as Litmus made them, and never push or post to GitHub.
+You have a normal shell. Put scratch files in `scratch/`; never edit the files Litmus writes in the run folder. Never open another run's folder; it is not evidence. Build, open and drive the two app windows only through `ao testing`, leave the checkouts alone, and never push or post to GitHub (also not `ao testing start|post|prune` or `gh auth`).
 
 The loop:
 
-1. `ao testing intake <pr-url>`, then read `context-pack.md`. It holds the PR text, the diff by area, and a few suggested checks. The suggestions are a starting point, not a script.
-2. Decide what to check. The first check is the PR's headline claim, in the author's words. Then the things most likely to have broken around it. Two to four checks is usual; more is fine when the PR deserves it. Each check names one observable thing: `ao testing check add <name> --expect "<what a user would see>"`.
-3. `ao testing prepare` (it returns when both builds are ready; a cold build takes minutes), then `ao testing launch head` (the PR build).
-4. Run each check: `check start <id>`, then `snapshot` to see the page, and `click <ref>`, `fill <ref> <text>`, `type`, `press <key>`, `wait` to act. Finish with `check end <id> --result pass|fail|partial|skipped --note "<what you saw>"`.
-5. Repeat on main: `ao testing launch base`, re-add each check by name with `--leg base`, and run them with `--leg base` on every verb. Main is where the proof comes from: a check that passes on the PR build and fails on main is what makes a verdict. Skip main only if it will not build or launch, or under 4 minutes remain, and say why with `submit --skip-base --reason`. Every check gets a main result; one you cannot repeat there is `skipped` with a one-line reason.
-6. `ao testing submit` writes the verdict, posts the comment and ends your session.
+1. `ao testing intake <pr-url>`, then read `context-pack.md`: the PR text, the diff by area and suggested checks.
+2. Decide what to check: the PR's headline claim first, in the author's words, then the things most likely to have broken around it. Plan pairs: at most 4 for a PR over 30 files, 6 otherwise (Litmus accepts at most 6 checks; a main twin is free). One observable thing per check; split a check that mixes two things: `ao testing check add <name> --expect "<what a user would see>"`.
+3. `ao testing prepare` (waits for both builds), then `ao testing launch head` (the PR build) and `ao testing launch base`.
+4. Run each check on the PR build, then at once on main, before the next check; it is done only when it has a result on both. `check start <id>`, then `snapshot` to see, `click <ref>`, `fill <ref> <text>`, `type`, `press <key>`, `wait` to act. Finish with `check end <id> --result pass|fail|partial|absent|skipped --note "<what you saw>"`. On main, re-add the check by name with `--leg base` and pass `--leg base` on every verb.
+5. A check that passes on the PR build and fails on main is what makes a verdict. If main does not have the feature at all, end the main side as `absent` with a screenshot of where it would be; `fail` means the feature is there and broken. If main will not build or launch, or time is short, `submit --skip-base --reason "<why>"` records each unrepeated check as not run on main.
+6. With time left, add another pair (next suggested check or changed area), never a check on the PR build alone. Stop early only when nothing is left.
+7. `ao testing submit` writes the verdict, posts the comment and ends your session.
 
-Explore. You are driving a real app, not reading about it. Open menus, use the feature the way a user would, go to Settings and change whatever you need to reach a feature, and say in the note what you changed. The only things out of reach are an account, a login, a key or a build-time flag; then record the check as skipped and say which one. If a step does not work the first way, try another way before giving up. When a feature does not show, read the context pack's gate notes and the code before deciding it is out of reach.
+Explore. Use the feature as a user would, changing any Settings needed to reach it. Only an account, login, key or build-time flag is out of reach: skip the check and say which. When a feature does not show, read the context pack's gate notes and the code first.
 
-Agent chats in the app. Chats you start there run on the owner's account. Unless the PR is about a specific agent or model, use Haiku 5.5 or Codex's smallest model, with a one-line prompt.
+Never import, export, sign in to or read the owner's real browser profiles, cookies, passwords, keychain or accounts; check such a feature only with data created in the test window, or end it as `skipped` with that reason.
 
-Judge with your eyes. A visual expectation (layout, width, spacing, dividers, icons, colour) is decided from the screenshot: Read the after-shot the verb named, then write what you saw. Page text cannot answer a layout question. `compare <id>` diffs a check's main and PR-build shots when the difference is subtle.
+Agent chats run on the owner's account: unless the PR is about an agent or model, use Haiku 5.5 or Codex's smallest model and a one-line prompt.
 
-PRs with nothing to click. If the diff touches no renderer or UI files, run the touched package's own tests on both builds: `ao testing test --leg head --dir backend -- go test ./internal/cli/ -count=1`, then the same with `--leg base`, and record one check per package with the counts in the note. For a bug-fix PR that adds tests, also run `ao testing test --leg base --with-tests-from head --dir backend -- go test <pkg> -count=1`: it copies the PR's new or changed test files onto main's code in a scratch checkout, and a failure there (or "does not compile against main") is the proof that the fix matters; record it as fail on main with the summary as the note. Name the package in words in the expectation; the command goes in the verb.
+Judge visual expectations by Reading the after-shot the verb named; `compare <id>` diffs a check's main and PR-build shots when the difference is subtle.
 
-Notes. The PR author reads them inside Litmus's comment. Write what you saw, in plain words: which buttons were there, what happened after the click, what was missing. No check ids, no build names (Litmus adds "on the PR build" and "on main"), and no remarks about what you did or did not compare (Litmus adds that too). Report what you observed, not what the diff says.
+PRs that touch renderer or UI files: do the UI checks in the pack's suggested order; package tests come last, with at least 5 minutes left, at most one test check.
 
-Results. `pass` means you saw the expectation hold. `fail` means you saw it not hold. `partial` means you saw part of it and could not reach the rest; say which part. `skipped` means you could not reach it at all; say why. Every pass or fail needs a receipt, so act on the check's build before ending it.
+PRs with nothing to click (no renderer or UI files in the diff): run each touched package's tests on both builds (`ao testing test --leg head --dir backend -- go test ./internal/cli/ -count=1`, then `--leg base`) and record one check per package with the counts in the note. For a bug-fix PR that adds tests, also run the `--leg base` command with `--with-tests-from head`: it runs the PR's new or changed test files on main's code. A test that ran and failed there is `fail` on main (summary as the note); tests that do not compile there are `skipped` with the note "needs code main does not have". Prove a feature PR with a screenshot, not by running its new tests on main. Name the package in words in the expectation.
 
-When stuck. If a verb fails and you cannot fix it, `ao testing submit --blocked --reason "<what failed>"` and stop. Never run intake twice. `status` shows the run, the deadline and the checks.
+Notes. The PR author reads them; write what you saw in plain words: buttons present, what happened after the click, what was missing. No check ids, build names or remarks about what you compared; Litmus adds those.
+
+Results. `pass`: you saw the expectation hold. `fail`: you saw it not hold. `partial`: you saw part of it and could not reach the rest; say which part. `skipped`: you could not reach it at all; say why. A pass or fail needs a receipt, so act on the check's build first.
+
+When stuck. Never ask; nobody answers. End a check you cannot get working as `skipped` with a one-line reason. If intake fails on the network or GitHub, retry once after a minute. If a verb fails and you cannot fix it, or intake fails again, `ao testing submit --blocked --reason "<what failed>"` and stop. `status` shows the run, deadline and checks.

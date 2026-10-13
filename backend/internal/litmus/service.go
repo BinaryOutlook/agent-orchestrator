@@ -17,7 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-var outcomes = []CheckState{CheckPass, CheckFail, CheckPartial, CheckSkipped}
+var outcomes = []CheckState{CheckPass, CheckFail, CheckPartial, CheckAbsent, CheckSkipped}
 
 // endGrace is how long a tester has after its run closes to print its last line before its session is stopped.
 // Tests shorten it.
@@ -26,34 +26,39 @@ var endGrace = 10 * time.Second
 // Service owns the run lifecycle and the check ledger. Every verb is keyed by
 // the calling AO session, which owns at most one run.
 type Service struct {
-	mu            sync.Mutex
-	store         *Store
-	clock         func() time.Time
-	gh            GH
-	resolve       RepoResolver
-	runner        Runner
-	sys           sysOps
-	nodeDirs      func(major string) []string
-	closeEngine   func(runID string)  // cleanup calls it before killing anything
-	busy          map[string]busyVerb // long verbs in flight, by run and verb
-	engines       map[string]*Engine  // by run/leg
-	seqs          map[string]int      // receipts handed out, by run
-	engExec       execFn
-	media         Media           // ffmpeg, behind an interface so tests never run it
-	spawn         Spawner         // launches testing workers; nil until the daemon wires it
-	report        Reporter        // posts the session's `done` report after a submit; nil until the daemon wires it
-	kill          Killer          // stops the tester's session after a submit; nil until the daemon wires it
-	activity      SessionActivity // reads a tester's activity for the sweep; nil until the daemon wires it
-	binary        string          // the agent-browser binary; empty when it was not found (reported on first use)
-	login         string          // the gh token's login, read by the first comment post
-	evidenceMu    sync.Mutex      // one publish at a time: runs of a repo share its evidence clone
-	testCap       time.Duration   // longest a `test` verb may run; tests shorten it
-	keepRuns      int             // retention after every run: finished run dirs kept
-	keepCheckouts int             // retention after every run: finished runs whose checkouts are kept
-	transcripts   string          // where Claude keeps session transcripts, for a run's token count; empty reads none
-	tokenCache    map[tokenKey]int64
-	tokenOrder    []tokenKey                                         // the cache's keys, oldest first
-	projectRepo   func(ctx context.Context, projectID string) string // the project's own owner/repo; nil reads none
+	mu             sync.Mutex
+	store          *Store
+	clock          func() time.Time
+	gh             GH
+	resolve        RepoResolver
+	runner         Runner
+	sys            sysOps
+	nodeDirs       func(major string) []string
+	closeEngine    func(runID string)  // cleanup calls it before killing anything
+	busy           map[string]busyVerb // long verbs in flight, by run and verb
+	engines        map[string]*Engine  // by run/leg
+	seqs           map[string]int      // receipts handed out, by run
+	engExec        execFn
+	media          Media           // ffmpeg, behind an interface so tests never run it
+	spawn          Spawner         // launches testing workers; nil until the daemon wires it
+	report         Reporter        // posts the session's `done` report after a submit; nil until the daemon wires it
+	kill           Killer          // stops the tester's session after a submit; nil until the daemon wires it
+	activity       SessionActivity // reads a tester's activity for the sweep; nil until the daemon wires it
+	binary         string          // the agent-browser binary; empty when it was not found (reported on first use)
+	login          string          // the gh token's login, read by the first comment post
+	evidenceMu     sync.Mutex      // one publish at a time: runs of a repo share its evidence clone
+	testCap        time.Duration   // longest a `test` verb may run; tests shorten it
+	prepareBudget  time.Duration   // longest a `prepare` verb may run; tests shorten it
+	keepRuns       int             // retention after every run: finished run dirs kept
+	keepCheckouts  int             // retention after every run: finished runs whose checkouts are kept
+	transcripts    string          // where Claude keeps session transcripts, for a run's token count; empty reads none
+	tokenCache     map[tokenKey]int64
+	tokenOrder     []tokenKey                                         // the cache's keys, oldest first
+	projectRepo    func(ctx context.Context, projectID string) string // the project's own owner/repo; nil reads none
+	projectHarness func(ctx context.Context, projectID string) string // the project's worker harness; nil reads none
+
+	mirrorMu   map[string]*sync.Mutex // one at a time per mirror: a fetch and its pin, a clone, or prune's cleanup
+	retryPause time.Duration          // before intake asks gh again about a PR it did not find; tests zero it
 }
 
 // New builds a service over store. A nil clock uses time.Now.
@@ -63,7 +68,7 @@ func New(store *Store, clock func() time.Time) *Service {
 	}
 	s := &Service{store: store, clock: clock, gh: execGH{}, runner: execRunner{}, sys: realSys(), nodeDirs: defaultNodeDirs, busy: map[string]busyVerb{},
 		engines: map[string]*Engine{}, seqs: map[string]int{}, engExec: realExec,
-		media: execMedia{}, testCap: testCap, keepRuns: DefaultKeepRuns, keepCheckouts: DefaultKeepCheckouts}
+		media: execMedia{}, testCap: testCap, prepareBudget: PrepareBudget, keepRuns: DefaultKeepRuns, keepCheckouts: DefaultKeepCheckouts, mirrorMu: map[string]*sync.Mutex{}, retryPause: 2 * time.Second}
 	s.closeEngine = s.closeEngines
 	s.tokenCache = map[tokenKey]int64{}
 	if home, err := os.UserHomeDir(); err == nil {
@@ -113,6 +118,13 @@ func (s *Service) WithProjectRepo(repo func(ctx context.Context, projectID strin
 	return s
 }
 
+// WithProjectHarness sets how a project's worker harness ("" when it pins none) is looked up, for a start that names no
+// harness and whose project has no Litmus harness setting.
+func (s *Service) WithProjectHarness(harness func(ctx context.Context, projectID string) string) *Service {
+	s.projectHarness = harness
+	return s
+}
+
 // Reporter posts the worker report `done` for a session, as `ao report --done` would.
 type Reporter func(ctx context.Context, sessionID, note string) error
 
@@ -146,10 +158,17 @@ func (s *Service) WithActivity(a SessionActivity) *Service {
 var authorTaboo = regexp.MustCompile(`(?i)\b(c\d+|head|base|legs?|snapshots?|refs?|receipts?)\b`)
 
 // forAuthor refuses tester text that would reach the PR author in the tester's words: it names a check or one of the
-// words above, or runs past 240 characters. The comment says "the PR build" and "main".
+// words above, or runs past 240 characters. The refusal says which; Litmus adds the build names to the comment itself.
 func forAuthor(text string) error {
-	if len([]rune(text)) > 240 || authorTaboo.MatchString(text) {
-		return invalid("TESTING_NOTE_FOR_AUTHOR", "write this for the PR author: say 'the PR build' and 'main', name what you saw, no check ids, two sentences at most")
+	var tripped []string
+	if n := len([]rune(text)); n > 240 {
+		tripped = append(tripped, fmt.Sprintf("%d of 240 characters", n))
+	}
+	if w := authorTaboo.FindString(text); w != "" {
+		tripped = append(tripped, fmt.Sprintf("the word '%s'", w))
+	}
+	if len(tripped) > 0 {
+		return invalid("TESTING_NOTE_FOR_AUTHOR", "refused: "+strings.Join(tripped, " and ")+". Write this for the PR author: name what you saw, no check ids, two sentences at most")
 	}
 	return nil
 }
@@ -158,7 +177,7 @@ func invalid(code, msg string) error  { return apierr.Invalid(code, msg, nil) }
 func conflict(code, msg string) error { return apierr.Conflict(code, msg, nil) }
 
 // runID names the one run a session may own, so a second intake cannot reset
-// the 25 minute clock and every verb finds its run without a scan.
+// the run's clock and every verb finds its run without a scan.
 func runID(sessionID string) (string, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return "", invalid("SESSION_ID_REQUIRED", "sessionId is required")
@@ -185,11 +204,26 @@ func (s *Service) Status(_ context.Context, sessionID string) (RunStatus, error)
 	return RunStatus{Run: run, Checks: append([]Check{}, checks...), InFlight: flying}, err
 }
 
-// maxChecks bounds a plan; minChecks must exist before the PR build is launched.
+// maxChecks bounds a plan in pairs; minChecks must exist before the PR build is launched.
 const (
 	minChecks = 2
-	maxChecks = 12 // 6 per build: every head check needs a same-named base check
+	maxChecks = 6 // pairs: a check and its same-named twin on the other build share one
 )
+
+// pairs counts the checks as pairs: a check whose same-named twin on the other leg is still waiting for one adds none.
+func pairs(checks []Check) (n int) {
+	waiting := map[string]string{} // lower-cased name -> the leg of a check still waiting for its twin
+	for _, c := range checks {
+		name := strings.ToLower(c.Name)
+		if leg, ok := waiting[name]; ok && leg != c.onLeg() {
+			delete(waiting, name)
+			continue
+		}
+		waiting[name] = c.onLeg()
+		n++
+	}
+	return n
+}
 
 // CheckAdd appends a pending check with the observable the worker expects. leg is
 // "base", "head" or empty (the check acts on whichever leg the worker drives).
@@ -214,11 +248,12 @@ func (s *Service) CheckAdd(_ context.Context, sessionID, name, expect, leg strin
 	if err != nil {
 		return Check{}, err
 	}
-	if len(checks) >= maxChecks {
-		return Check{}, conflict("TESTING_CHECK_LIMIT", fmt.Sprintf("a run has at most %d checks; fold this one into an existing check", maxChecks))
-	}
 	check := Check{ID: "c" + strconv.Itoa(len(checks)+1), Name: name, Expect: expect, State: CheckPending, Leg: leg}
-	return check, s.store.SaveChecks(run.ID, append(checks, check))
+	checks = append(checks, check)
+	if pairs(checks) > maxChecks {
+		return Check{}, conflict("TESTING_CHECK_LIMIT", fmt.Sprintf("a run has at most %d pairs of checks (a check and its twin on %s count once); fold this one into an existing check", maxChecks, run.baseName()))
+	}
+	return check, s.store.SaveChecks(run.ID, checks)
 }
 
 // CheckStart opens a check so receipts attach to it. One check runs at a time.
@@ -237,10 +272,10 @@ func (s *Service) CheckStart(_ context.Context, sessionID, id string) (Check, er
 	})
 }
 
-// CheckEnd closes a running check with its outcome (pass, fail, partial or skipped).
+// CheckEnd closes a running check with its outcome (pass, fail, partial, absent or skipped).
 func (s *Service) CheckEnd(_ context.Context, sessionID, id string, result CheckState, note string) (Check, error) {
 	if !slices.Contains(outcomes, result) {
-		return Check{}, invalid("TESTING_CHECK_RESULT_INVALID", "result must be pass, fail, partial or skipped")
+		return Check{}, invalid("TESTING_CHECK_RESULT_INVALID", "result must be pass, fail, partial, absent or skipped")
 	}
 	if err := forAuthor(note); err != nil {
 		return Check{}, err
@@ -252,9 +287,67 @@ func (s *Service) CheckEnd(_ context.Context, sessionID, id string, result Check
 		if result != CheckSkipped && !slices.ContainsFunc(c.Receipts, func(r Receipt) bool { return r.onLeg() == c.onLeg() }) {
 			return conflict("TESTING_CHECK_NO_RECEIPT", fmt.Sprintf("check %s has no receipt on the %s leg; act on it (click, fill, press, ...) with --leg %s first", c.ID, c.onLeg(), c.onLeg()))
 		}
-		c.State, c.Note = result, strings.TrimSpace(note)
+		state, stored, err := checkEvidence(*c, result, strings.TrimSpace(note))
+		if err != nil {
+			return err
+		}
+		c.State, c.Note = state, stored
 		return nil
 	})
+}
+
+// notBuiltNote is the note of a fail that rests only on test files that did not compile against main.
+const notBuiltNote = "the PR's tests need code main does not have"
+
+// checkEvidence applies the evidence rules to a pass or fail and returns the state and note to store. A test receipt is
+// judged by its exit code, whether it compiled and how many tests ran: a fail needs a test that ran and failed, a pass
+// one that ran and passed, and a compile failure is never a fail (it is stored as skipped). A screenshot cannot be
+// judged by a machine, so one anywhere among the receipts leaves the tester's word standing, as does a test receipt
+// from before exit codes were recorded.
+func checkEvidence(c Check, result CheckState, note string) (CheckState, string, error) {
+	recs := c.legReceipts()
+	if result == CheckAbsent { // only a screenshot can show where the feature would be
+		if !slices.ContainsFunc(recs, func(r Receipt) bool { return r.Action != "test" }) {
+			return "", "", conflict("TESTING_CHECK_EVIDENCE", "absent needs a screenshot of where the feature would be; test receipts cannot back it")
+		}
+		return result, note, nil
+	}
+	if (result != CheckPass && result != CheckFail) || len(recs) == 0 || slices.ContainsFunc(recs, func(r Receipt) bool { return r.Action != "test" || r.Exit == nil }) {
+		return result, note, nil
+	}
+	refuse := func(r Receipt, what, rule string) error {
+		return conflict("TESTING_CHECK_EVIDENCE", fmt.Sprintf("receipt %d %s; %s", r.Seq, what, rule))
+	}
+	if result == CheckFail {
+		failed := Receipt.failedTest // on the head a build that fails is the PR's failure; on the base only a test that ran counts
+		if c.onLeg() == "base" {
+			failed = Receipt.ranAndFailed
+		}
+		if slices.ContainsFunc(recs, failed) {
+			return result, note, nil
+		}
+		if i := slices.IndexFunc(recs, func(r Receipt) bool { return !r.NotBuilt }); i >= 0 { // the rest exited 0 or ran no test
+			what := "exited 0"
+			if *recs[i].Exit != 0 {
+				what = fmt.Sprintf("exited %d without a test that ran and failed", *recs[i].Exit)
+			} else if recs[i].Ran != nil && *recs[i].Ran > 0 {
+				what += fmt.Sprintf(" with %d passing", *recs[i].Ran)
+			}
+			return "", "", refuse(recs[i], what, "a fail needs a test that ran and failed, or a screenshot showing the failure")
+		}
+		return CheckSkipped, notBuiltNote, nil
+	}
+	if slices.ContainsFunc(recs, Receipt.passedTest) {
+		return result, note, nil
+	}
+	what := "ran 0 tests"
+	switch r := recs[0]; {
+	case r.NotBuilt:
+		what = "did not compile"
+	case *r.Exit != 0:
+		what = fmt.Sprintf("exited %d", *r.Exit)
+	}
+	return "", "", refuse(recs[0], what, "a pass needs a test that ran and passed, or a screenshot")
 }
 
 // busyVerb is a long verb running for a run: when it began, and a channel that

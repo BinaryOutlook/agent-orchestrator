@@ -1,8 +1,11 @@
 package litmus
 
 import (
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +141,40 @@ func TestPruneRefusesPathsOutsideTheDataDir(t *testing.T) {
 	}
 }
 
+// Removing a checkout drops its pin from the mirror unless another checkout or an unfinished run shares the commit;
+// a pin nothing needs any more goes too, and the mirror is cleaned once. A kept checkout keeps its pin.
+func TestPruneDropsThePinsOfRemovedCheckoutsAndCleansTheMirrorOnce(t *testing.T) {
+	svc, root, _ := pruneFixture(t)
+	c1, c2, c3, c4 := strings.Repeat("1", 40), strings.Repeat("2", 40), strings.Repeat("3", 40), strings.Repeat("4", 40)
+	mirror := filepath.Join(root, "mirrors", "aoagents__agent-orchestrator.git")
+	writeFile(t, filepath.Join(mirror, "HEAD"), "ref: refs/heads/main\n")
+	f := &fakeRunner{gitOut: map[string]string{"for-each-ref --format=%(refname)": strings.Join([]string{keepRefs + c1, keepRefs + c2, keepRefs + c3, keepRefs + c4}, "\n") + "\n"}}
+	svc.runner = f
+	rep, err := svc.Prune(ctx, 1, 1) // c1's checkout goes (old finished runs), c2 stays (recent), c3 stays (running), c4 has no checkout and no run
+	if err != nil || len(rep.Checkouts) != 1 {
+		t.Fatalf("report %+v err %v", rep, err)
+	}
+	for sha, want := range map[string]int{c1: 1, c4: 1, c2: 0, c3: 0} {
+		if got := f.count("update-ref -d " + keepRefs + sha); got != want {
+			t.Errorf("pin of %.4s dropped %d times, want %d: %q", sha, got, want, f.calls)
+		}
+	}
+	if f.count("gc --prune=now --quiet") != 1 || !strings.Contains(strings.Join(rep.Lines, "\n"), "dropped 2 pinned commits from mirrors/aoagents__agent-orchestrator.git and cleaned it") || pathExists(filepath.Join(mirror, gcDueFile)) {
+		t.Fatalf("calls %q lines %q", f.calls, rep.Lines)
+	}
+	if !pathExists(mirror) {
+		t.Fatal("prune removed the mirror")
+	}
+	f.gitOut["for-each-ref --format=%(refname)"] = keepRefs + c2 + "\n" + keepRefs + c3 + "\n"
+	before := f.count("gc")
+	if _, err := svc.Prune(ctx, 1, 1); err != nil || f.count("gc") != before { // nothing to drop: no cleanup
+		t.Fatalf("a prune with nothing to unpin cleaned the mirror: %v", err)
+	}
+	if rep, err := svc.PruneDryRun(ctx, 0, 0); err != nil || f.count("update-ref -d") != 2 || len(rep.Checkouts) == 0 {
+		t.Fatalf("a dry run touched the pins: %+v %v", rep, err)
+	}
+}
+
 func TestPruneRejectsNegativeKeep(t *testing.T) {
 	svc, _, _ := pruneFixture(t)
 	is(t, "TESTING_PRUNE_INVALID")(svc.Prune(ctx, -1, 2))
@@ -237,5 +274,121 @@ func TestAutoPruneIsSilentOnlyWhenNothingWasDeletedOrSkipped(t *testing.T) {
 	log, err := os.ReadFile(logPath)
 	if err != nil || !strings.Contains(string(log), "skipped checkouts: 1 run dirs have no readable run.json (run_broken)") || !strings.Contains(string(log), "pruned: 0 checkouts, 0 runs") {
 		t.Fatalf("comment.log = %q, %v", log, err)
+	}
+}
+
+// pinnedMirror gives the fixture's repo a mirror whose pins are c1..c4 (the fake git lists them), and returns its path.
+func pinnedMirror(t *testing.T, svc *Service, root string) (*fakeRunner, string) {
+	t.Helper()
+	mirror := filepath.Join(root, "mirrors", "aoagents__agent-orchestrator.git")
+	writeFile(t, filepath.Join(mirror, "HEAD"), "ref: refs/heads/main\n")
+	var refs []string
+	for _, c := range []string{"1", "2", "3", "4"} {
+		refs = append(refs, keepRefs+strings.Repeat(c, 40))
+	}
+	f := &fakeRunner{gitOut: map[string]string{"for-each-ref --format=%(refname)": strings.Join(refs, "\n") + "\n"}}
+	svc.runner = f
+	return f, mirror
+}
+
+// An intake pins its commits before its run.json names them, so while one is in flight prune drops no pin at all.
+func TestPruneKeepsEveryPinWhileAnIntakeIsInFlight(t *testing.T) {
+	svc, root, _ := pruneFixture(t)
+	f, _ := pinnedMirror(t, svc, root)
+	svc.mu.Lock()
+	done, err := svc.markBusy("run_intake", "intake")
+	svc.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Prune(ctx, 1, 1); err != nil || f.count("update-ref -d") != 0 || f.count("gc") != 0 {
+		t.Fatalf("a pin was dropped under an intake in flight: %v\n%q", err, f.calls)
+	}
+	done()
+	if _, err := svc.Prune(ctx, 1, 1); err != nil || f.count("update-ref -d") != 2 || f.count("gc --prune=now --quiet") != 1 { // c1 and c4: no checkout and no unfinished run holds them
+		t.Fatalf("the pins stayed after the intake ended: %v\n%q", err, f.calls)
+	}
+}
+
+// A mirror in use (an intake's fetch, a prepare's clone) is skipped, with its line, and nothing in it is touched.
+func TestPruneSkipsTheCleanupWhenTheMirrorIsBusy(t *testing.T) {
+	svc, root, _ := pruneFixture(t)
+	f, mirror := pinnedMirror(t, svc, root)
+	mu := svc.mirrorLock(mirror)
+	mu.Lock()
+	rep, err := svc.Prune(ctx, 1, 1)
+	mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "skipped mirrors/aoagents__agent-orchestrator.git: " + errMirrorBusy.Error(); !slices.Contains(rep.Lines, want) {
+		t.Fatalf("lines %q lack %q", rep.Lines, want)
+	}
+	if n := f.count("for-each-ref") + f.count("update-ref") + f.count("gc"); n != 0 {
+		t.Fatalf("a busy mirror was touched: %q", f.calls)
+	}
+}
+
+// A submit's retention pass only drops the pins and marks the mirror due; the daemon's sweep runs git gc, and only when
+// no verb is in flight and the mirror is free.
+func TestAutoPruneOnlyUnpinsAndTheSweepCleansWhenIdle(t *testing.T) {
+	svc, root, recent := pruneFixture(t)
+	f, mirror := pinnedMirror(t, svc, root)
+	rep, err := svc.prune(ctx, 1, 1, false, recent.ID)
+	if want := "dropped 2 pinned commits from mirrors/aoagents__agent-orchestrator.git and will be cleaned when nothing is running"; err != nil || !slices.Contains(rep.Lines, want) {
+		t.Fatalf("err %v lines %q", err, rep.Lines)
+	}
+	if f.count("gc") != 0 || !pathExists(filepath.Join(mirror, gcDueFile)) {
+		t.Fatalf("submit's pass cleaned the mirror or did not mark it due: %q", f.calls)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc.mu.Lock()
+	done, err := svc.markBusy("run_other", "prepare")
+	svc.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SweepMirrors(ctx, log) // a verb is in flight
+	done()
+	mu := svc.mirrorLock(mirror)
+	mu.Lock()
+	svc.SweepMirrors(ctx, log) // the mirror is held
+	mu.Unlock()
+	if f.count("gc") != 0 {
+		t.Fatalf("the sweep cleaned a busy daemon or mirror: %q", f.calls)
+	}
+	svc.SweepMirrors(ctx, log)
+	svc.SweepMirrors(ctx, log) // already clean
+	if n := f.count("gc --prune=now --quiet"); n != 1 || pathExists(filepath.Join(mirror, gcDueFile)) {
+		t.Fatalf("git gc ran %d times, due mark left %v: %q", n, pathExists(filepath.Join(mirror, gcDueFile)), f.calls)
+	}
+}
+
+// A clone that was killed leaves <name>.git.tmp; prune removes it unless the clone that owns it is still running.
+func TestPruneRemovesHalfMadeMirrorsButNotOneBeingBuilt(t *testing.T) {
+	svc, root, _ := pruneFixture(t)
+	svc.runner = &fakeRunner{}
+	mirrors := filepath.Join(root, "mirrors")
+	stale, building, whole := filepath.Join(mirrors, "acme__old.git.tmp"), filepath.Join(mirrors, "acme__busy.git.tmp"), filepath.Join(mirrors, "acme__done.git")
+	writeFile(t, filepath.Join(stale, "objects", "pack", "p.pack"), strings.Repeat("x", 5000))
+	writeFile(t, filepath.Join(building, "HEAD"), "ref: refs/heads/main\n")
+	writeFile(t, filepath.Join(whole, "HEAD"), "ref: refs/heads/main\n")
+	busy := svc.mirrorLock(svc.store.mirrorDir("acme/busy")) // the lock a clone of acme/busy holds
+	busy.Lock()
+	line := "mirrors/acme__old.git.tmp (left by an interrupted clone)"
+	rep, err := svc.PruneDryRun(ctx, 1, 1)
+	if err != nil || !slices.Contains(rep.Lines, "would remove "+line) || !pathExists(stale) {
+		t.Fatalf("dry run: err %v lines %q, stale exists %v", err, rep.Lines, pathExists(stale))
+	}
+	rep, err = svc.Prune(ctx, 1, 1)
+	if err != nil || !slices.Contains(rep.Lines, "removed "+line) || rep.BytesFreed < 5000 {
+		t.Fatalf("prune: err %v lines %q freed %d", err, rep.Lines, rep.BytesFreed)
+	}
+	if pathExists(stale) || !pathExists(building) || !pathExists(whole) {
+		t.Fatalf("stale exists %v, the one being built exists %v, the whole mirror exists %v", pathExists(stale), pathExists(building), pathExists(whole))
+	}
+	busy.Unlock() // the clone is over and left its dir: the next pass takes it
+	if _, err := svc.Prune(ctx, 1, 1); err != nil || pathExists(building) {
+		t.Fatalf("a dir no clone owns any more stayed: %v", err)
 	}
 }

@@ -23,13 +23,13 @@ func TestToolPolicyListsAndRunDir(t *testing.T) {
 			t.Errorf("%s is not allowed", a)
 		}
 	}
-	for _, d := range []string{"Bash(git push:*)", "Bash(gh pr comment:*)", "Bash(gh pr review:*)", "Bash(gh api:*)", "Bash(gh pr update-branch:*)", "Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)", "Bash(ao stop:*)"} {
+	for _, d := range []string{"Bash(git push:*)", "Bash(gh pr comment:*)", "Bash(gh pr review:*)", "Bash(gh api:*)", "Bash(gh pr update-branch:*)", "Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)", "Bash(ao stop:*)", "Bash(gh auth:*)", "Bash(ao testing post:*)", "Bash(ao testing prune:*)", "Read(**/litmus/runs/run_*/comment.md)", "Read(**/litmus/runs/run_*/verdict.md)"} {
 		if !slices.Contains(denied, d) {
 			t.Errorf("%s is not denied", d)
 		}
 	}
 	for _, d := range denied {
-		if !strings.HasPrefix(d, "Bash(") {
+		if !strings.HasPrefix(d, "Bash(") && !strings.HasPrefix(d, "Read(**/litmus/runs/run_*/") {
 			t.Errorf("a whole tool is denied: %s", d)
 		}
 	}
@@ -230,4 +230,22 @@ func TestSweepDiscardsARunThatWaitedAWeekForApproval(t *testing.T) {
 		t.Fatalf("comment.log = %q", log)
 	}
 	is(t, "TESTING_NOT_AWAITING")(svc.Post(ctx, "run_s1"))
+}
+
+// RefuseTester names the verbs only the user may run; a session with a run or a spawn marker is a tester.
+func TestRefuseTesterRefusesARunsOwnSession(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if err := store.Save(Run{ID: "run_ao-1", SessionID: "ao-1"}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(store, nil)
+	err := s.RefuseTester("ao-1", "post")
+	if err == nil || !strings.Contains(err.Error(), "post") {
+		t.Fatalf("tester session not refused: %v", err)
+	}
+	for _, id := range []string{"", "ao-orch"} {
+		if err := s.RefuseTester(id, "post"); err != nil {
+			t.Errorf("session %q refused: %v", id, err)
+		}
+	}
 }

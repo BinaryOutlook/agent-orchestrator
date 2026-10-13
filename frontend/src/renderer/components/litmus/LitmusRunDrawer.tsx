@@ -57,6 +57,14 @@ export function LitmusRunDrawer({
 								) : null}
 							</div>
 							{run.error ? <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{run.error}</p> : null}
+							{run.run.gaps?.length ? (
+								<section aria-labelledby="litmus-gaps-heading" data-testid="litmus-gaps">
+									<h3 id="litmus-gaps-heading" className="mb-2 text-xs font-medium text-muted-foreground">{t("litmus.drawer.gaps", { count: run.run.gaps.length })}</h3>
+									<ul className="list-disc space-y-1 pl-5 text-sm">
+										{run.run.gaps.map((gap) => <li key={gap}>{gap}</li>)}
+									</ul>
+								</section>
+							) : null}
 							{awaiting ? (
 								<div className="flex flex-wrap items-center gap-2 rounded-md border border-border p-3" data-testid="litmus-approval">
 									<p className="mr-auto text-xs text-muted-foreground">{t("litmus.drawer.awaitingHint")}</p>

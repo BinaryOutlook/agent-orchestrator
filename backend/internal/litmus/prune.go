@@ -232,11 +232,72 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 			remove(filepath.Join(s.store.root, r.ID), "", &rep.Runs, "run")
 		}
 	}
+	if !dry && len(unreadable) == 0 && ctx.Err() == nil {
+		mirrors, _ := filepath.Glob(filepath.Join(root, "mirrors", "*.git"))
+		for _, mirror := range mirrors {
+			n, err := s.unpin(ctx, mirror, func() map[string]bool { return s.neededCommits(mirror) }, current == "") // a submit's pass only unpins; the daemon's sweep cleans after
+			if errors.Is(err, errMirrorBusy) {
+				rep.Lines = append(rep.Lines, fmt.Sprintf("skipped mirrors/%s: %v", filepath.Base(mirror), err))
+			} else if err != nil {
+				fail(fmt.Sprintf("skipped mirrors/%s: %v", filepath.Base(mirror), err), err)
+			} else if n > 0 {
+				cleaned := map[bool]string{true: "and will be cleaned when nothing is running", false: "and cleaned it"}[current != ""]
+				rep.Lines = append(rep.Lines, fmt.Sprintf("dropped %d pinned commits from mirrors/%s %s", n, filepath.Base(mirror), cleaned))
+			}
+		}
+	}
+	if ctx.Err() == nil { // a clone that was killed leaves its half-made mirror behind; a running one holds the lock
+		removed, freed, err := s.sweepMirrorTmp(filepath.Join(root, "mirrors"), dry)
+		for _, name := range removed {
+			rep.Lines = append(rep.Lines, fmt.Sprintf("%s mirrors/%s (left by an interrupted clone)", map[bool]string{true: "would remove", false: "removed"}[dry], name))
+		}
+		rep.BytesFreed += freed
+		if err != nil {
+			fail("failed to remove a half-made mirror: "+err.Error(), err)
+		}
+	}
 	rep.Lines = append(rep.Lines, rep.Summary())
 	if len(errs) > 0 {
 		return rep, fmt.Errorf("prune: %d paths could not be removed: %s", len(errs), strings.Join(errs, "; "))
 	}
 	return rep, nil
+}
+
+// neededCommits are the commits a mirror must keep pinned: those of its remaining checkouts (by dir name) and of every
+// unfinished run of its repo. A run dir that cannot be read, or an intake still in flight (its commits are pinned
+// before its run.json names them), keeps every pin ("*"). Called under the mirror lock.
+func (s *Service) neededCommits(mirror string) map[string]bool {
+	keep := map[string]bool{}
+	s.mu.Lock()
+	for k := range s.busy {
+		if strings.HasSuffix(k, " intake") { // its commits are pinned but not yet in run.json
+			keep["*"] = true
+		}
+	}
+	s.mu.Unlock()
+	name := strings.TrimSuffix(filepath.Base(mirror), ".git")
+	dirs, _ := filepath.Glob(filepath.Join(filepath.Dir(filepath.Dir(mirror)), "repos", name, "*"))
+	for _, d := range dirs {
+		if !asideDir(d) {
+			keep[strings.ToLower(filepath.Base(d))] = true
+		}
+	}
+	s.mu.Lock()
+	runs, unreadable := s.sortedRuns()
+	s.mu.Unlock()
+	for _, r := range runs {
+		if (!finishedRun(r) || len(unreadable) > 0) && strings.ReplaceAll(r.Repo, "/", "__") == name {
+			for _, sha := range []string{r.HeadSHA, r.BaseSHA} {
+				if sha != "" {
+					keep[strings.ToLower(sha)] = true
+				}
+			}
+		}
+	}
+	if len(unreadable) > 0 {
+		keep["*"] = true
+	}
+	return keep
 }
 
 // loadForPrune reads every run.json; dirs whose run.json cannot be read are returned by name so they are kept.

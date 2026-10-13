@@ -735,6 +735,12 @@ func Run() error {
 			repo = litmus.RepoSlug(got.Project.Config.CanonicalRepoURL)
 		}
 		return repo
+	}).WithProjectHarness(func(ctx context.Context, projectID string) string {
+		got, err := projectSvc.Get(ctx, domain.ProjectID(projectID))
+		if err != nil || got.Project == nil || got.Project.Config == nil {
+			return ""
+		}
+		return string(got.Project.Config.Worker.Harness)
 	}).WithReporter(func(ctx context.Context, sessionID, note string) error {
 		_, err := reportSvc.Create(ctx, reportsvc.CreateInput{SessionID: domain.SessionID(sessionID), State: domain.ReportDone, Note: note})
 		return err
@@ -1145,6 +1151,7 @@ func Run() error {
 					return
 				case <-ticker.C:
 					testingService.SweepExpired(ctx, killTester, log)
+					go testingService.SweepMirrors(ctx, log) // a cleanup can take minutes: it must not hold up the next expiry sweep
 				}
 			}
 		}()

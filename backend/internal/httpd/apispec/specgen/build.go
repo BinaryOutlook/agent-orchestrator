@@ -875,7 +875,7 @@ func testingOperations() []operation {
 		post("/start", "startTesting", "Spawn a worker that tests a pull request", litmus.Started{}),
 		{method: http.MethodGet, path: "/api/v1/testing/status", id: "getTestingStatus", tag: "testing", summary: "Get the calling session's run and its checks",
 			pathParams: []any{controllers.TestingStatusQuery{}}, resps: append([]respUnit{{http.StatusOK, litmus.RunStatus{}}}, errs...)},
-		post("/intake", "intakeTesting", "Pin a pull request and start the run's 15 minute budget", litmus.Run{}),
+		post("/intake", "intakeTesting", "Pin a pull request; the run's 25 minute budget starts when the builds are ready", litmus.Run{}),
 		post("/prepare", "prepareTesting", "Prepare the base and head clones and builds", litmus.Run{}),
 		post("/launch", "launchTesting", "Launch a private copy of the base or head build", litmus.Run{}),
 		post("/checks", "addTestingCheck", "Add a check with the observable the worker expects", litmus.Check{}),

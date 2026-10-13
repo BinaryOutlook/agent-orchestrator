@@ -12,9 +12,15 @@ import (
 	"time"
 )
 
-// Harness is the only agent a testing worker may run on: its tool lists and
-// dontAsk mode are enforced by that adapter alone.
+// Harness is the agent a testing worker runs on when nothing else is chosen. Claude Code enforces the tool lists
+// and dontAsk mode of ToolPolicy; HarnessCodex has no such lists, so only GuardEnv and the skill's rules bind it.
 const Harness = "claude-code"
+
+// HarnessCodex is the other agent a testing worker may run on.
+const HarnessCodex = "codex"
+
+// Supported reports whether a testing worker may run on harness.
+func Supported(harness string) bool { return harness == Harness || harness == HarnessCodex }
 
 // SpawnRequest is what the daemon needs to launch one testing worker.
 type SpawnRequest struct {
@@ -33,7 +39,8 @@ const ShellRule = "You have a normal shell and the usual tools: run any command,
 // ExploreRule is the sentence that tells the tester it is driving a real app and may reach for settings.
 const ExploreRule = "Explore the app the way a user would: menus, settings, modes. If a feature hides behind a setting, turn the setting on and say so in your note."
 
-// StartRequest names the PR to test. An empty Harness means claude-code.
+// StartRequest names the PR to test. An empty Harness means the project's Litmus setting, then its worker harness when
+// that is supported, then claude-code.
 type StartRequest struct {
 	ProjectID  string
 	Harness    string
@@ -54,6 +61,27 @@ func (s *Service) WithSpawner(sp Spawner) *Service {
 	return s
 }
 
+// defaultHarness is the harness of a start that names none: the project's Litmus setting, else its worker harness when
+// testers can run on it, else claude-code.
+func (s *Service) defaultHarness(ctx context.Context, projectID string) (string, error) {
+	if projectID == "" {
+		return Harness, nil
+	}
+	ps, err := s.store.projectSettings(projectID)
+	if err != nil {
+		return "", fmt.Errorf("litmus settings of project %s: %w", projectID, err)
+	}
+	if ps.Harness != "" {
+		return ps.Harness, nil
+	}
+	if s.projectHarness != nil {
+		if worker := s.projectHarness(ctx, projectID); Supported(worker) {
+			return worker, nil
+		}
+	}
+	return Harness, nil
+}
+
 // Start spawns a testing worker for a PR. It holds no run: the worker's intake does.
 func (s *Service) Start(ctx context.Context, req StartRequest) (Started, error) {
 	repo, number, err := ParsePR(req.PRURL)
@@ -62,16 +90,18 @@ func (s *Service) Start(ctx context.Context, req StartRequest) (Started, error) 
 	}
 	harness := strings.TrimSpace(req.Harness)
 	if harness == "" {
-		harness = Harness
+		if harness, err = s.defaultHarness(ctx, strings.TrimSpace(req.ProjectID)); err != nil {
+			return Started{}, err
+		}
 	}
-	if harness != Harness {
-		return Started{}, invalid("TESTING_HARNESS_UNSUPPORTED", fmt.Sprintf("testing workers run on %s only, not %q", Harness, harness))
+	if !Supported(harness) {
+		return Started{}, invalid("TESTING_HARNESS_UNSUPPORTED", fmt.Sprintf("testing workers run on %s or %s, not %q", Harness, HarnessCodex, harness))
 	}
 	if s.spawn == nil {
 		return Started{}, conflict("TESTING_SPAWN_UNAVAILABLE", "this daemon cannot spawn testing workers")
 	}
 	if s.resolve != nil { // refuse here, not three tool calls into the worker's run
-		if _, err := s.localCheckout(ctx, repo); err != nil {
+		if err := s.localCheckout(ctx, repo); err != nil {
 			return Started{}, err
 		}
 	}

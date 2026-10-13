@@ -2708,6 +2708,8 @@
 	"litmus.drawer.checks": "检查项",
 	"litmus.drawer.noChecks": "未记录检查项。",
 	"litmus.drawer.verdict": "结论详情",
+	"litmus.drawer.gaps_one": "{{count}} 项缺失",
+	"litmus.drawer.gaps_other": "{{count}} 项缺失",
 	"litmus.checks.name": "检查",
 	"litmus.checks.leg": "构建",
 	"litmus.checks.legHead": "PR 构建",

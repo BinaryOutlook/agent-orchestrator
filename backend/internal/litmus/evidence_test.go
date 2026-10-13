@@ -33,6 +33,9 @@ func (g *evGit) Run(_ context.Context, dir string, _ []string, name string, args
 		g.t.Fatalf("unexpected command %s", name)
 	}
 	line := strings.Join(args, " ")
+	if len(args) > 2 && args[0] == "-C" && args[2] == "for-each-ref" { // the retention pass lists the mirror's pins (`git -C <mirror> for-each-ref ...`); it is not evidence work
+		return nil, nil
+	}
 	g.calls = append(g.calls, dir+"|"+line)
 	for k, err := range g.failOnce {
 		if strings.Contains(line, k) {
@@ -198,7 +201,7 @@ func TestPushEvidenceCreatesAnOrphanBranchOrContinuesTheRemoteOne(t *testing.T) 
 	svc, g, run, stage := evRun(t, EvidencePost)
 	clone := filepath.Join(svc.store.dataDir(), "litmus", "evidence", "o__r")
 	names := []string{"c1-head-1.png", "head.gif"}
-	msg := "litmus: evidence for #7 run run_s1"
+	msg := "litmus: evidence for PR 7 run run_s1"
 
 	sha, err := svc.pushEvidence(ctx, run, stage, names) // the remote has no litmus/evidence: an orphan
 	wantNew := []string{
@@ -291,7 +294,7 @@ func TestSubmitPublishesEvidenceAndEmbedsIt(t *testing.T) {
 			}
 			suffix := map[bool]string{false: "", true: "?raw=true"}[c.private == "true"]
 			for _, want := range []string{"![base branch on the left, PR build on the right](" + c.prefix + "list-shown-main-vs-pr.png" + suffix + ")", "![PR build](" + c.prefix + "scrolls-pr.png" + suffix + ")",
-				"<details><summary>Recordings and every screenshot</summary>", "![PR build recording](" + c.prefix + "pr.gif" + suffix + ")", "![base branch recording](" + c.prefix + "main.gif" + suffix + ")", "(under a minute)."} {
+				"<details><summary>Recordings and every screenshot</summary>", "![PR build recording](" + c.prefix + "pr.gif" + suffix + ")", "![base branch recording](" + c.prefix + "main.gif" + suffix + ")", "(builds under a minute, testing under a minute)."} {
 				if !strings.Contains(string(body), want) {
 					t.Errorf("comment lacks %q:\n%s", want, body)
 				}
@@ -361,7 +364,8 @@ func TestNoEvidenceAndOlderRunsPublishNothing(t *testing.T) {
 
 func TestStartNoEvidenceSetsTheRunsMode(t *testing.T) {
 	ids := []string{"s8", "s9"}
-	svc := New(NewStore(t.TempDir()), nil).WithGH(fixtureGH(t)).WithSpawner(func(context.Context, SpawnRequest) (string, error) {
+	svc, _ := newSvc(t)
+	svc.WithSpawner(func(context.Context, SpawnRequest) (string, error) {
 		id := ids[0]
 		ids = ids[1:]
 		return id, nil
@@ -429,7 +433,7 @@ func TestRenderCommentWithImagesGolden(t *testing.T) {
 
 **Result: the fix works; fine to merge from my side. One check only ran on the PR build.**
 
-I did not run main: main has no setting for the last model.
+I compared 1 check on main; 1 was not run there: last model.
 
 I checked that the Go back and Go forward arrows show next to the brand. On the PR build, both buttons are there, and Go back works. On main, there are no arrows at all.
 
@@ -503,7 +507,7 @@ func TestEvidenceFailureReasonHidesLocalPaths(t *testing.T) {
 	if strings.Contains(ev.state, "/data/ao") || strings.Contains(strings.Join(ev.limits, "\n"), "/data/ao") {
 		t.Fatalf("path leaked: %q %q", ev.state, ev.limits)
 	}
-	if !strings.Contains(ev.state, "<data>/litmus/evidence/o__r") {
+	if !strings.Contains(ev.state, "<data dir>/litmus/evidence/o__r") {
 		t.Fatalf("state = %q", ev.state)
 	}
 }

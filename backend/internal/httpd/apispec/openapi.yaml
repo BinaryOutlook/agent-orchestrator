@@ -9816,7 +9816,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: Pin a pull request and start the run's 15 minute budget
+      summary: Pin a pull request; the run's 25 minute budget starts when the builds
+        are ready
       tags:
       - testing
   /api/v1/testing/launch:
@@ -14428,6 +14429,17 @@ components:
       - name
       - files
       type: object
+    LitmusInFlight:
+      properties:
+        seconds:
+          format: double
+          type: number
+        verb:
+          type: string
+      required:
+      - verb
+      - seconds
+      type: object
     LitmusIssueRef:
       properties:
         number:
@@ -14477,10 +14489,18 @@ components:
           type: array
         exit:
           type: integer
+        failing:
+          type: boolean
         leg:
           type: string
+        notBuilt:
+          type: boolean
         output:
           type: string
+        ran:
+          type:
+          - "null"
+          - integer
         receipt:
           type: string
         seconds:
@@ -17179,17 +17199,6 @@ components:
       - endpoint
       - socketDir
       type: object
-    TestingInFlight:
-      properties:
-        seconds:
-          description: How long the verb has been running.
-          type: number
-        verb:
-          type: string
-      required:
-      - verb
-      - seconds
-      type: object
     TestingLeg:
       properties:
         buildManifest:
@@ -17238,6 +17247,21 @@ components:
           description: When on, a finished run writes its comment and waits for approval
             instead of posting it.
           type: boolean
+        effort:
+          description: Reasoning effort the project's testers run at. Empty uses the
+            project's worker effort, then the Litmus default.
+          type: string
+        harness:
+          description: 'Agent the project''s testers run on: claude-code or codex.
+            Empty uses the project''s worker agent, then claude-code.'
+          enum:
+          - claude-code
+          - codex
+          type: string
+        model:
+          description: Model the project's testers run on. Empty uses the project's
+            worker model, then the Litmus default.
+          type: string
       required:
       - askBeforePosting
       type: object
@@ -17267,10 +17291,22 @@ components:
           type: string
         consoleTail:
           type: string
+        exit:
+          type:
+          - "null"
+          - integer
+        failing:
+          type: boolean
         leg:
           type: string
+        notBuilt:
+          type: boolean
         outputPath:
           type: string
+        ran:
+          type:
+          - "null"
+          - integer
         seq:
           type: integer
         targetName:
@@ -17392,12 +17428,15 @@ components:
           - pass
           - fail
           - partial
+          - absent
           - skipped
           type: string
         runId:
           description: 'rerun only: the run whose pull request is tested again.'
           type: string
         sessionId:
+          description: the calling session; start, post and prune refuse it when it
+            is a Litmus tester's own session.
           type: string
         skipBase:
           description: 'submit only: why the base was not run; lets a submit through
@@ -17456,6 +17495,10 @@ components:
           type: string
         evidenceState:
           type: string
+        gaps:
+          items:
+            type: string
+          type: array
         headSha:
           type: string
         id:
@@ -17472,6 +17515,10 @@ components:
           type: integer
         projectId:
           type: string
+        ready:
+          items:
+            type: string
+          type: array
         repo:
           type: string
         repoId:
@@ -17599,9 +17646,8 @@ components:
             $ref: '#/components/schemas/TestingCheck'
           type: array
         inFlight:
-          description: Long verbs still running for the run (prepare, launch, submit, cleanup) and for how long, so a poller can tell a long build from a stuck one.
           items:
-            $ref: '#/components/schemas/TestingInFlight'
+            $ref: '#/components/schemas/LitmusInFlight'
           type: array
         run:
           $ref: '#/components/schemas/TestingRun'

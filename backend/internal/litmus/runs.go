@@ -45,6 +45,13 @@ type ProjectSettings struct {
 	// AskBeforePosting makes a run stop at awaiting-approval with its comment written, until the comment is posted or
 	// discarded.
 	AskBeforePosting bool `json:"askBeforePosting" description:"When on, a finished run writes its comment and waits for approval instead of posting it."`
+	// Harness is the agent the project's testers run on. Empty falls back to the project's worker harness when testers
+	// can run on it, then to claude-code.
+	Harness string `json:"harness,omitempty" description:"Agent the project's testers run on: claude-code or codex. Empty uses the project's worker agent, then claude-code." enum:"claude-code,codex"`
+	// Model and Effort are what the project's testers run on. Empty falls back to the project's worker settings, then to
+	// TesterModel (claude-code only) and TesterEffort.
+	Model  string `json:"model,omitempty" description:"Model the project's testers run on. Empty uses the project's worker model, then the Litmus default."`
+	Effort string `json:"effort,omitempty" description:"Reasoning effort the project's testers run at. Empty uses the project's worker effort, then the Litmus default."`
 }
 
 // RunPR names the pull request a run tests.
@@ -178,6 +185,12 @@ func (s *Store) sessionProject(sessionID string) string {
 	return strings.TrimSpace(string(data))
 }
 
+// LoadProjectSettings reads a project's Litmus preferences from the data dir without a Service, for the session
+// manager that spawns the tester.
+func LoadProjectSettings(dataDir, projectID string) (ProjectSettings, error) {
+	return NewStore(dataDir).projectSettings(projectID)
+}
+
 // ProjectSettings returns the project's Litmus preferences.
 func (s *Service) ProjectSettings(_ context.Context, projectID string) (ProjectSettings, error) {
 	return s.store.projectSettings(projectID)
@@ -185,13 +198,23 @@ func (s *Service) ProjectSettings(_ context.Context, projectID string) (ProjectS
 
 // SetProjectSettings replaces the project's Litmus preferences. A run that closes afterwards obeys them.
 func (s *Service) SetProjectSettings(_ context.Context, projectID string, ps ProjectSettings) (ProjectSettings, error) {
+	if ps.Harness = strings.TrimSpace(ps.Harness); ps.Harness != "" && !Supported(ps.Harness) {
+		return ps, invalid("TESTING_HARNESS_UNSUPPORTED", fmt.Sprintf("testing workers run on %s or %s, not %q", Harness, HarnessCodex, ps.Harness))
+	}
 	return ps, s.store.setProjectSettings(projectID, ps)
 }
 
-// mustAsk reports whether the run's comment waits for approval: its project asks before posting, and there is a comment
-// to post (the run was not started with --no-comment and the verdict is not blocked).
+// mustAsk reports whether the run's comment waits for approval: there is a comment to post (the run was not started
+// with --no-comment and the verdict is not blocked) and either the run never read the PR's words, or its project asks
+// before posting.
 func (s *Service) mustAsk(run Run, v Verdict) bool {
-	if run.Comment != CommentPost || v.Overall == CheckBlocked || run.ProjectID == "" {
+	if run.Comment != CommentPost || v.Overall == CheckBlocked {
+		return false
+	}
+	if run.noWords() { // a verdict made without knowing what the PR claims never lands on the PR by itself
+		return true
+	}
+	if run.ProjectID == "" {
 		return false
 	}
 	ps, err := s.store.projectSettings(run.ProjectID)
