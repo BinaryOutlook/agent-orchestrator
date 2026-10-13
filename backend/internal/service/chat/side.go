@@ -241,6 +241,12 @@ func (m *sideManager) claim(ctx context.Context, runID string) error {
 	}
 	var retiredRuntimes []*sideRuntime
 	m.mu.Lock()
+	if !m.started {
+		if err := m.recoverForkRecords(ctx, runID); err != nil {
+			m.mu.Unlock()
+			return fmt.Errorf("recover side fork cleanup: %w", err)
+		}
+	}
 	m.runID = runID
 	for _, side := range retired {
 		if cancel := m.restoring[side.ID]; cancel != nil {
@@ -671,8 +677,21 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 				return
 			}
 		}
+		m.store.CompleteSideHostCleanup(cleanupCtx, side.ID)
 		m.deleteRegisteredFork(cleanupCtx, side, providerID)
 	}()
+	recordFork := func(recordCtx context.Context, id string) error {
+		providerID = id
+		side.ProviderForkID = id
+		if err := m.writeForkRecord(recordCtx, side, id, false); err != nil {
+			return err
+		}
+		if err := m.store.RegisterSideFork(recordCtx, side.ID, side.Generation, id, m.service.now()); err != nil {
+			return err
+		}
+		m.announce(side.ID)
+		return nil
+	}
 	if side.ContextMode == "native" {
 		if forker, ok := driver.(ports.ChatIsolatedForker); ok {
 			anchor := side.NativeAnchorID
@@ -680,11 +699,11 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 				SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
 				WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 				Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
-				ProviderScopeID: side.ID, ProviderIDsScoped: true,
+				ProviderScopeID: side.ID, ProviderIDsScoped: true, RecordFork: recordFork,
 				AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
 			}
 			if anchor == "" {
-				forkConfig.AcquireForkSource = func(ctx context.Context) (func(), error) {
+				forkConfig.AcquireForkSource = func(ctx context.Context) (context.Context, func(), error) {
 					return m.service.lockCurrentSide(ctx, side)
 				}
 			}
@@ -713,7 +732,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		return
 	}
 	if providerID != "" {
-		if err := m.store.RegisterSideFork(ctx, side.ID, side.Generation, providerID, m.service.now()); err != nil {
+		if err := recordFork(ctx, providerID); err != nil {
 			m.failOpen(side, err)
 			return
 		}
@@ -745,13 +764,17 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		return
 	}
 	side.ProviderForkID = providerID
+	if err := m.writeForkRecord(ctx, side, providerID, true); err != nil {
+		m.failOpen(side, err)
+		return
+	}
 	attached = m.attach(side, conv)
 	m.announce(side.ID)
 }
 
 func (m *sideManager) failOpen(side domain.SideConversation, err error) {
 	m.service.log.Warn("side chat opening failed", "side", side.ID, "error", err)
-	if side.ProviderForkID == "" && errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+	if side.ProviderForkID != "" || errors.Is(err, ports.ErrChatRecoveryInconclusive) {
 		err = fmt.Errorf("%w: %w", ErrSidePolicyRecreate, err)
 	}
 	_ = m.store.SetSideFailed(context.Background(), side.ID, side.Generation, err.Error(), m.service.now())
@@ -1874,15 +1897,23 @@ func (m *sideManager) deleteRegisteredFork(ctx context.Context, side domain.Side
 	}
 	deleter, ok := source.conv.(ports.ChatForkDeleter)
 	if !ok {
-		_ = m.store.CompleteSideProviderCleanup(ctx, id)
+		if err := m.removeForkRecord(ctx, side, id); err == nil {
+			_ = m.store.CompleteSideProviderCleanup(ctx, id)
+		}
 		return
 	}
 	if err := deleter.DeleteFork(ctx, id); err != nil {
 		if errors.Is(err, ports.ErrChatCapabilityUnavailable) {
-			_ = m.store.CompleteSideProviderCleanup(ctx, id)
+			if err := m.removeForkRecord(ctx, side, id); err == nil {
+				_ = m.store.CompleteSideProviderCleanup(ctx, id)
+			}
 			return
 		}
 		m.service.log.Warn("side provider cleanup deferred", "side", side.ID, "error", err)
+		return
+	}
+	if err := m.removeForkRecord(ctx, side, id); err != nil {
+		m.service.log.Warn("side fork cleanup record removal failed", "side", side.ID, "error", err)
 		return
 	}
 	_ = m.store.CompleteSideProviderCleanup(ctx, id)

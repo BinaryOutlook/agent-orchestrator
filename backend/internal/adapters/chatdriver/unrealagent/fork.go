@@ -35,10 +35,11 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 	if err := d.validateLaunchAuth(ctx, cfg.Env); err != nil {
 		return nil, err
 	}
+	operationCtx := ctx
 	var release func()
 	if cfg.AcquireForkSource != nil {
 		var err error
-		release, err = cfg.AcquireForkSource(ctx)
+		ctx, release, err = cfg.AcquireForkSource(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -47,8 +48,16 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 	if release != nil {
 		release()
 	}
+	ctx = operationCtx
 	if err != nil {
 		return nil, err
+	}
+	if cfg.RecordFork != nil {
+		if err := cfg.RecordFork(context.WithoutCancel(ctx), id); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			return nil, errors.Join(err, deleteNativeFork(cleanupCtx, cfg.DataDir, sourceID, id))
+		}
 	}
 	conv, err := d.Resume(ctx, ports.ChatResumeConfig{
 		SessionID: cfg.SessionID, ProviderConversationID: id, DataDir: cfg.DataDir,

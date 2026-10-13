@@ -112,8 +112,11 @@ func (m *memorySideStore) export(runID string) []SideRecoveryRecord {
 			Activities: append([]domain.SideActivity(nil), m.activities[id]...), Draft: m.drafts[id]})
 	}
 	for _, side := range m.hostCleanup {
+		if _, open := m.sides[side.ID]; open {
+			continue
+		}
 		if side.AppRunID == runID {
-			out = append(out, SideRecoveryRecord{CleanupOnly: true, HostStopped: m.hostStopped[side.ID], Side: side, ProviderHostID: side.ProviderHostID, ProviderForkID: side.ProviderForkID})
+			out = append(out, SideRecoveryRecord{CleanupOnly: true, Harness: side.Harness, HostStopped: m.hostStopped[side.ID], Side: side, ProviderHostID: side.ProviderHostID, ProviderForkID: side.ProviderForkID})
 		}
 	}
 	return out
@@ -154,6 +157,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 				return nil, ErrSideUnavailable
 			}
 			side.AppRunID = runID
+			side.Harness = record.Harness
 			side.ProviderHostID, side.ProviderForkID = record.ProviderHostID, record.ProviderForkID
 			m.hostCleanup[side.ID] = side
 			m.hostStopped[side.ID] = record.HostStopped
@@ -187,7 +191,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		} else {
 			side.State = "recovering"
 		}
-		if side.PolicyVersion != sidePolicyVersion || side.BoundaryState == "uncertain" || side.BoundaryState == "pending" {
+		if side.RecreateRequired || side.PolicyVersion != sidePolicyVersion || side.BoundaryState == "uncertain" || side.BoundaryState == "pending" {
 			side.State = "failed"
 			side.ErrorMessage = ErrSidePolicyRecreate.Error()
 			side.RecreateRequired = true
@@ -231,6 +235,9 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		m.drafts[side.ID] = record.Draft
 		if side.ProviderForkID != "" {
 			m.cleanup[side.ProviderForkID] = domain.SideProviderCleanup{ForkID: side.ProviderForkID, SessionID: side.SessionID, Harness: side.Harness}
+		}
+		if side.RecreateRequired && side.ProviderForkID != "" {
+			m.hostCleanup[side.ID] = side
 		}
 		created = append(created, side)
 	}
@@ -418,6 +425,9 @@ func (m *memorySideStore) SetSideFailed(_ context.Context, id, generation, messa
 		s.ErrorMessage = message
 		s.RecreateRequired = strings.HasPrefix(message, ErrSidePolicyRecreate.Error())
 		s.UpdatedAt = now
+		if s.RecreateRequired && s.ProviderForkID != "" {
+			m.hostCleanup[id] = *s
+		}
 	})
 }
 func (m *memorySideStore) CloseSideConversation(_ context.Context, id string, now time.Time) (domain.SideConversation, error) {
@@ -467,6 +477,12 @@ func (m *memorySideStore) CompleteSideProviderCleanup(_ context.Context, id stri
 			delete(m.hostStopped, sideID)
 		}
 	}
+	for sideID, side := range m.sides {
+		if side.ProviderForkID == id && side.State == "failed" && side.RecreateRequired {
+			side.ProviderForkID = ""
+			m.sides[sideID] = side
+		}
+	}
 	delete(m.cleanup, id)
 	return nil
 }
@@ -475,7 +491,7 @@ func (m *memorySideStore) SideProviderCleanupPending(_ context.Context) ([]domai
 	defer m.mu.Unlock()
 	openForks := make(map[string]bool, len(m.sides))
 	for _, side := range m.sides {
-		if side.ClosedAt == nil && side.ProviderForkID != "" {
+		if side.ClosedAt == nil && side.ProviderForkID != "" && !(side.State == "failed" && side.RecreateRequired) {
 			openForks[side.ProviderForkID] = true
 		}
 	}

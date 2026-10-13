@@ -111,52 +111,71 @@ func sideCurrentAnchor(rows ConversationRows, source *Controller, anchor string)
 	return false
 }
 
-func (s *Service) lockCurrentSide(ctx context.Context, side domain.SideConversation) (func(), error) {
+func (s *Service) lockCurrentSide(ctx context.Context, side domain.SideConversation) (context.Context, func(), error) {
 	source, release, err := s.workingController(ctx, side.SessionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	gate := s.controllerGate(domain.SessionConversationOwner(side.SessionID))
 	if err := gate.lock(ctx); err != nil {
 		release()
-		return nil, err
+		return nil, nil, err
 	}
 	current, err := s.Controller(side.SessionID)
 	if err != nil || current != source || source.harness != side.Harness || source.conv.ProviderConversationID() != side.SourceProviderID {
 		gate.unlock()
 		release()
-		return nil, ErrSideAnchorUnavailable
+		return nil, nil, ErrSideAnchorUnavailable
 	}
 	// The service gate waits ordinary commands; sendMu also fences a command
 	// admitted before that gate and automatic queue dispatch.
 	if source.busy() {
 		gate.unlock()
 		release()
-		return nil, ErrSideAnchorUnavailable
+		return nil, nil, ErrSideAnchorUnavailable
 	}
 	source.sendMu.Lock()
 	unlock := func() { source.sendMu.Unlock(); gate.unlock(); release() }
 	if err := ctx.Err(); err != nil {
 		unlock()
-		return nil, err
+		return nil, nil, err
 	}
 	rows, err := s.reader.LoadConversationSnapshot(ctx, source.conversation.ID)
 	if err != nil {
 		unlock()
-		return nil, err
+		return nil, nil, err
 	}
 	if !sideCurrentAnchor(rows, source, side.AnchorTurnID) {
 		unlock()
-		return nil, ErrSideAnchorUnavailable
+		return nil, nil, ErrSideAnchorUnavailable
 	}
 	if _, err := source.store.NextQueuedTurn(ctx, source.conversation.ID); !errors.Is(err, domain.ErrNoQueuedTurn) {
 		unlock()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return nil, ErrSideAnchorUnavailable
+		return nil, nil, ErrSideAnchorUnavailable
 	}
-	return unlock, nil
+	source.mu.Lock()
+	if source.interrupts != 0 {
+		source.mu.Unlock()
+		unlock()
+		return nil, nil, ErrSideAnchorUnavailable
+	}
+	copyCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	source.forkCancel, source.forkDone = cancel, done
+	source.mu.Unlock()
+	gate.unlock()
+	return copyCtx, func() {
+		cancel()
+		source.mu.Lock()
+		source.forkCancel, source.forkDone = nil, nil
+		close(done)
+		source.mu.Unlock()
+		source.sendMu.Unlock()
+		release()
+	}, nil
 }
 
 func (s *Service) sideSelfReferenceContext(ctx context.Context, side domain.SideConversation, ref ports.ChatExcerptReference) (string, string, error) {

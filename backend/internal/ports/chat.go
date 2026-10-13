@@ -299,7 +299,9 @@ type ChatStartConfig struct {
 	PrepareEnv func(context.Context) (map[string]string, error)
 	// AcquireForkSource locks a current-context source immediately before the
 	// provider copies it. Fork drivers release it before loading the child.
-	AcquireForkSource func(context.Context) (release func(), err error)
+	AcquireForkSource func(context.Context) (copyCtx context.Context, release func(), err error)
+	// RecordFork records an independent child before loading or activating it.
+	RecordFork func(context.Context, string) error
 	// Model is optional; empty defers to the provider's configured default.
 	Model string
 	// Effort is an optional provider-advertised model tuning value; empty

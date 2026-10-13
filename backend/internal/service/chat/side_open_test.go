@@ -40,10 +40,11 @@ func (d *connectedSideForkDriver) ForkIntoHost(ctx context.Context, source, anch
 			return nil, err
 		}
 	}
+	operationCtx := ctx
 	var release func()
 	if cfg.AcquireForkSource != nil {
 		var err error
-		release, err = cfg.AcquireForkSource(ctx)
+		ctx, release, err = cfg.AcquireForkSource(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -58,6 +59,12 @@ func (d *connectedSideForkDriver) ForkIntoHost(ctx context.Context, source, anch
 	}
 	if release != nil {
 		release()
+	}
+	ctx = operationCtx
+	if cfg.RecordFork != nil {
+		if err := cfg.RecordFork(ctx, "fork-"+string(cfg.SessionID)); err != nil {
+			return nil, err
+		}
 	}
 	if d.afterFork != nil {
 		if err := d.afterFork(ctx); err != nil {

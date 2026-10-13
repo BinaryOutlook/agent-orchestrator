@@ -339,3 +339,62 @@ func TestSideCurrentForkWaitsParentSendUntilCopyCompletes(t *testing.T) {
 		t.Fatal("send did not resume")
 	}
 }
+
+func TestSideCurrentForkCanBeStoppedOrKilled(t *testing.T) {
+	for _, action := range []string{"stop", "kill", "close-side"} {
+		t.Run(action, func(t *testing.T) {
+			h := newSideWorkflow(t, "", domain.HarnessKimi)
+			caps := productionCaps()
+			caps[ports.ChatCapabilityForkCurrent] = true
+			h.conv.setCapabilities(caps)
+			h.source(t)
+			started, cancelled := make(chan struct{}), make(chan struct{})
+			h.driver.onFork = func(ctx context.Context) error {
+				close(started)
+				<-ctx.Done()
+				close(cancelled)
+				return ctx.Err()
+			}
+			side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: action})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("fork did not start")
+			}
+			done := make(chan error, 1)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			go func() {
+				switch action {
+				case "stop":
+					done <- h.svc.Interrupt(ctx, testSession)
+				case "kill":
+					done <- h.svc.Stop(ctx, testSession)
+				case "close-side":
+					done <- h.svc.CloseIndependentSideChat(ctx, testSession, side.ID)
+				}
+			}()
+			select {
+			case err := <-done:
+				if err != nil && !errors.Is(err, chatsvc.ErrNoActiveTurn) {
+					t.Fatalf("%s: %v", action, err)
+				}
+			case <-ctx.Done():
+				t.Fatalf("%s waited for hung fork", action)
+			}
+			select {
+			case <-cancelled:
+			case <-ctx.Done():
+				t.Fatal("fork was not cancelled")
+			}
+			if action == "stop" {
+				if _, err := h.svc.Send(t.Context(), testSession, ports.ChatUserMessage{Text: "parent continues", ClientMessageID: "after-stop"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}

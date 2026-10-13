@@ -78,24 +78,28 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 	if d.cfg.SessionMeta != nil {
 		meta = d.cfg.SessionMeta(launchCfg)
 	}
+	operationCtx := ctx
 	var release func()
 	if cfg.AcquireForkSource != nil {
-		release, err = cfg.AcquireForkSource(ctx)
+		ctx, release, err = cfg.AcquireForkSource(ctx)
 		if err != nil {
 			conv.discard()
 			return nil, err
 		}
 	}
-	// Finish a sent copy even if the caller cancels, so its returned child ID
-	// can be deleted. ACP cannot reconcile a child whose reply never arrives.
-	forkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handshakeTimeout)
+	// Cancellation tears down the destination host before releasing the source.
+	forkCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 	resp, err := conv.conn.UnstableForkSession(forkCtx, acpsdk.UnstableForkSessionRequest{
 		SessionId: acpsdk.SessionId(sourceID), Cwd: cfg.WorkspacePath,
 		Meta: meta, AdditionalDirectories: additional, McpServers: forkMCP,
 	})
 	if release != nil {
-		release()
+		defer func() {
+			if release != nil {
+				release()
+			}
+		}()
 	}
 	if err != nil {
 		disconnected := false
@@ -106,7 +110,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		}
 		conv.discard()
 		if disconnected || errors.Is(err, context.DeadlineExceeded) || forkCtx.Err() != nil {
-			return nil, fmt.Errorf("%w: ACP fork outcome is unknown: %w", ports.ErrChatRecoveryInconclusive, err)
+			return nil, fmt.Errorf("%w: ACP fork outcome is unknown: %w", ports.ErrChatRecoveryInconclusive, errors.Join(err, forkCtx.Err()))
 		}
 		return nil, normalizeACPError("ACP session/fork", err)
 	}
@@ -116,13 +120,24 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		return nil, fmt.Errorf("ACP session/fork returned no independent session id")
 	}
 	conv.unadoptedForkID = childID
-	if err := ctx.Err(); err != nil {
-		conv.discard()
-		return nil, err
+	if release != nil {
+		release()
+		release = nil
 	}
+	ctx = operationCtx
 	reportedID := childID
 	if d.cfg.EncodeProviderConversationID != nil {
 		reportedID = d.cfg.EncodeProviderConversationID(childID)
+	}
+	if cfg.RecordFork != nil {
+		if err := cfg.RecordFork(context.WithoutCancel(operationCtx), reportedID); err != nil {
+			conv.discard()
+			return nil, fmt.Errorf("record ACP fork: %w", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		conv.discard()
+		return nil, err
 	}
 	// Some adapters persist a fork without activating it. Restore the child on
 	// this same host before applying settings or accepting its first prompt.
