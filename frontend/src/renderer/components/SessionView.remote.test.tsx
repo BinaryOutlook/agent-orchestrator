@@ -370,7 +370,7 @@ it.each([
 	expect(localGet).not.toHaveBeenCalled();
 });
 
-it("shows a preview tab after remote session data finishes loading", async () => {
+it("automatically reveals a remote preview after session data finishes loading", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
 	let previewStarted = false;
@@ -407,11 +407,12 @@ it("shows a preview tab after remote session data finishes loading", async () =>
 	releaseInitialSessions();
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	expect(sessionReads).toBe(1);
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]?.view).toBe("summary");
 	previewStarted = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith({ viewId: "test:remote:box-a:session-1", url: "http://ao-preview.localhost/" }));
-	await userEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
-	await userEvent.click(screen.getByRole("tab", { name: "Browser" }));
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]).toMatchObject({ view: "browser", isOpen: true, browserUnseen: false });
+	expect(useUiStore.getState().inspectorSessions["session-1"]).toBeUndefined();
 	await waitFor(() => expect(resolvePreview).toHaveBeenCalledWith("box-a", "session-1", "http://127.0.0.1:4600/"));
 	await waitFor(() => expect(screen.getByRole("textbox", { name: "Browser URL" })).toHaveValue("ao-preview.localhost"));
 	await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Browser tabs" })).getByRole("tab", { name: "QA preview" })).toBeVisible());
