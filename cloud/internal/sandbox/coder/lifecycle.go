@@ -3,6 +3,7 @@ package coder
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -47,6 +48,15 @@ const (
 	// the reconciler re-issues while the workspace winds down never runs the
 	// commands a second time.
 	cleanupRecordTTL = time.Hour
+	// cleanupInlineWait is how long one Delete waits for a Cleanup run before
+	// handing the workspace back to the reconciler. Most Cleanup commands
+	// finish within it, so the workspace is deleted in the same pass and a
+	// later tick is only needed for slow ones.
+	cleanupInlineWait = 5 * time.Second
+	// cleanupStaleAfter is added to a run's budget and margin before a run that
+	// never reported is treated as finished, so a lost or wedged run can never
+	// hold a deletion indefinitely.
+	cleanupStaleAfter = 30 * time.Second
 )
 
 // cleanupRun is one workspace build's Cleanup run. done closes when the run
@@ -54,6 +64,8 @@ const (
 type cleanupRun struct {
 	done    chan struct{}
 	started time.Time
+	// limit is how long the run may take before Delete stops waiting for it.
+	limit time.Duration
 }
 
 // cleanupRuns tracks Cleanup per workspace build in this control-plane
@@ -78,8 +90,9 @@ func (c *Client) addLifecycleEnvironment(environment map[string]string, workspac
 // cleanupFinished reports whether Delete may remove the workspace. The first
 // Delete of a running, reachable workspace starts the project's Cleanup
 // commands (the hook the worker installed) through the agent PTY in the
-// background and returns false; later calls return false until the run
-// finishes, then true. A workspace that is not running or reachable, or a
+// background and waits up to cleanupInlineWait for it; while the run is still
+// going Delete returns false and the reconciler re-issues it on a later tick.
+// A workspace that is not running or reachable, or a
 // client without a durable root, has nothing to clean up. Cleanup never
 // blocks deletion: a failure or a run over cleanupBudget is only reported as
 // a stage. Like local cleanup it runs only before permanent removal, never on
@@ -94,12 +107,7 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	}
 	key := string(id) + "/" + view.LatestBuild.ID
 	if existing, ok := cleanupRuns.Load(key); ok {
-		select {
-		case <-existing.(*cleanupRun).done:
-			return true
-		default:
-			return false
-		}
+		return c.awaitCleanup(ctx, id, existing.(*cleanupRun))
 	}
 	agent, ok := c.selectAgent(view)
 	if normalizeState(view.LatestBuild.Status) != sandbox.StateRunning || !ok || !agentReady(agent) {
@@ -109,15 +117,15 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	if err != nil {
 		return true
 	}
-	run := &cleanupRun{done: make(chan struct{}), started: time.Now()}
-	if _, loaded := cleanupRuns.LoadOrStore(key, run); loaded {
-		return false
-	}
-	pruneCleanupRuns()
 	wait := c.cleanupWait
 	if wait <= 0 {
 		wait = cleanupBudget
 	}
+	run := &cleanupRun{done: make(chan struct{}), started: time.Now(), limit: wait + cleanupMargin}
+	if existing, loaded := cleanupRuns.LoadOrStore(key, run); loaded {
+		return c.awaitCleanup(ctx, id, existing.(*cleanupRun))
+	}
+	pruneCleanupRuns()
 	// Detached from the reconcile pass's cancellation, but keeping its stage
 	// observer so the outcome is still logged against the session.
 	runCtx := context.WithoutCancel(ctx)
@@ -126,6 +134,32 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 		defer close(run.done)
 		c.runCleanup(runCtx, ptyURL, wait, attrs)
 	}()
+	slog.InfoContext(ctx, "coder: running project cleanup before deleting the workspace",
+		"workspace_id", string(id), "budget", wait)
+	return c.awaitCleanup(ctx, id, run)
+}
+
+// awaitCleanup waits up to cleanupInlineWait for a Cleanup run and reports
+// whether Delete may proceed. A run past its own limit plus cleanupStaleAfter
+// counts as finished, so Cleanup can delay a deletion but never block it.
+func (c *Client) awaitCleanup(ctx context.Context, id sandbox.ID, run *cleanupRun) bool {
+	inline := c.cleanupInline
+	if inline <= 0 {
+		inline = cleanupInlineWait
+	}
+	timer := time.NewTimer(inline)
+	defer timer.Stop()
+	select {
+	case <-run.done:
+		return true
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+	if time.Since(run.started) > run.limit+cleanupStaleAfter {
+		slog.WarnContext(ctx, "coder: project cleanup never reported; deleting the workspace anyway",
+			"workspace_id", string(id), "started", run.started)
+		return true
+	}
 	return false
 }
 

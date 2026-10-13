@@ -1125,7 +1125,16 @@ func (s *Store) MarkWorkerSeen(
 						THEN 'running'
 					ELSE observed_state
 				END,
-				reconcile_after = now() + interval '30 seconds',
+				-- A live worker defers supervision, but never the deletion of its
+				-- own sandbox: the worker heartbeats until the compute is gone,
+				-- so pushing the row 30s out on every 20s heartbeat would keep a
+				-- deletion that needs another tick (Coder runs the project's
+				-- Cleanup before deleting) from ever being reconciled again.
+				reconcile_after = CASE
+					WHEN desired_state = 'deleted'
+						THEN LEAST(reconcile_after, now() + interval '30 seconds')
+					ELSE now() + interval '30 seconds'
+				END,
 				updated_at = now()
 			WHERE session_id = $1 AND org_id = $2`,
 			sessionID,

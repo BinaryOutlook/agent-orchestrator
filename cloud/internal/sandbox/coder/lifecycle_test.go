@@ -170,6 +170,7 @@ func newCleanupCoder(t *testing.T, buildStatus, status, output string) (*cleanup
 	client := newTestClient(t, server.URL, nil)
 	client.durableRoot = sandbox.CoderHomeDurableRoot
 	client.cleanupWait = 5 * time.Second
+	client.cleanupInline = 50 * time.Millisecond
 	return fake, client
 }
 
@@ -218,6 +219,46 @@ func TestDeleteRunsProjectCleanupOnceInTheBackground(t *testing.T) {
 	}
 	if !strings.Contains(command, `"$HOME"/.ao/worker/`+cleanupHookFile) {
 		t.Fatalf("hook command = %q", command)
+	}
+}
+
+// A Cleanup that finishes within the inline wait deletes the workspace in the
+// same Delete call. Staging found the second call never came: the worker keeps
+// heartbeating until its compute is gone, and each heartbeat pushed the
+// sandbox's next reconcile 30s out, so a deletion waiting for another tick was
+// never reconciled again.
+func TestDeleteAfterAQuickCleanupDeletesInTheSameCall(t *testing.T) {
+	t.Parallel()
+	fake, client := newCleanupCoder(t, "running", "0", "stack down")
+	client.cleanupInline = 5 * time.Second
+	close(fake.release)
+	if err := client.Delete(context.Background(), testWorkspaceID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	runs, transitions, _ := fake.snapshot()
+	if runs != 1 || len(transitions) != 1 || transitions[0] != "delete" {
+		t.Fatalf("hook runs = %d, transitions = %v; want the cleanup then the delete in one call", runs, transitions)
+	}
+}
+
+// A Cleanup run that never reports cannot hold a deletion past its own limit.
+func TestDeleteProceedsWhenCleanupNeverReports(t *testing.T) {
+	t.Parallel()
+	fake, client := newCleanupCoder(t, "running", "0", "")
+	defer close(fake.release)
+	key := string(testWorkspaceID) + "/" + fake.view.LatestBuild.ID
+	limit := time.Minute
+	cleanupRuns.Store(key, &cleanupRun{
+		done:    make(chan struct{}),
+		started: time.Now().Add(-(limit + cleanupStaleAfter + time.Second)),
+		limit:   limit,
+	})
+	t.Cleanup(func() { cleanupRuns.Delete(key) })
+	if err := client.Delete(context.Background(), testWorkspaceID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, transitions, _ := fake.snapshot(); len(transitions) != 1 || transitions[0] != "delete" {
+		t.Fatalf("transitions = %v; a wedged cleanup run blocked the delete", transitions)
 	}
 }
 
