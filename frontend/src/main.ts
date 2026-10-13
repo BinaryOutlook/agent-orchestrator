@@ -1320,6 +1320,15 @@ function ensureShellEnv(): Promise<void> {
 	return shellEnvPromise;
 }
 
+// The daemon spawn waits on this probe (0.2-2s), so start it with the process
+// rather than after the window opens. Windows probes the shell chosen in UI
+// settings, which are not loaded yet, so it still starts with the daemon.
+let earlyShellEnvProbe: Promise<void> | null = null;
+if (process.platform !== "win32") {
+	earlyShellEnvProbe = ensureShellEnv();
+	earlyShellEnvProbe.catch(() => undefined);
+}
+
 // One id per app launch, minted eagerly so every daemon spawn in this process
 // (including supervisor restarts) reports the same run. An explicit
 // AO_APP_RUN_ID in the environment wins, which lets a test or a wrapper pin it.
@@ -1807,6 +1816,17 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	await shellEnvReady;
 	if (startEpoch !== daemonStartEpoch) {
 		return daemonStatus;
+	}
+	// The early probe runs while Electron itself is starting, the busiest moment
+	// of launch. If it failed there, probe once more before settling for a bare
+	// PATH for the daemon's whole run.
+	if (!cachedShellEnv && earlyShellEnvProbe && shellEnvPromise === earlyShellEnvProbe) {
+		earlyShellEnvProbe = null;
+		shellEnvPromise = null;
+		await ensureShellEnv();
+		if (startEpoch !== daemonStartEpoch) {
+			return daemonStatus;
+		}
 	}
 
 	// Wedged-orphan kill+replace: both attach paths returned null, but a process
@@ -3230,9 +3250,15 @@ app.whenReady().then(async () => {
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
 	}
+	// Boot the daemon alongside the window, not after it: the board cannot show
+	// until the daemon answers. createWindow links the browser runtime itself
+	// when the daemon is already ready by the time the window exists. Windows
+	// keeps the old order until this path has been tried there.
+	const daemonStartsWithWindow = process.platform !== "win32";
+	if (daemonStartsWithWindow) void startDaemon();
 	await createWindow();
 	if (browserQuitRequested) return;
-	void startDaemon();
+	if (!daemonStartsWithWindow) void startDaemon();
 	initAutoUpdates();
 
 	// Windows/Linux: on first launch, the deep-link URL may arrive as a
