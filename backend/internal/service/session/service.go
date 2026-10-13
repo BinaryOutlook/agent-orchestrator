@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -873,6 +874,12 @@ func (s *Service) DeleteArtifacts(ctx context.Context, id domain.SessionID) erro
 	}
 	if s.artifactDeleter == nil {
 		return fmt.Errorf("delete artifacts %s: no artifact deleter", id)
+	}
+	// The deleter only touches <dataDir>/artifacts/<id>. A row whose files live
+	// elsewhere (written under another data dir) is refused rather than
+	// reported deleted while its files stay where the UI reads them.
+	if stored := rec.Metadata.ArtifactDir; stored != "" && filepath.Clean(stored) != sessionartifacts.Dir(s.dataDir, id) {
+		return fmt.Errorf("delete artifacts %s: artifact dir %q is outside the data dir", id, stored)
 	}
 	err = s.artifactDeleter.DeleteSession(ctx, id)
 	// Reconcile even after a failure: the files may already be gone while the

@@ -27,16 +27,8 @@ type ConfirmDialogProps = {
 	/** Defaults to "Cancel"; reversible actions can soften it to "No". */
 	cancelLabel?: string;
 	destructive?: boolean;
-	/**
-	 * A second, quieter way to confirm, rendered between cancel and confirm.
-	 * Destructive ones keep the quiet surface but take the destructive text color.
-	 */
-	secondaryAction?: {
-		label: string;
-		ariaLabel?: string;
-		destructive?: boolean;
-		onClick: () => void;
-	};
+	/** Options shown between the description and the buttons. */
+	children?: React.ReactNode;
 	busy?: boolean;
 	error?: string | null;
 	onConfirm: () => void;
@@ -55,7 +47,7 @@ export function ConfirmDialog({
 	confirmAriaLabel,
 	cancelLabel,
 	destructive,
-	secondaryAction,
+	children,
 	busy,
 	error,
 	onConfirm,
@@ -75,11 +67,7 @@ export function ConfirmDialog({
 		<Dialog open={open} onOpenChange={(next) => { if (busy && !next) return; onOpenChange(next); }}>
 			<DialogContent
 				showCloseButton={false}
-				className={cn(
-					settingsDialogContentClass,
-					// A third button does not fit the two-button width.
-					secondaryAction ? "w-[min(480px,calc(100vw-24px))]" : "w-[min(420px,calc(100vw-24px))]",
-				)}
+				className={cn(settingsDialogContentClass, "w-[min(420px,calc(100vw-24px))]")}
 				// React portals re-dispatch synthetic events up the React tree, not the
 				// DOM tree, so a confirm rendered from inside a clickable row or card
 				// would otherwise also trigger that ancestor's onClick (opening the very
@@ -109,39 +97,29 @@ export function ConfirmDialog({
 					</button>
 				</DialogClose>
 
-				<div className={cn(settingsDialogHeaderClass, "p-5 pr-12")}>
+				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
 					<DialogTitle className="settings-dialog-title text-base">{title}</DialogTitle>
 					<DialogDescription asChild>
 						<div className="text-control leading-5 text-settings-muted">{description}</div>
 					</DialogDescription>
 				</div>
 
+				{children ? <div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-3")}>{children}</div> : null}
+
 				{error ? (
-					<div className={cn(settingsDialogBodyClass, "p-5 py-3")}>
+					<div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-3")}>
 						<p role="alert" className="text-caption leading-4 text-error">
 							{error}
 						</p>
 					</div>
 				) : null}
 
-				<div className={cn(settingsDialogFooterClass, "gap-2 p-4")}>
+				<div className={cn(settingsDialogFooterClass, "gap-2 border-t-0 p-4 pt-1")}>
 					<DialogClose asChild>
 						<Button ref={cancelRef} type="button" variant="footer" className={compactButtonClass} disabled={busy}>
 							{cancelLabel ?? t("confirm.cancel")}
 						</Button>
 					</DialogClose>
-					{secondaryAction ? (
-						<Button
-							aria-label={secondaryAction.ariaLabel}
-							type="button"
-							variant="footer"
-							className={cn(compactButtonClass, secondaryAction.destructive && "text-destructive")}
-							disabled={busy}
-							onClick={secondaryAction.onClick}
-						>
-							{secondaryAction.label}
-						</Button>
-					) : null}
 					<Button
 						ref={confirmRef}
 						aria-label={confirmAriaLabel}

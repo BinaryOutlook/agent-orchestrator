@@ -769,35 +769,34 @@ describe("TopbarArchiveButton", () => {
 		});
 		const withArtifacts = (names: string[], outputType: WorkspaceSession["outputType"] = "artifact") =>
 			({ ...worker, outputType, artifactFiles: names.map(artifact) }) as WorkspaceSession;
+		const openDialog = async () => {
+			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
+			return screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		};
 
-		it("lists the artifacts and keeps them by default", async () => {
+		it("offers an unchecked delete box and keeps the artifacts by default", async () => {
 			renderKill(withArtifacts(["report.md", "notes.md"]));
 
-			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
-			const dialog = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
-			expect(dialog).toHaveTextContent("This session has 2 artifacts: report.md, notes.md.");
-			expect(dialog).toHaveTextContent("a restored session starts without them.");
-			expect(dialog).not.toHaveTextContent("pull request");
-			expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-			expect(within(dialog).getByRole("button", { name: "Archive session and delete its artifacts" })).toHaveTextContent(
-				"Delete artifacts",
-			);
-			const keep = within(dialog).getByRole("button", { name: "Archive, keep artifacts" });
-			await waitFor(() => expect(keep).toHaveFocus());
+			const dialog = await openDialog();
+			const box = within(dialog).getByRole("checkbox", { name: "Delete 2 artifacts" });
+			expect(box).not.toBeChecked();
+			expect(dialog).toHaveTextContent("Delete 2 artifactsThis can't be undone, and a restored session starts without them.");
+			expect(dialog).not.toHaveTextContent("report.md");
 
-			await userEvent.click(keep);
+			await clickKillDialogConfirm();
 
 			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 			expect(postMock.mock.calls[0]?.[1]).toEqual({ params: { path: { sessionId: "sess-1" } }, body: undefined });
 		});
 
-		it("asks the daemon to delete the artifacts from the delete button", async () => {
+		it("asks the daemon to delete the artifacts when the box is checked", async () => {
 			renderKill(withArtifacts(["report.md"]));
 
-			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
-			const dialog = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
-			expect(dialog).toHaveTextContent("This session has 1 artifact: report.md. Deleting it can't be undone");
-			await userEvent.click(within(dialog).getByRole("button", { name: "Archive session and delete its artifacts" }));
+			const dialog = await openDialog();
+			expect(dialog).toHaveTextContent("This can't be undone, and a restored session starts without it.");
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			expect(within(dialog).getByRole("button", { name: "Confirm, archive session" })).toHaveClass("bg-danger-strong");
+			await clickKillDialogConfirm();
 
 			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/kill", {
@@ -807,14 +806,27 @@ describe("TopbarArchiveButton", () => {
 			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		});
 
+		it("unchecks the box when the dialog opens again", async () => {
+			renderKill(withArtifacts(["report.md"]));
+
+			let dialog = await openDialog();
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			await userEvent.click(within(dialog).getByRole("button", { name: "No" }));
+
+			dialog = await openDialog();
+			expect(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" })).not.toBeChecked();
+			expect(postMock).not.toHaveBeenCalled();
+		});
+
 		it("warns when the daemon does not confirm the delete", async () => {
 			useUiStore.setState({ globalToasts: [] });
 			// A failed delete and an older daemon both answer without artifactsDeleted.
 			postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1" }, error: undefined });
 			renderKill(withArtifacts(["report.md"]));
 
-			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
-			await userEvent.click(screen.getByRole("button", { name: "Archive session and delete its artifacts" }));
+			const dialog = await openDialog();
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			await clickKillDialogConfirm();
 
 			await waitFor(() =>
 				expect(useUiStore.getState().globalToasts).toEqual([
@@ -832,33 +844,15 @@ describe("TopbarArchiveButton", () => {
 			postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1", artifactsDeleted: true }, error: undefined });
 			const { queryClient } = renderKill(withArtifacts(["report.md"]));
 
-			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
-			await userEvent.click(screen.getByRole("button", { name: "Archive session and delete its artifacts" }));
+			const dialog = await openDialog();
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			await clickKillDialogConfirm();
 
 			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 			await waitFor(() =>
 				expect(queryClient.getMutationCache().getAll().map((mutation) => mutation.state.status)).toEqual(["success"]),
 			);
 			expect(useUiStore.getState().globalToasts).toEqual([]);
-		});
-
-		it("summarizes a long artifact list and notes that the PR is kept", async () => {
-			renderKill(withArtifacts(["a.md", "b.md", "c.md", "d.md", "e.md"], "pr_artifact"));
-
-			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
-			const dialog = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
-			expect(dialog).toHaveTextContent("This session has 5 artifacts: a.md, b.md, c.md and 2 more.");
-			expect(dialog).toHaveTextContent("Its pull request is not affected.");
-		});
-
-		it("cancels without archiving", async () => {
-			renderKill(withArtifacts(["report.md"]));
-
-			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
-			await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
-			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-			expect(postMock).not.toHaveBeenCalled();
 		});
 	});
 

@@ -5889,3 +5889,38 @@ func TestDeleteArtifactsRefusesLiveSession(t *testing.T) {
 		t.Fatalf("deleted = %v for a live session, want none", deleter.deleted)
 	}
 }
+
+func TestDeleteArtifactsRefusesAnArtifactDirOutsideTheDataDir(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(t.TempDir(), "old-data", "artifacts", "mer-1")},
+	}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err == nil {
+		t.Fatal("DeleteArtifacts succeeded, want a refusal")
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted = %v, want none", deleter.deleted)
+	}
+}
+
+func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
+	dataDir := t.TempDir()
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(dataDir, "artifacts", "mer-1")},
+	}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: dataDir, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 1 {
+		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
+	}
+}
