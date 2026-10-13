@@ -33,7 +33,7 @@ export const aoBridge: AoBridge =
 			onNextSessionShortcut: () => () => undefined,
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
-			onFocusTerminalShortcut: () => () => undefined,
+			onShortcut: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
@@ -51,6 +51,8 @@ export const aoBridge: AoBridge =
 		theme: {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
+			setWindowBackground: async () => undefined,
+			setWindowTranslucent: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -74,6 +76,7 @@ export const aoBridge: AoBridge =
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
+		sideChats: { capture: async () => undefined },
 		editorHandoff: {
 			getState: async () => ({
 				targets: [],
@@ -83,6 +86,9 @@ export const aoBridge: AoBridge =
 			}),
 			open: async () => {
 				throw new Error("Desktop app is required to open a workspace.");
+			},
+			copyWorkspacePath: async () => {
+				throw new Error("Desktop app is required to copy a workspace path.");
 			},
 		},
 		telemetry: {
@@ -96,6 +102,8 @@ export const aoBridge: AoBridge =
 		},
 		browser: {
 			nativeCompositionEnabled: false,
+			reconnectRuntime: async () => undefined,
+			getRuntimeState: async () => ({ connected: false }),
 			ensure: async (sessionId: string) => ({
 				viewId: `preview:${sessionId}`,
 				url: "",
@@ -157,6 +165,30 @@ export const aoBridge: AoBridge =
 				canGoForward: false,
 				isLoading: false,
 			}),
+			getFindState: async (viewId: string) => ({
+				viewId,
+				tabId: "t1",
+				query: "",
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
+			findInPage: async ({ viewId, query }) => ({
+				viewId,
+				tabId: "t1",
+				query,
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
+			stopFindInPage: async ({ viewId }) => ({
+				viewId,
+				tabId: "t1",
+				query: "",
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
 			captureScreenshot: async () => {
 				throw new Error("Desktop app is required to take a browser screenshot.");
 			},
@@ -176,7 +208,9 @@ export const aoBridge: AoBridge =
 			notifyPanelUsed: () => undefined,
 			notifyPanelBlur: () => undefined,
 			onFocusLocation: () => () => undefined,
+			onFindOpen: () => () => undefined,
 			onReopenClosedTab: () => () => undefined,
+			onClosePanel: () => () => undefined,
 			devtools: async ({ viewId, operation }) => ({
 				viewId,
 				open: operation !== "close",
@@ -188,9 +222,11 @@ export const aoBridge: AoBridge =
 			discardAnnotations: async () => undefined,
 			annotationAction: async () => undefined,
 			onNavState: () => () => undefined,
+			onFindState: () => () => undefined,
 			onPageFocus: () => () => undefined,
 			onTabsState: () => () => undefined,
 			onAgentActivity: () => () => undefined,
+			onRuntimeState: () => () => undefined,
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,
@@ -264,6 +300,9 @@ export const aoBridge: AoBridge =
 		// which is the truth there.
 		remotes: {
 			list: async () => [],
+			importAccountHost: async () => undefined,
+			pruneAccountHosts: async () => undefined,
+			issueAccountToken: async () => { throw new Error("remote hosts need the desktop app"); },
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,

@@ -26,7 +26,9 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 vi.mock("./ReadOnlyFileView", () => ({
-	ReadOnlyFileView: ({ detail, editing, onEditChange }: { detail: { content: string; path: string }; editing?: boolean; onEditChange?: (content: string) => void }) => editing ? (
+	ReadOnlyFileView: ({ detail, editing, onEditChange }: { detail: { content: string; path: string; imageMediaType?: string }; editing?: boolean; onEditChange?: (content: string) => void }) => detail.imageMediaType ? (
+		<img alt={detail.path} src="/api/v1/sessions/sess-1/workspace/file/blob" />
+	) : editing ? (
 		<textarea
 			aria-label={`Edit ${detail.path}`}
 			defaultValue={detail.content}
@@ -41,7 +43,7 @@ function renderWithQuery(children: ReactNode) {
 }
 
 function noopAnnotation(): FileAnnotationModel {
-	return { target: null, draft: "", status: "idle", error: "", begin: vi.fn(), setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
+	return { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
 }
 
 describe("FileContentPane", () => {
@@ -114,6 +116,13 @@ describe("FileContentPane", () => {
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
+	it("explains an outside-workspace path without fetching or offering Retry", () => {
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="/Users/me/notes/plan.md" sessionId="sess-1" split={false} />);
+		expect(screen.getByText("This file is outside the session's workspace, so it can't be opened here.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
+		expect(getMock).not.toHaveBeenCalled();
+	});
+
 	it("renders the diff view for a changed file", async () => {
 		getMock.mockResolvedValue({
 			data: {
@@ -162,6 +171,33 @@ describe("FileContentPane", () => {
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="README.md" sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByText("hello")).toBeInTheDocument();
+	});
+
+	it("renders an image without waiting for syntax highlighting", async () => {
+		highlightReadyMock.mockReturnValue(false);
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "assets/logo.png",
+				status: "unmodified",
+				additions: 0,
+				deletions: 0,
+				size: 128,
+				binary: true,
+				imageMediaType: "image/png",
+				deleted: false,
+				content: "",
+				contentTruncated: true,
+				diff: "",
+				diffTruncated: false,
+			},
+		});
+
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="assets/logo.png" sessionId="sess-1" split={false} />);
+
+		expect(await screen.findByRole("img", { name: "assets/logo.png" })).toBeInTheDocument();
+		expect(screen.queryByText("Loading files...")).not.toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows the filename instead of a redundant File tab for an untouched non-Markdown file", async () => {
@@ -420,7 +456,7 @@ describe("FileContentPane", () => {
 
 	it("anchors whole-file feedback below the focused header", async () => {
 		const model = noopAnnotation();
-		model.target = { path: "src/App.tsx", side: "file", scope: "combined", surface: "focused" };
+		model.targets = [{ path: "src/App.tsx", side: "file", scope: "combined", surface: "focused" }];
 		getMock.mockResolvedValue({
 			data: {
 				sessionId: "sess-1",

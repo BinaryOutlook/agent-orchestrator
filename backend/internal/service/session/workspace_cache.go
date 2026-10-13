@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -19,6 +21,9 @@ import (
 // only matters as a backstop for the brief window before that watcher
 // connects.
 const workspaceCacheTTL = 3 * time.Second
+
+// Shared inventories outlive individual readers, but never run indefinitely.
+const workspacePathsTimeout = 30 * time.Second
 
 type workspaceCacheKey struct {
 	session domain.SessionID
@@ -147,6 +152,9 @@ func (c *workspaceCache) invalidateSession(id domain.SessionID) {
 // compatible all-files endpoint. Content/status still comes from fresh reads.
 // Invalidation removes the publication token, including during a Git read.
 func (s *Service) workspacePaths(ctx context.Context, id domain.SessionID, root string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c := s.workspaceCache
 	if c == nil {
 		return gitLsFilesParts(ctx, root)
@@ -164,7 +172,7 @@ func (s *Service) workspacePaths(ctx context.Context, id domain.SessionID, root 
 	if paths, ok := get(); ok {
 		return paths, nil
 	}
-	v, err, _ := s.workspaceGroup.Do(key.String()+"\x00paths", func() (any, error) {
+	resultCh := s.workspaceGroup.DoChan(key.String()+"\x00paths", func() (any, error) {
 		if paths, ok := get(); ok {
 			return paths, nil
 		}
@@ -182,7 +190,10 @@ func (s *Service) workspacePaths(ctx context.Context, id domain.SessionID, root 
 		}
 		c.paths[key] = entry
 		c.mu.Unlock()
-		paths, loadErr := gitLsFilesParts(ctx, root)
+		// A disconnected reader must not cancel the inventory for other readers.
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workspacePathsTimeout)
+		defer cancel()
+		paths, loadErr := gitLsFilesParts(loadCtx, root)
 		c.mu.Lock()
 		if c.paths[key] == entry {
 			if loadErr != nil {
@@ -194,12 +205,18 @@ func (s *Service) workspacePaths(ctx context.Context, id domain.SessionID, root 
 		c.mu.Unlock()
 		return paths, loadErr
 	})
-	if err != nil {
-		return nil, err
+	var result singleflight.Result
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result = <-resultCh:
 	}
-	paths, ok := v.([]string)
+	if result.Err != nil {
+		return nil, result.Err
+	}
+	paths, ok := result.Val.([]string)
 	if !ok {
-		return nil, fmt.Errorf("workspacePaths: unexpected singleflight result type %T", v)
+		return nil, fmt.Errorf("workspacePaths: unexpected singleflight result type %T", result.Val)
 	}
 	return paths, nil
 }

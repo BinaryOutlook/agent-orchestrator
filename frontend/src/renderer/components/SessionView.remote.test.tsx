@@ -66,6 +66,7 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 		? { hostId: "box-b", label: "Box B", url, base: "http://127.0.0.1:4001" }
 		: { hostId: "box-a", label: "Box A", url, base: "http://127.0.0.1:4000" });
 	const posts: string[] = [];
+	const views: { url: string; active: boolean }[] = [];
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);
 		const path = new URL(request.url).pathname;
@@ -76,6 +77,10 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 		if (path.endsWith("/conversation/messages")) {
 			posts.push(request.url);
 			return Response.json({ state: "accepted", turnId: `turn-${host}` }, { status: 202 });
+		}
+		if (path.endsWith("/chat-view")) {
+			views.push({ url: request.url, active: (await request.json()).active });
+			return new Response(null, { status: 204 });
 		}
 		return Response.json({});
 	}));
@@ -101,6 +106,12 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 	boxB.unmount();
+	await waitFor(() => expect(views).toEqual(expect.arrayContaining([
+		{ url: "http://127.0.0.1:4000/api/v1/sessions/session-1/chat-view", active: true },
+		{ url: "http://127.0.0.1:4000/api/v1/sessions/session-1/chat-view", active: false },
+		{ url: "http://127.0.0.1:4001/api/v1/sessions/session-1/chat-view", active: true },
+		{ url: "http://127.0.0.1:4001/api/v1/sessions/session-1/chat-view", active: false },
+	])));
 });
 
 it("removes remote chat actions when its host disconnects, without falling back to local", async () => {
@@ -151,7 +162,7 @@ it("hides stale chat controls when the upstream daemon fails but its proxy remai
 	upstreamFailed = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toBeDefined();
-	expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument();
+	await waitFor(() => expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument());
 	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
 	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
 	expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
@@ -296,6 +307,13 @@ it("opens the frontend file from an absolute remote turn diff without a cwd", as
 		}));
 		if (url.pathname.endsWith("/workspace/manifest")) return Response.json({ sessionId: "session-1", workspaceVersion: "version-1", files, sections: { committed: [], staged: [], unstaged: [], untracked: files }, commits: [], summary: { additions: 2, deletions: 0, files: 2 }, truncated: false });
 		if (url.pathname.endsWith("/workspace/history")) return Response.json({ sessionId: "session-1", commits: [] });
+		// The daemon, which knows the worktree root, maps the absolute path; the
+		// file list alone cannot tell backend/src/index.ts from frontend/src/index.ts.
+		if (url.pathname.endsWith("/workspace/resolve")) {
+			return url.searchParams.get("path") === `/home/ao/.ao/data/worktrees/demo/session-1/${expectedPath}`
+				? Response.json({ sessionId: "session-1", kind: "workspace", path: expectedPath })
+				: Response.json({ sessionId: "session-1", kind: "outside", path: "" });
+		}
 		if (url.pathname.endsWith("/workspace/file")) {
 			fileRequests.push(url.searchParams.get("path") ?? "");
 			return url.searchParams.get("path") === expectedPath
@@ -309,6 +327,46 @@ it("opens the frontend file from an absolute remote turn diff without a cwd", as
 	await userEvent.click(await screen.findByRole("button", { name: "Open src/index.ts in Files" }));
 	await waitFor(() => expect(fileRequests).toContain(expectedPath));
 	expect(fileRequests.every((path) => path === expectedPath)).toBe(true);
+	expect(localGet).not.toHaveBeenCalled();
+});
+
+it.each([
+	["a daemon that places the path outside the session", () => Response.json({ sessionId: "session-1", kind: "outside", path: "" })],
+	["an older daemon without the resolve route", () => Response.json({ error: "Not found" }, { status: 404 })],
+])("does not open a same-named workspace file for an absolute Markdown link on %s", async (_name, resolveResponse) => {
+	HTMLElement.prototype.scrollTo = vi.fn();
+	localGet.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const files = [{ path: "README.md", status: "modified", additions: 1, deletions: 0, size: 4, binary: false }];
+	const resolveRequests: string[] = [];
+	const fileRequests: string[] = [];
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const url = new URL(request.url);
+		if (url.pathname.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (url.pathname.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", displayName: "Edit readme", harness: "codex", status: "working", mode: "chat", prs: [] }] });
+		if (url.pathname.endsWith("/conversation")) return Response.json(conversationBody({
+			turns: [{ id: "turn-1", state: "completed", requestedAt: "2026-09-28T00:00:00Z" }],
+			messages: [{ id: "message-1", turnId: "turn-1", role: "assistant", origin: "provider", text: "See [the other readme](/other-repo/README.md).", sequence: 1, revision: 0, streaming: false, createdAt: "2026-09-28T00:00:01Z" }],
+		}));
+		if (url.pathname.endsWith("/workspace/manifest")) return Response.json({ sessionId: "session-1", workspaceVersion: "version-1", files, sections: { committed: [], staged: [], unstaged: files, untracked: [] }, commits: [], summary: { additions: 1, deletions: 0, files: 1 }, truncated: false });
+		if (url.pathname.endsWith("/workspace/history")) return Response.json({ sessionId: "session-1", commits: [] });
+		if (url.pathname.endsWith("/workspace/resolve")) {
+			resolveRequests.push(url.searchParams.get("path") ?? "");
+			return resolveResponse();
+		}
+		if (url.pathname.endsWith("/workspace/file")) {
+			fileRequests.push(url.searchParams.get("path") ?? "");
+			return Response.json({ path: "README.md", diff: "", content: "session readme", binary: false, contentTruncated: false, diffTruncated: false });
+		}
+		throw new Error(`Unexpected request ${request.url}`);
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	await userEvent.click(await screen.findByRole("link", { name: "the other readme" }));
+	expect(await screen.findByText("This file is outside the session's workspace, so it can't be opened here.")).toBeInTheDocument();
+	expect(resolveRequests).toEqual(["/other-repo/README.md"]);
+	expect(fileRequests).toEqual([]);
 	expect(localGet).not.toHaveBeenCalled();
 });
 
@@ -681,6 +739,7 @@ it("opens the returned reviewer Chat when a remote review is triggered", async (
 });
 
 it("opens a TUI reviewer terminal through Box B's mux handle", async () => {
+	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-b", label: "Box B", url: "http://box-b:3001", base: "http://127.0.0.1:4001" });
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);
@@ -736,7 +795,7 @@ it("opens a shell tab on Box B without attaching a local or Box A terminal", asy
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("switches a remote Terminal session through its host and fences worker input while pending", async () => {
+it("switches a remote Terminal session through its host and leaves the terminal for Chat at once", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -765,7 +824,8 @@ it("switches a remote Terminal session through its host and fences worker input 
 	await userEvent.click(await screen.findByRole("button", { name: "Session actions" }));
 	await userEvent.click(await screen.findByRole("menuitem", { name: "Switch to chat UI" }));
 	await waitFor(() => expect(posts).toEqual([{ url: "http://127.0.0.1:4000/api/v1/sessions/session-1/interface-transition", body: { targetMode: "chat", policy: "drain", historyPolicy: "strict" } }]));
-	await waitFor(() => expect(terminal).toHaveAttribute("data-input-disabled", "true"));
+	await waitFor(() => expect(terminal).not.toBeInTheDocument());
+	expect(await screen.findByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });

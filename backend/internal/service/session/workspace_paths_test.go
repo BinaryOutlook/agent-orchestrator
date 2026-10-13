@@ -2,8 +2,12 @@ package session
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -151,5 +155,96 @@ func TestWorkspaceFileRevisionLiveReadResolvesRegisteredChildRoot(t *testing.T) 
 	}
 	if len(data) > 0 {
 		t.Fatalf("child live read unexpectedly ran Git: %s", data)
+	}
+}
+
+// Hold the actual Git subprocess open so cancellation happens during a shared
+// inventory read, rather than racing a fast local repository scan.
+func TestWorkspacePathsCancellationDoesNotCancelSharedInventory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Git gate uses a POSIX shell")
+	}
+	root := newWorkspaceRepo(t)
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := t.TempDir()
+	started, release := filepath.Join(gate, "started"), filepath.Join(gate, "release")
+	wrapper := fmt.Sprintf("#!/bin/sh\n: > %q\nwhile [ ! -e %q ]; do sleep 0.01; done\nexec %q \"$@\"\n", started, release, git)
+	if err := os.WriteFile(filepath.Join(gate, "git"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+	t.Setenv("PATH", gate+string(os.PathListSeparator)+os.Getenv("PATH"))
+	trace := filepath.Join(gate, "trace")
+	t.Setenv("GIT_TRACE", trace)
+	s := &Service{workspaceCache: newWorkspaceCache(workspaceCacheTTL, nil)}
+	leaderCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	leader := make(chan error, 1)
+	go func() {
+		_, err := s.workspacePaths(leaderCtx, "session", root)
+		leader <- err
+	}()
+	deadline := time.After(5 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("shared Git scan did not start")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	// A later reader also cancels its own wait while the first reader remains.
+	waiterCtx, stopWaiter := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer stopWaiter()
+	if _, err := s.workspacePaths(waiterCtx, "session", root); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting reader cancellation = %v", err)
+	}
+	select {
+	case err := <-leader:
+		t.Fatalf("waiting reader cancelled the leader: %v", err)
+	default:
+	}
+	cancel()
+	select {
+	case err := <-leader:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("leader cancellation = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled reader waited for the shared scan")
+	}
+	follower := make(chan error, 1)
+	go func() {
+		paths, err := s.workspacePaths(t.Context(), "session", root)
+		if err == nil && len(paths) == 0 {
+			err = errors.New("surviving reader received no inventory")
+		}
+		follower <- err
+	}()
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-follower:
+		if err != nil {
+			t.Fatalf("surviving reader failed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("surviving reader did not receive inventory")
+	}
+	if _, err := s.workspacePaths(t.Context(), "session", root); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(data), "built-in: git ls-files"); count != 1 {
+		t.Fatalf("inventory ran %d times after reader cancellation, want 1", count)
 	}
 }
