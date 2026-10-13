@@ -98,6 +98,39 @@ func runProjectSetup(
 	return failed
 }
 
+// projectScripts are the project's Setup and Cleanup commands (Project
+// settings > Scripts).
+type projectScripts struct {
+	PostCreate []string
+	PreRemove  []string
+}
+
+// refreshProjectScripts reads the project's current Setup and Cleanup
+// commands before a reopened session retries Setup, so a script fixed in
+// Project settings > Scripts is the one the retry runs, as a local retry reads
+// the current project config. The Cleanup hook is reinstalled with the current
+// commands too. If the control plane can't be read, the commands the worker
+// already has are kept.
+func refreshProjectScripts(
+	ctx context.Context,
+	logger *slog.Logger,
+	client *client,
+	dataDir, workspace string,
+	environment worker.SessionScriptEnvironment,
+	current projectScripts,
+) projectScripts {
+	response, err := client.reconnect(ctx)
+	if err != nil {
+		logger.Warn("project scripts: could not read the current Setup and Cleanup commands; retrying with the known ones", "error", err)
+		return current
+	}
+	refreshed := projectScripts{PostCreate: response.Launch.PostCreate, PreRemove: response.Launch.PreRemove}
+	if err := worker.WriteCleanupHook(dataDir, refreshed.PreRemove, workspace, environment); err != nil {
+		logger.Warn("reinstall project cleanup hook", "error", err)
+	}
+	return refreshed
+}
+
 // setupStartupFailure is the session startup error for a failed Setup run:
 // the step and its exit status, with the command's output as the detail.
 func setupStartupFailure(event worker.SetupEvent) worker.WorkspaceStartupEvent {

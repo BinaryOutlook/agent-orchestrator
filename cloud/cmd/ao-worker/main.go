@@ -425,6 +425,9 @@ func run(logger *slog.Logger) error {
 	// failure) so the agent never hangs.
 	go func() {
 		chatReadyClosed := false
+		// reopened records that the session was reopened after a failed start,
+		// so the retry reads the project's current Setup commands.
+		reopened := false
 		for {
 			err := workingDirectoryErr
 			if err == nil {
@@ -450,6 +453,7 @@ func run(logger *slog.Logger) error {
 			case <-runCtx.Done():
 				return
 			case <-checkoutRequested:
+				reopened = true
 			}
 		}
 		// Restore a previously deleted session's state before the agent launches.
@@ -463,8 +467,12 @@ func run(logger *slog.Logger) error {
 		// The project's Setup commands run last, in the prepared checkout, and
 		// gate the agent like the checkout does: a failed step keeps the agent
 		// from starting until the session is reopened.
+		scripts := projectScripts{PostCreate: bootstrap.Launch.PostCreate, PreRemove: bootstrap.Launch.PreRemove}
 		for {
-			failed := runProjectSetup(runCtx, logger, client, dataDir, bootstrap.Launch.PostCreate, workspace, scriptEnvironment)
+			if reopened {
+				scripts = refreshProjectScripts(runCtx, logger, client, dataDir, workspace, scriptEnvironment, scripts)
+			}
+			failed := runProjectSetup(runCtx, logger, client, dataDir, scripts.PostCreate, workspace, scriptEnvironment)
 			if failed == nil {
 				break
 			}
@@ -484,6 +492,7 @@ func run(logger *slog.Logger) error {
 			case <-runCtx.Done():
 				return
 			case <-checkoutRequested:
+				reopened = true
 			}
 		}
 		if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
