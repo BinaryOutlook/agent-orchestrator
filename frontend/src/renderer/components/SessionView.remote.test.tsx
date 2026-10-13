@@ -370,6 +370,36 @@ it.each([
 	expect(localGet).not.toHaveBeenCalled();
 });
 
+it("baselines previews separately when the same session ID is viewed on another host", async () => {
+	remoteConnect.mockImplementation(async (url: string) => url.includes("box-b")
+		? { hostId: "box-b", label: "Box B", url, base: "http://127.0.0.1:4001" }
+		: { hostId: "box-a", label: "Box A", url, base: "http://127.0.0.1:4000" });
+	const revisions = { "4000": 1, "4001": 5 };
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const url = new URL(input instanceof Request ? input.url : String(input));
+		if (url.pathname.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (url.pathname.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", previewUrl: "http://127.0.0.1:4600/", previewRevision: revisions[url.port as keyof typeof revisions], prs: [] }] });
+		if (url.pathname.endsWith("/conversation")) return Response.json(conversationBody());
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	await connectHost("http://box-b:3001");
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const view = renderRemoteSession(client);
+	await screen.findByRole("combobox", { name: "Message the agent" });
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]?.view).toBe("summary");
+	view.rerender(<QueryClientProvider client={client}>
+		<TooltipProvider><SessionTopbarProvider><SessionView hostId="box-b" sessionId="session-1" /></SessionTopbarProvider></TooltipProvider>
+	</QueryClientProvider>);
+	await waitFor(() => expect(client.getQueryData(remoteWorkspaceQueryKey("box-b"))).toBeDefined());
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-b")]?.view).toBe("summary");
+	revisions["4001"]++;
+	await act(async () => { await client.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-b") }); });
+	await waitFor(() => expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-b")]?.view).toBe("browser"));
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]?.view).toBe("summary");
+	expect(useUiStore.getState().inspectorSessions["session-1"]).toBeUndefined();
+});
+
 it("automatically reveals a remote preview after session data finishes loading", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
