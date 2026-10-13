@@ -32,6 +32,7 @@ export type CliLinkStatus = {
 	proposedVersion: string | null;
 	current: CliLinkCurrent;
 	message?: string;
+	pathIssue?: string;
 };
 
 export type CliLinkFailure = {
@@ -126,7 +127,7 @@ export function cliLinkSupport(input: {
 	if (input.platform !== "darwin" && input.platform !== "linux") {
 		return {
 			ok: false,
-			message: "This platform is not supported. The action only links /usr/local/bin/ao on macOS and Linux.",
+			message: "This platform is not supported. The action only links ao on macOS and Linux.",
 		};
 	}
 	return { ok: true };
@@ -157,6 +158,45 @@ async function readMarker(io: CliLinkIo, dataDir: string): Promise<Marker | null
 	}
 }
 
+export async function selectCliLinkDirectory(
+	io: CliLinkIo,
+	dataDir: string,
+	shellPath: string | undefined,
+	candidates: string[],
+): Promise<string> {
+	const allowed = new Set(candidates.map((directory) => io.resolve(directory)));
+	const marker = await readMarker(io, dataDir);
+	if (marker && allowed.has(io.parent(marker.linkPath)) && io.join(io.parent(marker.linkPath), CLI_LINK_NAME) === marker.linkPath) {
+		const stat = await io.lstat(marker.linkPath);
+		if (stat?.symbolicLink) {
+			const target = await io.readlink(marker.linkPath).catch(() => null);
+			if (target && (target.startsWith("/") ? target : io.resolve(io.join(io.parent(marker.linkPath), target))) === io.resolve(marker.targetPath)) {
+				return io.parent(marker.linkPath);
+			}
+		}
+	}
+	for (const entry of shellPath?.split(":") ?? []) {
+		if (!entry || !entry.startsWith("/")) continue;
+		const directory = io.resolve(entry);
+		if (!allowed.has(directory)) continue;
+		if (await io.canWrite(directory)) return directory;
+	}
+	return io.resolve(candidates[0] ?? CLI_LINK_DIRECTORY);
+}
+
+async function freshShellPathIssue(io: CliLinkIo, shellPath: string | undefined, linkPath: string): Promise<string | undefined> {
+	if (!shellPath) return undefined;
+	const directories = shellPath.split(":").filter((directory) => directory && directory.startsWith("/"));
+	const linkDirectory = io.parent(linkPath);
+	const position = directories.findIndex((directory) => io.resolve(directory) === linkDirectory);
+	if (position < 0) return `${linkDirectory} is not on the login shell PATH. Add it to PATH before linking.`;
+	for (const directory of directories.slice(0, position)) {
+		const candidate = io.join(directory, CLI_LINK_NAME);
+		if (await io.canExecute(candidate)) return `A fresh shell finds ${candidate} before ${linkPath}. Choose an earlier writable PATH directory or remove that command before linking.`;
+	}
+	return undefined;
+}
+
 async function classify(io: CliLinkIo, linkPath: string, appCliPath: string, marker: Marker | null): Promise<CliLinkCurrent & { managed: boolean }> {
 	const stat = await io.lstat(linkPath);
 	if (!stat) return { kind: "missing", managed: false };
@@ -185,6 +225,7 @@ export async function inspectCliLink(io: CliLinkIo, request: CliLinkRequest): Pr
 	let proposedTarget: string | null = null;
 	let proposedVersion: string | null = null;
 	let message: string | undefined;
+	const pathIssue = await freshShellPathIssue(io, request.shellPath, gated.linkPath);
 	if (await io.canExecute(request.appCliPath)) {
 		proposedTarget = io.resolve(request.appCliPath);
 		try {
@@ -211,19 +252,7 @@ export async function inspectCliLink(io: CliLinkIo, request: CliLinkRequest): Pr
 			? `Cannot write ${io.parent(gated.linkPath)}. This action will not change ownership or ask for a password.`
 			: `The link directory ${io.parent(gated.linkPath)} does not exist.`;
 	}
-	if (request.shellPath && current.kind !== "foreign") {
-		let winner: string | null = null;
-		for (const directory of request.shellPath.split(":")) {
-			if (!directory) continue;
-			const candidate = io.join(directory, CLI_LINK_NAME);
-			if (await io.canExecute(candidate)) { winner = candidate; break; }
-		}
-		if (winner && io.resolve(winner) !== gated.linkPath) {
-			message = [message, `A fresh shell finds ${winner} before ${gated.linkPath}. This link will be shadowed.`].filter(Boolean).join(" ");
-		} else if (!request.shellPath.split(":").some((directory) => directory && io.resolve(directory) === io.parent(gated.linkPath))) {
-			message = [message, `${io.parent(gated.linkPath)} is not on the login shell PATH.`].filter(Boolean).join(" ");
-		}
-	}
+	if (pathIssue) message = [message, pathIssue].filter(Boolean).join(" ");
 	return {
 		ok: true,
 		status: {
@@ -232,6 +261,7 @@ export async function inspectCliLink(io: CliLinkIo, request: CliLinkRequest): Pr
 			proposedVersion,
 			current,
 			message,
+			pathIssue,
 		},
 	};
 }
@@ -262,6 +292,9 @@ export async function linkCli(io: CliLinkIo, request: CliLinkRequest): Promise<C
 			linkPath: status.linkPath,
 			proposedTarget: status.proposedTarget,
 		});
+	}
+	if (status.pathIssue) {
+		return failure("unsupported", status.pathIssue, { linkPath: status.linkPath, proposedTarget: status.proposedTarget });
 	}
 	if (status.current.kind === "linked") {
 		return {

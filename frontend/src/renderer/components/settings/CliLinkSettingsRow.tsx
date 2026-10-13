@@ -62,7 +62,7 @@ function CliLinkSettingsRow() {
 	const status: CliLinkStatus | null = view?.ok ? view.status : null;
 	const foreign = status?.current.kind === "foreign";
 	const linked = status?.current.kind === "linked";
-	const canLink = Boolean(status && !foreign && !linked && status.proposedTarget);
+	const canLink = Boolean(status && !foreign && !linked && !status.pathIssue && status.proposedTarget);
 	const canUnlink = status?.current.kind === "linked" || status?.current.kind === "stale";
 	const detail = describeStatus((key, options) => String(t(key as never, options as never)), view, error);
 

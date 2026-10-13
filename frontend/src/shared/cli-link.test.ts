@@ -8,6 +8,7 @@ import {
 	CLI_LINK_MARKER_FILE,
 	inspectCliLink,
 	linkCli,
+	selectCliLinkDirectory,
 	unlinkCli,
 	type CliLinkIo,
 	type CliLinkRequest,
@@ -272,6 +273,44 @@ describe("cli link", () => {
 			appCliPath, linkDirectory, dataDir, shellPath: `${earlier}:${linkDirectory}`,
 		}));
 		expect(result.ok && result.status.message).toContain(path.join(earlier, "ao"));
+		expect(await linkCli(nodeCliLinkIo(), request({
+			appCliPath, linkDirectory, dataDir, shellPath: `${earlier}:${linkDirectory}`,
+		}))).toMatchObject({ ok: false, code: "unsupported" });
+		expect(await lstat(path.join(linkDirectory, "ao")).catch(() => null)).toBeNull();
+	});
+
+	it("selects a writable supported directory on the login PATH without changing the protected directory", async () => {
+		const { root, linkDirectory, dataDir, apps } = await layout();
+		const protectedDirectory = path.join(root, "protected");
+		await mkdir(protectedDirectory);
+		const io = nodeCliLinkIo();
+		const restricted: CliLinkIo = { ...io, canWrite: async (directory) => directory === protectedDirectory ? false : io.canWrite(directory) };
+		const shellPath = `${protectedDirectory}:${linkDirectory}`;
+		expect(await selectCliLinkDirectory(restricted, dataDir, shellPath, [protectedDirectory, linkDirectory])).toBe(linkDirectory);
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		expect(await linkCli(restricted, request({ appCliPath, linkDirectory, dataDir, shellPath }))).toMatchObject({ ok: true, linkPath: path.join(linkDirectory, "ao") });
+		expect(await lstat(path.join(protectedDirectory, "ao")).catch(() => null)).toBeNull();
+	});
+
+	it("keeps an existing AO managed link in its original directory for repair and unlink", async () => {
+		const { root, linkDirectory, dataDir, apps } = await layout();
+		const alternative = path.join(root, "alternative");
+		await mkdir(alternative);
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const io = nodeCliLinkIo();
+		const req = request({ appCliPath, linkDirectory, dataDir, shellPath: `${linkDirectory}:${alternative}` });
+		expect((await linkCli(io, req)).ok).toBe(true);
+		expect(await selectCliLinkDirectory(io, dataDir, `${alternative}:${linkDirectory}`, [alternative, linkDirectory])).toBe(linkDirectory);
+		expect(await unlinkCli(io, { ...req, confirmReplacement: true, expectedTarget: appCliPath })).toMatchObject({ ok: true, changed: true });
+		expect(await lstat(path.join(alternative, "ao")).catch(() => null)).toBeNull();
+	});
+
+	it("refuses to link when the selected directory is absent from the login PATH", async () => {
+		const { root, linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const req = request({ appCliPath, linkDirectory, dataDir, shellPath: path.join(root, "other") });
+		expect(await linkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: false, code: "unsupported" });
+		expect(await lstat(path.join(linkDirectory, "ao")).catch(() => null)).toBeNull();
 	});
 
 	it("rejects a stale target changed since the confirmation dialog opened", async () => {
