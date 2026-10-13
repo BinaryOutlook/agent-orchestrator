@@ -351,9 +351,18 @@ export interface CloudCpCoderTemplateParameterOption {
 	description?: string;
 }
 
+/** A problem Coder found with a parameter's value. */
+export interface CloudCpCoderTemplateParameterDiagnostic {
+	/** "error" or "warning". */
+	severity: string;
+	summary: string;
+	detail?: string;
+}
+
 /**
  * One rich parameter of a Coder template's active version
- * (GET /orgs/{orgId}/coder-templates/{templateId}/parameters).
+ * (GET /orgs/{orgId}/coder-templates/{templateId}/parameters, or POST
+ * .../parameters/evaluate with draft values).
  */
 export interface CloudCpCoderTemplateParameter {
 	name: string;
@@ -369,6 +378,8 @@ export interface CloudCpCoderTemplateParameter {
 	defaultValue?: string;
 	options?: CloudCpCoderTemplateParameterOption[];
 	order?: number;
+	/** Coder's problems with the value; only set when evaluated against draft values. */
+	diagnostics?: CloudCpCoderTemplateParameterDiagnostic[];
 }
 
 export interface CloudCpCoderTemplateParametersResponse {

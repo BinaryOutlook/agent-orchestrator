@@ -64,10 +64,12 @@ func (s *Server) updateProjectSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Coder template parameters require a project with a chosen Coder template.")
 			return
 		}
-		if unknown := s.unknownCoderTemplateParameters(
+		// The patch replaces the stored map as a whole, so it is the full set
+		// the template is evaluated with.
+		if problem := s.coderTemplateParameterProblem(
 			r.Context(), orgID, strings.TrimSpace(coderConfig.TemplateID), parameters, requestID(r),
-		); len(unknown) > 0 {
-			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", unknownCoderTemplateParametersMessage(unknown))
+		); problem != "" {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", problem)
 			return
 		}
 	}

@@ -290,10 +290,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		coderConfig = s.sanitizeCoderConfig(r.Context(), coderConfig, requestID(r))
 		// Template parameters must be ones the chosen template declares (best
 		// effort: only a readable parameter list can reject a name).
-		if unknown := s.unknownCoderTemplateParameters(
+		if problem := s.coderTemplateParameterProblem(
 			r.Context(), orgID, coderConfig.TemplateID, coderConfig.Parameters, requestID(r),
-		); len(unknown) > 0 {
-			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", unknownCoderTemplateParametersMessage(unknown))
+		); problem != "" {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", problem)
 			return
 		}
 		config, err = domain.MergeProjectCoderConfig(config, coderConfig)

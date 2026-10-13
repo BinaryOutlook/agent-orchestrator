@@ -1291,6 +1291,59 @@ paths:
                       $ref: "#/components/schemas/CoderTemplateParameter"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters/evaluate:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: evaluateCoderTemplateParameters
+      tags: [Providers]
+      description: >-
+        The template's parameters with the given draft values applied. A
+        template using Coder's dynamic parameters can declare a parameter only
+        for certain values of another (for example a custom repository URL once
+        "Other" is selected); evaluating with the draft values lists it, and
+        each parameter carries Coder's diagnostics for its value. A template on
+        Coder's classic parameter flow, or a Coder without dynamic parameters,
+        answers with the same static parameters as the GET. 403
+        provider_forbidden for organizations without Coder; 404
+        coder_template_not_found for an unknown template; 422 validation_error
+        for invalid values; 502 coder_unavailable when Coder cannot be read.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [values]
+              properties:
+                values:
+                  type: object
+                  description: Draft parameter values by name, encoded as in project config coder.parameters.
+                  additionalProperties:
+                    type: string
+      responses:
+        "200":
+          description: The template's parameters for these values, in Coder's order.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [parameters]
+                properties:
+                  parameters:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CoderTemplateParameter"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/bootstrap:
     post:
       operationId: bootstrapWorker
@@ -2755,6 +2808,21 @@ components:
                 type: string
         order:
           type: integer
+        diagnostics:
+          type: array
+          description: Coder's problems with the parameter's value; only set when evaluated against draft values.
+          items:
+            type: object
+            additionalProperties: false
+            required: [severity, summary]
+            properties:
+              severity:
+                type: string
+                description: '"error" or "warning".'
+              summary:
+                type: string
+              detail:
+                type: string
     OrgCoderConfig:
       type: object
       additionalProperties: false

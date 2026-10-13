@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCoderTemplateParameters } from "../hooks/useCoderTemplateParameters";
 import type { CloudCpCoderTemplateParameter } from "../lib/cloud-cp/types";
@@ -26,7 +26,10 @@ const EMPTY_OPTION_VALUE = "\u0000empty";
 /**
  * "Template options": the chosen Coder template's own parameters, prefilled
  * with their defaults. `overrides` holds only the values the user changed;
- * an edit back to the default drops its key. Renders nothing while loading,
+ * an edit back to the default drops its key. The parameters are evaluated with
+ * the current overrides, so one the template declares only for some value of
+ * another appears once that value is picked, and after an edit a value whose
+ * parameter no longer applies is dropped. Renders nothing while loading,
  * for a template without parameters, and for a control plane without the
  * parameters route (404). The caller decides it is a Coder project with a
  * template; this component only fetches once both ids are present.
@@ -48,8 +51,20 @@ export function CoderTemplateOptions({
 	footer?: ReactNode;
 }) {
 	const { t } = useTranslation();
-	const { parameters: all, isError } = useCoderTemplateParameters(orgId, templateId);
+	const { parameters: all, isError, settled } = useCoderTemplateParameters(orgId, templateId, true, overrides);
 	const parameters = editableTemplateParameters(all);
+	// Only an edit made here prunes values: a saved value is never dropped just
+	// because the form opened.
+	const edited = useRef(false);
+	useEffect(() => {
+		if (!edited.current || !settled || all.length === 0) return;
+		const declared = new Set(all.map((parameter) => parameter.name));
+		const stale = Object.keys(overrides).filter((name) => !declared.has(name));
+		if (stale.length === 0) return;
+		const next = { ...overrides };
+		for (const name of stale) delete next[name];
+		onChange(next);
+	}, [all, onChange, overrides, settled]);
 	const collapsible = parameters.length > COLLAPSE_AFTER;
 	const [open, setOpen] = useState(false);
 	if (isError) {
@@ -82,7 +97,11 @@ export function CoderTemplateOptions({
 							parameter={parameter}
 							value={effectiveParameterValue(parameter, overrides)}
 							disabled={disabled}
-							onChange={(value) => onChange(withParameterValue(overrides, parameter, value))}
+							problem={parameter.name in overrides ? valueProblem(parameter) : undefined}
+							onChange={(value) => {
+								edited.current = true;
+								onChange(withParameterValue(overrides, parameter, value));
+							}}
 						/>
 					))}
 				</div>
@@ -92,15 +111,23 @@ export function CoderTemplateOptions({
 	);
 }
 
+/** Coder's first error about a parameter's value, for showing under its field. */
+function valueProblem(parameter: CloudCpCoderTemplateParameter): string | undefined {
+	return parameter.diagnostics?.find((diagnostic) => diagnostic.severity === "error")?.summary?.trim() || undefined;
+}
+
 function TemplateParameterField({
 	parameter,
 	value,
 	disabled,
+	problem,
 	onChange,
 }: {
 	parameter: CloudCpCoderTemplateParameter;
 	value: string;
 	disabled?: boolean;
+	/** Coder's error about the current value, shown under the field. */
+	problem?: string;
 	onChange: (value: string) => void;
 }) {
 	const { t } = useTranslation();
@@ -118,8 +145,10 @@ function TemplateParameterField({
 			{mandatory ? <span className="sr-only">{t("coder.templateOptions.required")}</span> : null}
 		</Label>
 	);
+	const problemId = `${id}-problem`;
 	const hint = description ? <p id={hintId} className={onboardingFieldHintClass}>{description}</p> : null;
-	const describedBy = description ? hintId : undefined;
+	const problemText = problem ? <p id={problemId} className={onboardingFieldErrorClass} role="alert">{problem}</p> : null;
+	const describedBy = [description ? hintId : "", problem ? problemId : ""].filter(Boolean).join(" ") || undefined;
 
 	if (parameter.type === "bool") {
 		return (
@@ -135,6 +164,7 @@ function TemplateParameterField({
 					/>
 				</div>
 				{hint}
+				{problemText}
 			</div>
 		);
 	}
@@ -215,6 +245,7 @@ function TemplateParameterField({
 			{heading}
 			{hint}
 			{control}
+			{problemText}
 		</div>
 	);
 }

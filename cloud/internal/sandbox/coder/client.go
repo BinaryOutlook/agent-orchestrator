@@ -389,6 +389,9 @@ type TemplateParameter struct {
 	DefaultValue string                    `json:"defaultValue"`
 	Options      []TemplateParameterOption `json:"options"`
 	Order        int                       `json:"order"`
+	// Diagnostics are Coder's problems with the parameter's value; only an
+	// evaluation against draft values (EvaluateTemplateParameters) sets them.
+	Diagnostics []TemplateParameterDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // TemplateParameterOption is one choice of an option-backed parameter.

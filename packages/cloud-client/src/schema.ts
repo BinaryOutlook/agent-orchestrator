@@ -922,6 +922,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The template's parameters with the given draft values applied. A template using Coder's dynamic parameters can declare a parameter only for certain values of another (for example a custom repository URL once "Other" is selected); evaluating with the draft values lists it, and each parameter carries Coder's diagnostics for its value. A template on Coder's classic parameter flow, or a Coder without dynamic parameters, answers with the same static parameters as the GET. 403 provider_forbidden for organizations without Coder; 404 coder_template_not_found for an unknown template; 422 validation_error for invalid values; 502 coder_unavailable when Coder cannot be read. */
+        post: operations["evaluateCoderTemplateParameters"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/bootstrap": {
         parameters: {
             query?: never;
@@ -1636,6 +1656,13 @@ export interface components {
                 description: string;
             }[];
             order: number;
+            /** @description Coder's problems with the parameter's value; only set when evaluated against draft values. */
+            diagnostics?: {
+                /** @description "error" or "warning". */
+                severity: string;
+                summary: string;
+                detail?: string;
+            }[];
         };
         OrgCoderConfig: {
             baseUrl: string;
@@ -4590,6 +4617,41 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The template's parameters in Coder's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        parameters: components["schemas"]["CoderTemplateParameter"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    evaluateCoderTemplateParameters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Draft parameter values by name, encoded as in project config coder.parameters. */
+                    values: {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description The template's parameters for these values, in Coder's order. */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -7,7 +7,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { useCoderTemplateParameters } from "../hooks/useCoderTemplateParameters";
-import { changedParameterOverrides, parameterOverridesPatch } from "../lib/coder-template-parameters";
+import { changedParameterOverrides, parameterOverridesUpdate } from "../lib/coder-template-parameters";
 import { CoderTemplateOptions } from "./CoderTemplateOptions";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useProviderConnections } from "../hooks/useProviderConnections";
@@ -134,9 +134,9 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 
 /**
  * The project's "Template options": its saved `coder.parameters` over the
- * template's defaults. Autosaves like the other inline fields, sending only the
- * keys that changed (a key reset to its default is sent at the default, since
- * the endpoint merges the map). Only new sessions pick the values up. Hidden
+ * template's defaults. Autosaves like the other inline fields, sending the whole
+ * map (the endpoint replaces it, so a key reset to its default or no longer
+ * declared is simply left out). Only new sessions pick the values up. Hidden
  * when the template has no parameters or the control plane predates the route.
  */
 function CoderTemplateParametersSettings({ project, templateId }: { project: CloudCpProject; templateId: string }) {
@@ -153,13 +153,13 @@ function CoderTemplateParametersSettings({ project, templateId }: { project: Clo
 		mutationFn: (patch: Record<string, string>) =>
 			client.updateProjectSettings(project.orgId, project.id, { config: { coder: { parameters: patch } } }),
 		onSuccess: (response, patch) => {
-			saved.current = coderConfigOf(response.project)?.parameters ?? { ...saved.current, ...patch };
+			saved.current = coderConfigOf(response.project)?.parameters ?? patch;
 			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
 			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 		},
 	});
 	const { mutate, isPending, isError } = save;
-	const patch = draft === null ? undefined : parameterOverridesPatch(parameters, saved.current, draft);
+	const patch = draft === null ? undefined : parameterOverridesUpdate(parameters, saved.current, draft);
 	const patchKey = patch ? JSON.stringify(patch) : "";
 	const failedKey = isError && save.variables ? JSON.stringify(save.variables) : "";
 	useEffect(() => {

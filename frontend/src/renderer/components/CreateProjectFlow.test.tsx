@@ -163,6 +163,8 @@ vi.mock("../hooks/useCloudCp", () => ({
 			listGitHubRepositories: cloudMocks.listGitHubRepositories,
 			createGitHubProject: cloudMocks.createGitHubProject,
 			getCoderTemplateParameters: cloudMocks.getCoderTemplateParameters,
+			evaluateCoderTemplateParameters: (orgId: string, templateId: string, _values: unknown, options: unknown) =>
+				cloudMocks.getCoderTemplateParameters(orgId, templateId, options),
 			listProjects: cloudMocks.listProjects,
 		},
 		ready: cloudMocks.cloudEnabled && cloudMocks.sessionStatus === "authenticated",
