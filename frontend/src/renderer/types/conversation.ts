@@ -440,7 +440,6 @@ export interface SystemEventDetail {
 	sourceHarness?: string;
 	targetHarness?: string;
 	sourceModel?: string;
-	sourceEffort?: string;
 	targetModel?: string;
 	targetEffort?: string;
 	/** render */
@@ -617,8 +616,8 @@ export interface TurnSettings {
 	fastMode?: boolean;
 	/** Ask the provider to plan rather than act, where AO sets that per turn. */
 	planMode?: boolean;
-	/** Where Claude Code compacts on its own: "200k" or "1m". Unset leaves it to Claude Code. */
-	autoCompactWindow?: string;
+	/** Where Claude Code compacts on its own. Unset leaves it to Claude Code. */
+	autoCompactWindow?: "200k" | "1m";
 }
 
 /** One model the provider offers for this session. */

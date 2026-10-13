@@ -56,6 +56,8 @@ type Store interface {
 	ClaimChatControllerGeneration(ctx context.Context, session domain.SessionID, generation string) error
 	ClaimReviewChatController(ctx context.Context, reviewID, providerID, generation string, now time.Time) (bool, error)
 	ConversationBranch(ctx context.Context, conversationID, branchID string) (domain.ConversationBranch, error)
+	CommitProviderSwitch(ctx context.Context, rec domain.SessionRecord, branch domain.ConversationBranch, generation string, activity domain.ConversationActivity) error
+	ListTerminalTurns(ctx context.Context, id domain.SessionID) ([]domain.HandoffTurn, error)
 	ConversationEditAnchor(ctx context.Context, conversationID, replacedTurnID string) (domain.ConversationEditAnchor, error)
 	RepairIncompleteConversationEdit(ctx context.Context, sessionID domain.SessionID, conversationID string, now time.Time) (domain.ConversationBranch, bool, error)
 	CreateAndActivateConversationBranch(ctx context.Context, sessionID domain.SessionID, branch domain.ConversationBranch, generation string, now time.Time) error
@@ -343,7 +345,7 @@ var ErrRetryDeliveryUncertain = errors.New("turn was never confirmed as delivere
 var ErrRetryContentInvalid = errors.New("stored retry content is invalid")
 
 // ErrRetryUnsupported reports structured prompt content the current provider
-// cannot accept. This can happen after a provider capability change: the failed
+// cannot accept. This can happen after an in-place agent switch: the failed
 // prompt remains visible, but the new provider may negotiate fewer capabilities.
 var ErrRetryUnsupported = errors.New("current agent cannot retry this prompt content")
 
@@ -536,7 +538,7 @@ func (p *nativeHistoryCheckpoint) captureAOHighWater(
 		turnsByID[turns[i].ID] = &turns[i]
 	}
 	p.dropUnsettledHookFacts(turnsByID, messages)
-	// A provider boundary starts a new provider-native thread with an AO coordination
+	// An agent switch starts a new provider-native thread with an AO coordination
 	// turn. Completed turns before it belong to the previous provider: their
 	// opaque ids remain useful timeline facts, but the new provider cannot replay
 	// them and they must not gate this native-history import.

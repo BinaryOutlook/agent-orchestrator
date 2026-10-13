@@ -422,57 +422,26 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 	};
 }
 
-/** Commands against a conversation. Each refetches the snapshot on success. */
-export function useProviderSwitchCommand(sessionId: string | undefined, hostId?: string) {
+/** Switches the session's agent, then drops what was cached from the outgoing one. */
+export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 	const queryClient = useQueryClient();
-	const switchProvider = useMutation({
-		mutationFn: async ({ targetHarness, model, effort, fastMode, ultracode, autoCompactWindow }: {
-			targetHarness: string;
-			model?: string;
-			effort?: string;
-			fastMode?: boolean;
-			/** Terminal targets only: Claude Code launch choices. */
-			ultracode?: boolean;
-			autoCompactWindow?: string;
-		}) => {
-			if (!sessionId) throw new Error("No session is selected.");
-			const { data, error } = await clientForSessionHost(hostId).POST(
-				"/api/v1/sessions/{sessionId}/provider-switch",
-				{
-					params: { path: { sessionId } },
-					body: {
-						targetHarness, model, effort, fastMode, ultracode,
-						autoCompactWindow: autoCompactWindow as "200k" | "1m" | undefined,
-						idempotencyKey: crypto.randomUUID(),
-					},
-				},
-			);
+	return useMutation({
+		mutationFn: async (request: Omit<components["schemas"]["ProviderSwitchRequest"], "idempotencyKey">) => {
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/provider-switch", {
+				params: { path: { sessionId } },
+				body: { ...request, idempotencyKey: crypto.randomUUID() },
+			});
 			if (error) throw error;
 			return data;
 		},
 		onSuccess: async () => {
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
-			if (!sessionId) return;
-			// These catalogs are provider-owned but keyed by the stable AO session id.
-			// A provider switch therefore must evict the outgoing provider's values
-			// before the next render can display them as if they belonged to the target.
+			// Provider catalogs are keyed by the AO session id, so the outgoing provider's must go first.
 			clearConversationProviderCatalogs(queryClient, sessionId, hostId);
 			await queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 			invalidateConversationProviderCatalogs(queryClient, sessionId, hostId);
 		},
 	});
-	return {
-		switchProvider: (
-			targetHarness: string,
-			model?: string,
-			effort?: string,
-			fastMode?: boolean,
-			launch?: { ultracode?: boolean; autoCompactWindow?: string },
-		) => switchProvider.mutateAsync({ targetHarness, model, effort, fastMode, ...launch }),
-		switchProviderPending: switchProvider.isPending,
-		switchProviderError: switchProvider.error ? apiErrorMessage(switchProvider.error) : undefined,
-		resetSwitchProviderError: switchProvider.reset,
-	};
 }
 
 /** Commands against a conversation. Each refetches the snapshot on success. */
@@ -1002,21 +971,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 		onSettled: invalidate,
 	});
-
-	const switchProvider = useMutation({
-		mutationFn: async (targetHarness: string) => {
-			const { data, error } = await clientForSessionHost(hostId).POST(
-				"/api/v1/sessions/{sessionId}/provider-switch",
-				{
-					params: { path: { sessionId: sessionId as string } },
-					body: { targetHarness, idempotencyKey: crypto.randomUUID() },
-				},
-			);
-			if (error) throw error;
-			return data;
-		},
-		onSuccess: invalidate,
-	});
 	const acknowledgeAcceptedTurn = useCallback(
 		(turnId: string) => {
 			if (!sessionId) return;
@@ -1088,10 +1042,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		compact: () => compact.mutateAsync(),
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,
 		chooseSettings: (settings: TurnSettings) => chooseSettings.mutate({ targetSessionId: sessionId as string, settings }),
-		/**
-		 * Saves settings the agent only reads when it starts, then restarts the
-		 * agent so they take effect. The conversation is resumed, not replaced.
-		 */
+		/** Saves settings the agent only reads when it starts, then restarts it. The conversation is resumed, not replaced. */
 		chooseStartSettings: async (settings: TurnSettings) => {
 			await chooseSettings.mutateAsync({ targetSessionId: sessionId as string, settings });
 			const { error } = await clientForSessionHost(hostId).POST(
@@ -1176,9 +1127,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		activateBranch: (branchId: string) => activateBranch.mutateAsync(branchId),
 		activateBranchPending: activateBranch.isPending,
 		activateBranchError: activateBranch.error ? apiErrorMessage(activateBranch.error) : undefined,
-		switchProvider: (targetHarness: string) => switchProvider.mutateAsync(targetHarness),
-		switchProviderPending: switchProvider.isPending,
-		switchProviderError: switchProvider.error ? apiErrorMessage(switchProvider.error) : undefined,
 		steer: async (text: string, attachments?: WireImageContent[], clientMessageId?: string, recoverOnly?: boolean): Promise<ChatSteerOutcome> => {
 			try {
 				if (sessionId) recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);

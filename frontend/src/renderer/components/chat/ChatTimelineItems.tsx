@@ -37,17 +37,17 @@ import {
 	File as FileIcon,
 	FileDiff,
 	Gauge,
-	Keyboard,
 	KeyRound,
+	Keyboard,
 	ListChecks,
 	Loader2,
 	MousePointer2,
 	Pencil,
 	Plug,
+	Shuffle,
 	ShieldCheck,
 	ShieldQuestion,
 	ShieldX,
-	Shuffle,
 	SquareTerminal,
 	Undo2,
 	User,
@@ -341,17 +341,7 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 }
 
 /** One side of a handoff: the agent's mark, then its model by name when one was recorded. */
-function HandoffSide({
-	harness,
-	model,
-	effort,
-	bright = false,
-}: {
-	harness: string;
-	model?: string;
-	effort?: string;
-	bright?: boolean;
-}) {
+function HandoffSide({ harness, model, effort, bright }: { harness: string; model?: string; effort?: string; bright?: boolean }) {
 	const { t } = useTranslation();
 	// The marker stores the model id. Its name comes from the agent's catalog.
 	const catalog = useQuery({ ...agentModelsQueryOptions(harness, ""), enabled: Boolean(model) }).data;

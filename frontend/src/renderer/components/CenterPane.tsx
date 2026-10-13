@@ -60,7 +60,7 @@ type CenterPaneProps = {
 	onRenameShellTerminal?: (handleId: string, title: string) => void;
 	/** Workspace-level controls (e.g. shell topbar) rendered beside the tab strip. */
 	topbarActions?: ReactNode;
-	/** Agent-session actions (interface switch) on the primary session tab. */
+	/** Agent-session actions (interface switch, handoff) on the primary session tab. */
 	sessionTabAction?: ReactNode;
 	/** Widen the primary tab's action slot while an interface switch spinner is showing. */
 	sessionTabActionWide?: boolean;

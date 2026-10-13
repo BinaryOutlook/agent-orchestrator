@@ -28,12 +28,9 @@ export interface ModelFamily {
 	hasThinkingChoice: boolean;
 }
 
-export const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
-
-const EFFORT_TOKENS = new Set(EFFORT_ORDER);
-const LABEL_SUFFIXES = [
-	"no thinking", "thinking", "fast", "extra high", "high", "medium", "low", "max", "none", "minimal",
-];
+const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+/** A setting word at the end of a label. The two-word ones come first so they are taken whole. */
+const LABEL_SUFFIX = / (no thinking|extra high|thinking|fast|high|medium|low|max|none|minimal)$/i;
 const VENDORS: Array<[RegExp, string]> = [
 	[/^claude\b/i, "Anthropic"],
 	[/^(gpt|codex|o\d)\b/i, "OpenAI"],
@@ -53,7 +50,7 @@ export function listsModelVariants(harness: string | undefined): boolean {
 }
 
 /** The vendor a model belongs to, read from the start of its name. */
-export function modelVendor(label: string): string {
+function modelVendor(label: string): string {
 	const trimmed = label.trim();
 	return VENDORS.find(([pattern]) => pattern.test(trimmed))?.[1] ?? trimmed.split(/\s+/)[0] ?? "";
 }
@@ -72,7 +69,7 @@ function parseVariantId(id: string): { base: string; effort?: string; thinking: 
 		} else if (effort === undefined && last === "high" && tokens[tokens.length - 2]?.toLowerCase() === "extra") {
 			effort = "xhigh";
 			tokens.pop();
-		} else if (effort === undefined && EFFORT_TOKENS.has(last)) {
+		} else if (effort === undefined && EFFORT_ORDER.includes(last)) {
 			effort = last;
 		} else {
 			break;
@@ -88,15 +85,7 @@ function cleanLabel(label: string): string {
 
 function baseLabel(label: string): string {
 	let text = cleanLabel(label);
-	for (let stripped = true; stripped; ) {
-		stripped = false;
-		for (const suffix of LABEL_SUFFIXES) {
-			if (text.toLowerCase().endsWith(` ${suffix}`)) {
-				text = text.slice(0, -suffix.length - 1).trim();
-				stripped = true;
-			}
-		}
-	}
+	while (LABEL_SUFFIX.test(text)) text = text.replace(LABEL_SUFFIX, "").trim();
 	return text;
 }
 
@@ -140,10 +129,7 @@ export function collapseModelVariants(models: Array<{ id: string; label: string 
 }
 
 /** The family and variant a variant id belongs to. */
-export function findModelVariant(
-	families: ModelFamily[],
-	variantId: string | undefined,
-): { family: ModelFamily; variant: ModelVariant } | undefined {
+export function findModelVariant(families: ModelFamily[], variantId: string | undefined) {
 	if (!variantId) return undefined;
 	for (const family of families) {
 		const variant = family.variants.find((candidate) => candidate.id === variantId);
@@ -190,7 +176,7 @@ export function readableModelLabel(label: string): string {
 
 /**
  * The heading for models an agent lists under a provider id: "openai-codex"
- * becomes "OpenAI Codex". An agent's own id says nothing the tab does not, so it
+ * becomes "OpenAI Codex". An agent's own id adds nothing, so it
  * yields no heading: Kimi's "managed:kimi-code" is not shown.
  */
 export function modelGroupLabel(group: string | undefined, harness: string): string | undefined {

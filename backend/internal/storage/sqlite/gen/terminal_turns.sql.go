@@ -11,48 +11,54 @@ import (
 	"time"
 )
 
-const appendTerminalTurnRequest = `-- name: AppendTerminalTurnRequest :exec
+const appendTerminalTurnRequest = `-- name: AppendTerminalTurnRequest :execrows
 UPDATE session_terminal_turns
-SET user_request = user_request || char(10) || char(10) || ?1
-WHERE id = ?2
+SET user_request = session_terminal_turns.user_request || char(10) || char(10) || ?1
+WHERE session_terminal_turns.id = (SELECT MAX(t.id) FROM session_terminal_turns AS t WHERE t.session_id = ?2)
+  AND session_terminal_turns.responded_at IS NULL
+  AND session_terminal_turns.harness = ?3
+  AND (session_terminal_turns.native_session_id IN ('', ?4) OR ?4 = '')
 `
 
 type AppendTerminalTurnRequestParams struct {
-	UserRequest string
-	ID          int64
+	UserRequest     string
+	SessionID       string
+	Harness         string
+	NativeSessionID string
 }
 
-func (q *Queries) AppendTerminalTurnRequest(ctx context.Context, arg AppendTerminalTurnRequestParams) error {
-	_, err := q.db.ExecContext(ctx, appendTerminalTurnRequest, arg.UserRequest, arg.ID)
-	return err
+// Joins a request to the session's newest turn while that turn is still open
+// on the same thread. A side with no thread id matches on the provider alone.
+func (q *Queries) AppendTerminalTurnRequest(ctx context.Context, arg AppendTerminalTurnRequestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, appendTerminalTurnRequest,
+		arg.UserRequest,
+		arg.SessionID,
+		arg.Harness,
+		arg.NativeSessionID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const closeTerminalTurn = `-- name: CloseTerminalTurn :exec
 UPDATE session_terminal_turns
 SET agent_response = ?1, responded_at = ?2
-WHERE id = ?3
+WHERE session_terminal_turns.id = (SELECT MAX(t.id) FROM session_terminal_turns AS t WHERE t.session_id = ?3)
+  AND session_terminal_turns.responded_at IS NULL
 `
 
 type CloseTerminalTurnParams struct {
 	AgentResponse string
 	RespondedAt   sql.NullTime
-	ID            int64
+	SessionID     string
 }
 
+// Answers the session's newest turn. A stop with no open turn changes nothing.
 func (q *Queries) CloseTerminalTurn(ctx context.Context, arg CloseTerminalTurnParams) error {
-	_, err := q.db.ExecContext(ctx, closeTerminalTurn, arg.AgentResponse, arg.RespondedAt, arg.ID)
+	_, err := q.db.ExecContext(ctx, closeTerminalTurn, arg.AgentResponse, arg.RespondedAt, arg.SessionID)
 	return err
-}
-
-const conversationBranchHandoffNote = `-- name: ConversationBranchHandoffNote :one
-SELECT handoff_note FROM conversation_branches WHERE id = ?1
-`
-
-func (q *Queries) ConversationBranchHandoffNote(ctx context.Context, id string) (string, error) {
-	row := q.db.QueryRowContext(ctx, conversationBranchHandoffNote, id)
-	var handoff_note string
-	err := row.Scan(&handoff_note)
-	return handoff_note, err
 }
 
 const deleteTerminalTurnsForThread = `-- name: DeleteTerminalTurnsForThread :exec
@@ -97,61 +103,34 @@ func (q *Queries) InsertTerminalTurn(ctx context.Context, arg InsertTerminalTurn
 	return err
 }
 
-const latestTerminalTurn = `-- name: LatestTerminalTurn :one
-SELECT id, session_id, harness, native_session_id, user_request, agent_response, requested_at, responded_at
-FROM session_terminal_turns
-WHERE session_id = ?1
-ORDER BY id DESC
-LIMIT 1
-`
-
-func (q *Queries) LatestTerminalTurn(ctx context.Context, sessionID string) (SessionTerminalTurn, error) {
-	row := q.db.QueryRowContext(ctx, latestTerminalTurn, sessionID)
-	var i SessionTerminalTurn
-	err := row.Scan(
-		&i.ID,
-		&i.SessionID,
-		&i.Harness,
-		&i.NativeSessionID,
-		&i.UserRequest,
-		&i.AgentResponse,
-		&i.RequestedAt,
-		&i.RespondedAt,
-	)
-	return i, err
-}
-
 const listTerminalTurns = `-- name: ListTerminalTurns :many
-SELECT id, session_id, harness, native_session_id, user_request, agent_response, requested_at, responded_at
+SELECT harness, user_request, agent_response, requested_at
 FROM session_terminal_turns
 WHERE session_id = ?1
-ORDER BY id DESC
-LIMIT ?2
+ORDER BY id
 `
 
-type ListTerminalTurnsParams struct {
-	SessionID string
-	MaxRows   int64
+type ListTerminalTurnsRow struct {
+	Harness       string
+	UserRequest   string
+	AgentResponse string
+	RequestedAt   time.Time
 }
 
-func (q *Queries) ListTerminalTurns(ctx context.Context, arg ListTerminalTurnsParams) ([]SessionTerminalTurn, error) {
-	rows, err := q.db.QueryContext(ctx, listTerminalTurns, arg.SessionID, arg.MaxRows)
+func (q *Queries) ListTerminalTurns(ctx context.Context, sessionID string) ([]ListTerminalTurnsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTerminalTurns, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []SessionTerminalTurn{}
+	items := []ListTerminalTurnsRow{}
 	for rows.Next() {
-		var i SessionTerminalTurn
+		var i ListTerminalTurnsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.SessionID,
 			&i.Harness,
-			&i.NativeSessionID,
 			&i.UserRequest,
 			&i.AgentResponse,
 			&i.RequestedAt,
-			&i.RespondedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -166,29 +145,11 @@ func (q *Queries) ListTerminalTurns(ctx context.Context, arg ListTerminalTurnsPa
 	return items, nil
 }
 
-const setConversationBranchHandoffNote = `-- name: SetConversationBranchHandoffNote :exec
-UPDATE conversation_branches SET handoff_note = ?1 WHERE id = ?2
-`
-
-type SetConversationBranchHandoffNoteParams struct {
-	HandoffNote string
-	ID          string
-}
-
-func (q *Queries) SetConversationBranchHandoffNote(ctx context.Context, arg SetConversationBranchHandoffNoteParams) error {
-	_, err := q.db.ExecContext(ctx, setConversationBranchHandoffNote, arg.HandoffNote, arg.ID)
-	return err
-}
-
 const trimTerminalTurns = `-- name: TrimTerminalTurns :exec
 DELETE FROM session_terminal_turns
-WHERE session_terminal_turns.session_id = ?1
-  AND session_terminal_turns.id NOT IN (
-    SELECT kept.id FROM session_terminal_turns AS kept
-    WHERE kept.session_id = ?1
-    ORDER BY kept.id DESC
-    LIMIT ?2
-  )
+WHERE session_terminal_turns.session_id = ?1 AND session_terminal_turns.id <= (
+    SELECT t.id FROM session_terminal_turns AS t WHERE t.session_id = ?1
+    ORDER BY t.id DESC LIMIT 1 OFFSET ?2)
 `
 
 type TrimTerminalTurnsParams struct {

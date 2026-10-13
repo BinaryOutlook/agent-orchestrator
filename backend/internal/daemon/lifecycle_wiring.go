@@ -199,7 +199,7 @@ type sessionLifecycle interface {
 	HibernateIdleChats(ctx context.Context) error
 	RestoreAll(ctx context.Context) error
 	WaitBackgroundWorkers(ctx context.Context) error
-	WaitInterfaceRecoveryWorkers(ctx context.Context) error
+	WaitAgentSwitchWorkers(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's

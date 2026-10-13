@@ -470,10 +470,7 @@ func Run() error {
 		},
 	})
 	sessMgr = wiredSessMgr
-	if switcher, ok := wiredSessMgr.(interface {
-		SwitchTUIProvider(context.Context, domain.SessionID, domain.ProviderSwitchRequest) (domain.ProviderSwitchResult, error)
-		TUIProviderSwitchCapabilities(context.Context, domain.SessionID, domain.AgentHarness) (domain.ProviderSwitchCapability, error)
-	}); ok {
+	if switcher, ok := wiredSessMgr.(chatsvc.TerminalProviderSwitcher); ok {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}
 	if fenced, ok := sessMgr.(interface{ SetPersistentHostReconcileDone(<-chan struct{}) }); ok {
@@ -975,11 +972,11 @@ func Run() error {
 		log.Error("session background worker shutdown", "err", err)
 	}
 	backgroundStopCancel()
-	recoveryStopCtx, recoveryCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-	if err := sessMgr.WaitInterfaceRecoveryWorkers(recoveryStopCtx); err != nil {
+	switchStopCtx, switchCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	if err := sessMgr.WaitAgentSwitchWorkers(switchStopCtx); err != nil {
 		log.Error("interface recovery worker shutdown", "err", err)
 	}
-	recoveryCancel()
+	switchCancel()
 	codexSwitchStopCtx, codexSwitchCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	if err := agentSvc.WaitCodexAccountSwitchWorkers(codexSwitchStopCtx); err != nil {
 		log.Error("Codex account switch worker shutdown", "err", err)

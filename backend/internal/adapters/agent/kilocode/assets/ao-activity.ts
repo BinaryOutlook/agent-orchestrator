@@ -33,10 +33,7 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
   // The model of the most recent assistant message, forwarded for context.
   let currentModel: string | null = null
   const messageStore = new Map<string, any>()
-  // Assistant message ids seen this turn, and the text of the assistant text
-  // part updated most recently. Text parts stream, so the last update of the
-  // last part is the turn's final message; `stop` reports it so AO can keep
-  // the turn's response alongside its request.
+  // This turn's assistant message ids and the assistant text part updated last: the turn's final message.
   const assistantMessages = new Set<string>()
   let lastAssistantText = ""
   // Bound messageStore so it can't grow unbounded within a session: `kilo run`
@@ -196,14 +193,8 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
               const prompt = part.text ?? ""
               if (sessionID) reportUserPrompt(sessionID, msg.id, prompt)
               if (prompt.length > 0) messageStore.delete(part.messageID)
-            } else if (
-              assistantMessages.has(part.messageID) &&
-              part.type === "text" &&
-              !part.synthetic &&
-              !part.ignored &&
-              typeof part.text === "string" &&
-              part.text.trim().length > 0
-            ) {
+            } else if (assistantMessages.has(part.messageID) && part.type === "text" && !part.synthetic && !part.ignored &&
+              typeof part.text === "string" && part.text.trim().length > 0) {
               lastAssistantText = part.text
             }
             break
@@ -219,13 +210,7 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
             if (props?.status?.type !== "idle") break
             const sessionID = readSessionID(props) ?? currentSessionID
             if (!sessionID) break
-            callHookSync("stop", {
-              session_id: sessionID,
-              model: currentModel ?? "",
-              last_assistant_message: lastAssistantText,
-            })
-            // The next turn must not repeat this one's answer if it ends
-            // without producing text of its own.
+            callHookSync("stop", { session_id: sessionID, model: currentModel ?? "", last_assistant_message: lastAssistantText })
             assistantMessages.clear()
             lastAssistantText = ""
             break

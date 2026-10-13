@@ -48,7 +48,7 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, ListPlus, Loader2, Paperclip, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Paperclip, Plus, Square, X } from "lucide-react";
 import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
 import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
@@ -1859,9 +1859,7 @@ export const ChatComposer = memo(function ChatComposer({
 											const button = addMenuTrigger.current;
 											const box = button?.closest("form")?.getBoundingClientRect();
 											const origin = button?.getBoundingClientRect();
-											if (open && box && origin) {
-												setAddMenuBox({ lift: origin.top - box.top + 6, shift: box.left - origin.left, width: box.width });
-											}
+											if (open && box && origin) setAddMenuBox({ lift: origin.top - box.top + 6, shift: box.left - origin.left, width: box.width });
 										}}
 									>
 										<OptionMenuTrigger

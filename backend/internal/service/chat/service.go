@@ -95,8 +95,6 @@ type Service struct {
 	gates            map[domain.ConversationOwner]controllerGate
 	probeMu          sync.Mutex
 	probed           map[domain.AgentHarness]ports.ChatCapabilities
-	switchMu         sync.Mutex
-	switchResults    map[string]ProviderSwitchResult
 	terminalSwitcher TerminalProviderSwitcher
 }
 
@@ -203,7 +201,6 @@ func New(opts Options) *Service {
 		startConfigs:           make(map[domain.ConversationOwner]StartConfig),
 		gates:                  make(map[domain.ConversationOwner]controllerGate),
 		probed:                 make(map[domain.AgentHarness]ports.ChatCapabilities),
-		switchResults:          make(map[string]ProviderSwitchResult),
 		waking:                 make(map[domain.SessionID]int),
 		wakeRuns:               make(map[domain.SessionID]*wakeRun),
 		backgroundWakes:        make(map[domain.SessionID]bool),
@@ -294,10 +291,6 @@ const claudeAutoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 
 func cloneStartConfig(cfg StartConfig) StartConfig {
 	cloned := cfg
-	if cfg.ProviderSwitch != nil {
-		switchCopy := *cfg.ProviderSwitch
-		cloned.ProviderSwitch = &switchCopy
-	}
 	cloned.Env = make(map[string]string, len(cfg.Env))
 	for key, value := range cfg.Env {
 		cloned.Env[key] = value
@@ -371,17 +364,6 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		}
 		cfg.ProviderScopeID = handoff.BoundaryID
 		cfg.HistoryMode = ports.ChatHistoryRequired
-	}
-	if providerSwitch := cfg.ProviderSwitch; providerSwitch != nil {
-		if owner.Kind == domain.ConversationOwnerReview ||
-			providerSwitch.SourceSessionID != cfg.SessionID ||
-			providerSwitch.TargetHarness != cfg.Harness ||
-			providerSwitch.SourceHarness == cfg.Harness ||
-			providerSwitch.ConversationID == "" || providerSwitch.SourceBranchID == "" ||
-			providerSwitch.SourceGeneration == "" || strings.TrimSpace(providerSwitch.Bootstrap) == "" ||
-			cfg.ProviderConversationID != "" || cfg.ProviderHandoff != nil || cfg.ControllerReady == nil {
-			return nil, errors.New("incomplete provider Chat switch reservation")
-		}
 	}
 
 	replayCheckpoint := nativeHistoryCheckpoint{}
@@ -572,7 +554,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			err = errors.New("native Chat handoff conversation changed")
 		}
 	} else if providerSwitch := cfg.ProviderSwitch; providerSwitch != nil {
-		conversation, err = s.store.ConversationForSession(ctx, providerSwitch.SourceSessionID)
+		conversation, err = s.store.ConversationForSession(ctx, cfg.SessionID)
 		if err == nil && (conversation.ID != providerSwitch.ConversationID ||
 			conversation.ActiveBranchID != providerSwitch.SourceBranchID ||
 			conversation.LatestSequence != providerSwitch.SourceSequence) {
@@ -611,7 +593,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		conversation.ActiveBranchID = repairedBranch.ID
 		// An ordinary restart was handed the abandoned child's provider handle.
 		// A coordinator-supplied scope belongs to a pending provider boundary (for
-		// example, a pending provider boundary) and must keep its independently reserved handle.
+		// example, agent switching) and must keep its independently reserved handle.
 		if restoredProviderOwner && cfg.ProviderScopeID == "" {
 			cfg.ProviderConversationID = repairedBranch.ProviderConversationID
 		}
@@ -678,15 +660,11 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// Claude Code reads its compaction window when it starts. The map is
 	// copied because the caller's may be the one saved for later restarts.
 	if cfg.Harness == domain.HarnessClaudeCode {
-		env := make(map[string]string, len(cfg.Env)+1)
-		for key, value := range cfg.Env {
-			env[key] = value
+		cfg.Env = cloneStartConfig(cfg).Env
+		delete(cfg.Env, claudeAutoCompactWindowEnv)
+		if tokens := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; tokens > 0 {
+			cfg.Env[claudeAutoCompactWindowEnv] = fmt.Sprint(tokens)
 		}
-		delete(env, claudeAutoCompactWindowEnv)
-		if tokens := conversation.Settings.AutoCompactTokens(); tokens != "" {
-			env[claudeAutoCompactWindowEnv] = tokens
-		}
-		cfg.Env = env
 	}
 	// Conversation settings are durable user choices. Restore the selected
 	// model when rebuilding a controller after a daemon restart; the caller's
@@ -723,20 +701,16 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		}
 	}
 
-	// A provider that took over through a switch keeps its handoff note for
-	// the life of its branch. The switch supplies it on the first start; any
-	// later restart reads it back from the branch, so the note is not lost
-	// with the process.
+	// A provider that took over through a switch keeps its handoff note for the
+	// life of its branch: the switch supplies it, a later restart reads it back.
 	handoffNote := activeBranch.HandoffNote
-	if providerSwitch := cfg.ProviderSwitch; providerSwitch != nil {
-		handoffNote = providerSwitch.Bootstrap
+	if cfg.ProviderSwitch != nil {
+		handoffNote = cfg.ProviderSwitch.Bootstrap
 	}
 	providerSystemPrompt := cfg.SystemPrompt
-	if strings.TrimSpace(handoffNote) != "" {
-		providerSystemPrompt = strings.TrimSpace(strings.Join([]string{
-			strings.TrimSpace(cfg.SystemPrompt),
-			"AO provider handoff context:\n\n" + handoffNote,
-		}, "\n\n"))
+	if handoffNote != "" {
+		providerSystemPrompt = strings.TrimSpace(
+			strings.TrimSpace(cfg.SystemPrompt) + "\n\nAO provider handoff context:\n\n" + handoffNote)
 	}
 
 	var conv ports.ChatConversation
@@ -914,8 +888,6 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			ID: providerBoundaryID, ConversationID: conversation.ID, SessionID: cfg.SessionID,
 			ProviderConversationID: conv.ProviderConversationID(), ParentBranchID: activeBranch.ID,
 			ForkAfterSequence: conversation.LatestSequence, ProviderScopeID: providerScopeID,
-			ProviderBindingID: string(cfg.Harness),
-			Strategy:          domain.ConversationBranchStrategyNative,
 			ProviderIDsScoped: true,
 			CreatedAt:         s.now(),
 		}
@@ -923,6 +895,8 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			providerBoundary.Strategy = domain.ConversationBranchStrategyApproximateContext
 			providerBoundary.ReplayCutoffSequence = cfg.ProviderSwitch.SourceSequence
 			providerBoundary.ReplayTruncated = true
+			// Stored with the branch, so a later restart of its provider reads it back.
+			providerBoundary.HandoffNote = cfg.ProviderSwitch.Bootstrap
 		}
 	}
 	// Whatever the previous controller left in flight is not this controller's, and
@@ -1887,9 +1861,8 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 			caps = controller.Capabilities()
 		}
 		// Fast and plan mode live with the controller, not in the stored row.
-		liveSettings := controller.Settings()
-		rows.Conversation.Settings.FastMode = liveSettings.FastMode
-		rows.Conversation.Settings.PlanMode = liveSettings.PlanMode
+		live := controller.Settings()
+		rows.Conversation.Settings.FastMode, rows.Conversation.Settings.PlanMode = live.FastMode, live.PlanMode
 	}
 
 	return Snapshot{
@@ -1996,9 +1969,8 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 			caps = controller.Capabilities()
 		}
 		// Fast and plan mode live with the controller, not in the stored row.
-		liveSettings := controller.Settings()
-		rows.Conversation.Settings.FastMode = liveSettings.FastMode
-		rows.Conversation.Settings.PlanMode = liveSettings.PlanMode
+		live := controller.Settings()
+		rows.Conversation.Settings.FastMode, rows.Conversation.Settings.PlanMode = live.FastMode, live.PlanMode
 	}
 	return Snapshot{
 		Conversation:                     rows.Conversation,

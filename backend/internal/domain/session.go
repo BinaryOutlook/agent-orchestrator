@@ -151,7 +151,7 @@ type SessionMetadata struct {
 	Prompt                   string    `json:"prompt,omitempty"`
 	// LatestUserPrompt is the latest real user-authored task direction observed
 	// for this AO session. Internal AO coordination messages (for example an
-	// internal coordination request) must not replace it.
+	// agent-switch handoff request) must not replace it.
 	LatestUserPrompt string `json:"latestUserPrompt,omitempty"`
 	// LatestUserPromptAt is when LatestUserPrompt was submitted. It is kept as a
 	// separate durable fact because SessionRecord.UpdatedAt also changes for
@@ -160,7 +160,7 @@ type SessionMetadata struct {
 	// LatestInteractionAt records deliberate direction independently of human authorship.
 	LatestInteractionAt time.Time `json:"-"`
 	// LatestAssistantUpdate is the latest user-facing assistant update observed
-	// before any internal coordination turn.
+	// before any internal agent-switch coordination turn.
 	LatestAssistantUpdate   string    `json:"latestAssistantUpdate,omitempty"`
 	LatestAssistantUpdateAt time.Time `json:"-"`
 	// ConversationCheckpointState and its owner provenance are internal replay

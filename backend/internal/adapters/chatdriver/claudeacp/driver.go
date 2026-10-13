@@ -328,9 +328,7 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	// Sent with the session too, so a choice made after the adapter process
 	// started still reaches the next Claude Code session it opens.
 	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
-		meta["claudeCode"] = map[string]any{
-			"options": map[string]any{"env": map[string]string{claudeAutoCompactWindowEnv: window}},
-		}
+		meta["claudeCode"] = map[string]any{"options": map[string]any{"env": map[string]string{claudeAutoCompactWindowEnv: window}}}
 	}
 	if len(meta) == 0 {
 		return nil

@@ -442,9 +442,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		onClick={request}
 		onCancel={() => { void interfaceSwitch.cancel().catch(() => {}); }}
 	/></span> : null;
-	const startError = interfaceSwitch.startError && !dialogOpen && !historyRecoveryNotice && !restartRequiredNotice
-		? interfaceSwitch.startError
-		: undefined;
+	const startError = dialogOpen || historyRecoveryNotice || restartRequiredNotice ? undefined : interfaceSwitch.startError;
 	// A local chat shows this above its message box instead.
 	const startErrorInComposer = session?.mode === "chat" && !isCloud;
 	const notice = <>
@@ -514,7 +512,6 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		switchControl,
 		// For a menu: the same switch as a plain action, absent while one is running.
 		switchAction: session && showAction && !showStatus ? {
-			target,
 			disabled: !(Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked)) || interfaceSwitch.starting || activeTransition || chatLeaveLocked,
 			reason: disabledReason,
 			run: request,

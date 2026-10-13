@@ -13,7 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-func TestProviderSwitchPublishesApproximateBranchAndIsIdempotent(t *testing.T) {
+func TestProviderSwitchPublishesApproximateBranch(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()
 
@@ -36,18 +36,18 @@ func TestProviderSwitchPublishesApproximateBranchAndIsIdempotent(t *testing.T) {
 		t.Fatalf("record terminal response: %v", err)
 	}
 
-	first, err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+	before, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatalf("read conversation before the switch: %v", err)
+	}
+	if source, found, err := h.st.GetSession(ctx, testSession); err != nil || !found || source.Harness != domain.HarnessCodex {
+		t.Fatalf("source session = %+v found=%v err=%v, want a Codex session", source, found, err)
+	}
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
 		TargetHarness:  domain.HarnessClaudeCode,
 		IdempotencyKey: "switch-once",
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("SwitchProvider: %v", err)
-	}
-	if first.SourceHarness != domain.HarnessCodex || first.TargetHarness != domain.HarnessClaudeCode {
-		t.Fatalf("switch result = %+v, want codex -> claude-code", first)
-	}
-	if first.BranchID == "" || first.ProviderConversation == "" {
-		t.Fatalf("switch result missing durable target identity: %+v", first)
 	}
 
 	driver.mu.Lock()
@@ -73,16 +73,20 @@ func TestProviderSwitchPublishesApproximateBranchAndIsIdempotent(t *testing.T) {
 		history[0].UserRequest != "keep this context" || history[1].UserRequest != "terminal ask" {
 		t.Fatalf("session history = %+v (total %d), %v; want the chat turn then the terminal turn", history, total, err)
 	}
+	// A page past the end is empty, not nil: the HTTP layer serialises it as [].
+	if past, total, err := h.svc.SessionHistory(ctx, testSession, 5, 10); err != nil || total != 2 || past == nil || len(past) != 0 {
+		t.Fatalf("history past the end = %#v (total %d), %v; want an empty page", past, total, err)
+	}
 
-	retry, err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+	// A switch is not replayed: asking again for the provider that now owns
+	// the session is refused.
+	err = h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
 		TargetHarness:  domain.HarnessClaudeCode,
 		IdempotencyKey: "switch-once",
 	})
-	if err != nil {
-		t.Fatalf("idempotent retry: %v", err)
-	}
-	if retry != first {
-		t.Fatalf("idempotent retry = %+v, want original %+v", retry, first)
+	var refusal *domain.ProviderSwitchError
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalUnsupported {
+		t.Fatalf("repeated switch error = %v, want an unsupported refusal", err)
 	}
 
 	record, found, err := h.st.GetSession(ctx, testSession)
@@ -92,12 +96,19 @@ func TestProviderSwitchPublishesApproximateBranchAndIsIdempotent(t *testing.T) {
 	if record.Harness != domain.HarnessClaudeCode || record.Mode != domain.SessionModeChat {
 		t.Fatalf("durable session owner = %+v, want Claude Chat", record)
 	}
-	snapshot, err := h.st.LoadConversationSnapshot(ctx, first.ConversationID)
+	if record.Metadata.ProviderConversationID == "" {
+		t.Fatalf("switched session has no target provider conversation: %+v", record.Metadata)
+	}
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, before.ID)
 	if err != nil {
 		t.Fatalf("read switched conversation: %v", err)
 	}
-	if snapshot.ActiveBranch.ID != first.BranchID {
-		t.Fatalf("active branch = %q, want %q", snapshot.ActiveBranch.ID, first.BranchID)
+	if snapshot.ActiveBranch.ID == "" || snapshot.ActiveBranch.ID == before.ActiveBranchID {
+		t.Fatalf("active branch = %q, want a new branch after %q", snapshot.ActiveBranch.ID, before.ActiveBranchID)
+	}
+	if snapshot.ActiveBranch.ProviderConversationID != record.Metadata.ProviderConversationID {
+		t.Fatalf("active branch provider conversation = %q, want the session's %q",
+			snapshot.ActiveBranch.ProviderConversationID, record.Metadata.ProviderConversationID)
 	}
 	if !strings.Contains(snapshot.ActiveBranch.HandoffNote, "keep this context") {
 		t.Fatalf("the handoff note was not stored with the new branch: %q", snapshot.ActiveBranch.HandoffNote)
@@ -113,7 +124,7 @@ func TestProviderSwitchPublishesApproximateBranchAndIsIdempotent(t *testing.T) {
 		}
 	}
 	if !foundMarker {
-		t.Fatalf("durable idempotency marker was not committed with the branch")
+		t.Fatalf("the switch marker was not committed with the branch")
 	}
 }
 
@@ -122,7 +133,7 @@ func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	ctx := context.Background()
 	driver.startErr = errProviderSwitchTarget
 
-	_, err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+	err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
 		TargetHarness: domain.HarnessClaudeCode,
 	})
 	if err == nil || !strings.Contains(err.Error(), "start target provider") {
@@ -138,7 +149,7 @@ func TestProviderSwitchPublicationFailureRestoresSourceController(t *testing.T) 
 		return failingProviderSwitchStore{Store: st, err: errors.New("commit unavailable")}
 	})
 
-	_, err := h.svc.SwitchProvider(context.Background(), testSession, domain.ProviderSwitchRequest{
+	err := h.svc.SwitchProvider(context.Background(), testSession, domain.ProviderSwitchRequest{
 		TargetHarness: domain.HarnessClaudeCode,
 	})
 	if err == nil || !strings.Contains(err.Error(), "start target provider") {

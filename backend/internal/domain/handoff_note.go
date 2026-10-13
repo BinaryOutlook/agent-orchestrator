@@ -8,9 +8,7 @@ import (
 )
 
 const (
-	// HandoffNotePrefix opens every handoff note. The hook client and the Chat
-	// history import both recognise it, so a note is never recorded as something
-	// the user typed.
+	// HandoffNotePrefix opens every handoff note.
 	HandoffNotePrefix = "<ao-handoff-request"
 
 	// TerminalTurnRetention is how many Terminal UI turns AO keeps per session.
@@ -38,45 +36,39 @@ const (
 	handoffLineClipMarker = " …[clipped]… "
 )
 
-// TerminalTurn is one Terminal UI turn as the hooks reported it: what the user
-// asked and the agent's final message. RespondedAt is zero while the turn is
-// open, and stays zero for a turn the user interrupted.
+// TerminalTurn is a Terminal UI turn's request as the prompt hook reported it.
 type TerminalTurn struct {
-	ID              int64
 	SessionID       SessionID
 	Harness         AgentHarness
 	NativeSessionID string
 	UserRequest     string
-	AgentResponse   string
 	RequestedAt     time.Time
-	RespondedAt     time.Time
 }
 
 // HandoffTurn is one turn of a session in the form the handoff note and the
 // history command share, whichever UI it happened in.
 type HandoffTurn struct {
-	UserRequest   string
-	AgentResponse string
-	At            time.Time
-	Harness       AgentHarness
+	UserRequest   string       `json:"userRequest"`
+	AgentResponse string       `json:"agentResponse"`
+	At            time.Time    `json:"at"`
+	Harness       AgentHarness `json:"harness,omitempty"`
 }
 
 // HandoffNoteInput is everything a handoff note is rendered from. Turns holds
 // every turn AO knows about, oldest first; the builder decides what fits.
 type HandoffNoteInput struct {
-	SwitchID       string
-	SourceHarness  AgentHarness
-	TargetHarness  AgentHarness
-	SessionTitle   string
-	Project        string
-	WorkspacePath  string
-	Branch         string
-	At             time.Time
-	OriginalTask   string
-	ChangedFiles   []string
-	Turns          []HandoffTurn
-	HistoryCommand bool
-	Terminal       bool
+	SwitchID      string
+	SourceHarness AgentHarness
+	TargetHarness AgentHarness
+	SessionTitle  string
+	Project       string
+	WorkspacePath string
+	Branch        string
+	At            time.Time
+	OriginalTask  string
+	ChangedFiles  []string
+	Turns         []HandoffTurn
+	Terminal      bool
 }
 
 // BuildHandoffNote renders the note a provider receives when it takes over a
@@ -84,49 +76,29 @@ type HandoffNoteInput struct {
 // turn is kept, the five before it are clipped to a budget, up to fifteen older
 // ones become one line each, and anything beyond that is only counted.
 func BuildHandoffNote(in HandoffNoteInput) string {
-	turns := in.Turns
-	var latest *HandoffTurn
-	if len(turns) > 0 {
-		latest = &turns[len(turns)-1]
-		turns = turns[:len(turns)-1]
-	}
-	previous := lastHandoffTurns(turns, handoffPreviousTurnLimit)
-	older := lastHandoffTurns(turns[:len(turns)-len(previous)], handoffOlderTurnLimit)
+	// recent is the latest turn with the previous turns before it.
+	recent := in.Turns[max(0, len(in.Turns)-1-handoffPreviousTurnLimit):]
+	older := in.Turns[max(0, len(in.Turns)-len(recent)-handoffOlderTurnLimit) : len(in.Turns)-len(recent)]
 
 	// Drop the oldest material first until the whole note fits. The latest
 	// turn is never dropped.
 	for {
-		shown := len(older) + len(previous)
-		if latest != nil {
-			shown++
-		}
-		note := renderHandoffNote(in, older, previous, latest, len(in.Turns)-shown)
-		if handoffNoteFits(note) {
+		note := renderHandoffNote(in, older, recent)
+		if utf8.RuneCountInString(note) <= ProviderSwitchMaxBootstrapChars && len(note) <= handoffNoteMaxBytes {
 			return note
 		}
 		switch {
 		case len(older) > 0:
 			older = older[1:]
-		case len(previous) > 0:
-			previous = previous[1:]
+		case len(recent) > 1:
+			recent = recent[1:]
 		default:
 			return clipHandoffText(note, ProviderSwitchMaxBootstrapChars, handoffClipMarker)
 		}
 	}
 }
 
-func lastHandoffTurns(turns []HandoffTurn, limit int) []HandoffTurn {
-	if len(turns) > limit {
-		return turns[len(turns)-limit:]
-	}
-	return turns
-}
-
-func handoffNoteFits(note string) bool {
-	return utf8.RuneCountInString(note) <= ProviderSwitchMaxBootstrapChars && len(note) <= handoffNoteMaxBytes
-}
-
-func renderHandoffNote(in HandoffNoteInput, older, previous []HandoffTurn, latest *HandoffTurn, omitted int) string {
+func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string {
 	var b strings.Builder
 	if in.SwitchID != "" {
 		fmt.Fprintf(&b, "%s switch-id=%q>\n", HandoffNotePrefix, in.SwitchID)
@@ -147,11 +119,9 @@ func renderHandoffNote(in HandoffNoteInput, older, previous []HandoffTurn, lates
 	writeHandoffNoteField(&b, "Project", in.Project)
 	writeHandoffNoteField(&b, "Workspace", in.WorkspacePath)
 	writeHandoffNoteField(&b, "Git branch", in.Branch)
-	if !in.At.IsZero() {
-		writeHandoffNoteField(&b, "Handed off at", in.At.UTC().Format(time.RFC3339))
-	}
+	writeHandoffNoteField(&b, "Handed off at", in.At.UTC().Format(time.RFC3339))
 
-	if task := strings.TrimSpace(in.OriginalTask); task != "" && !handoffTaskShownInFull(task, previous, latest) {
+	if task := strings.TrimSpace(in.OriginalTask); task != "" && !handoffTaskShownInFull(task, recent) {
 		b.WriteString("\n## Original task\n")
 		b.WriteString(quoteHandoffText(task, handoffOriginalTaskCap, handoffClipMarker))
 		b.WriteByte('\n')
@@ -175,31 +145,26 @@ func renderHandoffNote(in HandoffNoteInput, older, previous []HandoffTurn, lates
 			fmt.Fprintf(&b, "- User: %s\n  %s: %s\n", user, handoffAssistantLabel(turn), agent)
 		}
 	}
-	if len(previous) > 0 {
+	if len(recent) > 1 {
 		b.WriteString("\n## Previous turns, oldest first\n")
-		for _, turn := range previous {
+		for _, turn := range recent[:len(recent)-1] {
 			user, agent := budgetHandoffTurn(turn, handoffPreviousTurnBudget, handoffPreviousUserCap, false)
 			fmt.Fprintf(&b, "\nUser:\n%s\n%s:\n%s\n", user, handoffAssistantLabel(turn), agent)
 		}
 	}
-	if latest != nil {
-		user, agent := budgetHandoffTurn(*latest, handoffLatestTurnBudget, handoffLatestUserCap, false)
-		fmt.Fprintf(&b, "\n## Latest turn\nUser:\n%s\n%s:\n%s\n", user, handoffAssistantLabel(*latest), agent)
+	if len(recent) > 0 {
+		latest := recent[len(recent)-1]
+		user, agent := budgetHandoffTurn(latest, handoffLatestTurnBudget, handoffLatestUserCap, false)
+		fmt.Fprintf(&b, "\n## Latest turn\nUser:\n%s\n%s:\n%s\n", user, handoffAssistantLabel(latest), agent)
 	}
 
-	// The full record is always one command away, so the note says so even
-	// when nothing was left out: long turns are clipped to fit the budget.
-	if omitted > 0 || in.HistoryCommand {
-		b.WriteString("\n## Earlier history\n")
-		if omitted > 0 {
-			fmt.Fprintf(&b, "%d earlier turns are not shown. ", omitted)
-		}
-		if in.HistoryCommand {
-			b.WriteString("Run `ao session history` to read the conversation in full when you need something this note does not show.\n")
-		} else {
-			b.WriteString("They are not available to you.\n")
-		}
+	// The full record is one command away. The note says so even when nothing
+	// was left out, because long turns are clipped to fit the budget.
+	b.WriteString("\n## Earlier history\n")
+	if omitted := len(in.Turns) - len(older) - len(recent); omitted > 0 {
+		fmt.Fprintf(&b, "%d earlier turns are not shown. ", omitted)
 	}
+	b.WriteString("Run `ao session history` to read the conversation in full when you need something this note does not show.\n")
 
 	b.WriteByte('\n')
 	if in.Terminal {
@@ -214,12 +179,13 @@ func renderHandoffNote(in HandoffNoteInput, older, previous []HandoffTurn, lates
 // handoffTaskShownInFull reports whether the original task already appears,
 // unclipped, as the request of a turn the note shows in full. A short session
 // would otherwise print the same text twice.
-func handoffTaskShownInFull(task string, previous []HandoffTurn, latest *HandoffTurn) bool {
-	if latest != nil && strings.TrimSpace(latest.UserRequest) == task && utf8.RuneCountInString(task) <= handoffLatestUserCap {
-		return true
-	}
-	for _, turn := range previous {
-		if strings.TrimSpace(turn.UserRequest) == task && utf8.RuneCountInString(task) <= handoffPreviousUserCap {
+func handoffTaskShownInFull(task string, recent []HandoffTurn) bool {
+	for index, turn := range recent {
+		limit := handoffPreviousUserCap
+		if index == len(recent)-1 {
+			limit = handoffLatestUserCap
+		}
+		if strings.TrimSpace(turn.UserRequest) == task && utf8.RuneCountInString(task) <= limit {
 			return true
 		}
 	}
@@ -275,19 +241,14 @@ func quoteHandoffText(value string, limit int, marker string) string {
 
 // clipHandoffText keeps the start and the end of over-long text. A request
 // usually opens with the ask and a response usually closes with what is left
-// to do, so the middle is the cheapest part to lose.
+// to do, so the middle is the cheapest part to lose. Every limit in this file
+// is longer than the marker.
 func clipHandoffText(value string, limit int, marker string) string {
-	if limit <= 0 {
-		return ""
-	}
 	runes := []rune(value)
 	if len(runes) <= limit {
 		return value
 	}
 	keep := limit - utf8.RuneCountInString(marker)
-	if keep <= 0 {
-		return string(runes[:limit])
-	}
 	head := keep / 2
 	return string(runes[:head]) + marker + string(runes[len(runes)-(keep-head):])
 }

@@ -2,48 +2,37 @@
 INSERT INTO session_terminal_turns (session_id, harness, native_session_id, user_request, requested_at)
 VALUES (sqlc.arg(session_id), sqlc.arg(harness), sqlc.arg(native_session_id), sqlc.arg(user_request), sqlc.arg(requested_at));
 
--- name: LatestTerminalTurn :one
-SELECT id, session_id, harness, native_session_id, user_request, agent_response, requested_at, responded_at
-FROM session_terminal_turns
-WHERE session_id = sqlc.arg(session_id)
-ORDER BY id DESC
-LIMIT 1;
-
--- name: AppendTerminalTurnRequest :exec
+-- name: AppendTerminalTurnRequest :execrows
+-- Joins a request to the session's newest turn while that turn is still open
+-- on the same thread. A side with no thread id matches on the provider alone.
 UPDATE session_terminal_turns
-SET user_request = user_request || char(10) || char(10) || sqlc.arg(user_request)
-WHERE id = sqlc.arg(id);
+SET user_request = session_terminal_turns.user_request || char(10) || char(10) || sqlc.arg(user_request)
+WHERE session_terminal_turns.id = (SELECT MAX(t.id) FROM session_terminal_turns AS t WHERE t.session_id = sqlc.arg(session_id))
+  AND session_terminal_turns.responded_at IS NULL
+  AND session_terminal_turns.harness = sqlc.arg(harness)
+  AND (session_terminal_turns.native_session_id IN ('', sqlc.arg(native_session_id)) OR sqlc.arg(native_session_id) = '');
 
 -- name: CloseTerminalTurn :exec
+-- Answers the session's newest turn. A stop with no open turn changes nothing.
 UPDATE session_terminal_turns
 SET agent_response = sqlc.arg(agent_response), responded_at = sqlc.arg(responded_at)
-WHERE id = sqlc.arg(id);
+WHERE session_terminal_turns.id = (SELECT MAX(t.id) FROM session_terminal_turns AS t WHERE t.session_id = sqlc.arg(session_id))
+  AND session_terminal_turns.responded_at IS NULL;
 
 -- name: TrimTerminalTurns :exec
 DELETE FROM session_terminal_turns
-WHERE session_terminal_turns.session_id = sqlc.arg(session_id)
-  AND session_terminal_turns.id NOT IN (
-    SELECT kept.id FROM session_terminal_turns AS kept
-    WHERE kept.session_id = sqlc.arg(session_id)
-    ORDER BY kept.id DESC
-    LIMIT sqlc.arg(keep)
-  );
+WHERE session_terminal_turns.session_id = sqlc.arg(session_id) AND session_terminal_turns.id <= (
+    SELECT t.id FROM session_terminal_turns AS t WHERE t.session_id = sqlc.arg(session_id)
+    ORDER BY t.id DESC LIMIT 1 OFFSET sqlc.arg(keep));
 
 -- name: ListTerminalTurns :many
-SELECT id, session_id, harness, native_session_id, user_request, agent_response, requested_at, responded_at
+SELECT harness, user_request, agent_response, requested_at
 FROM session_terminal_turns
 WHERE session_id = sqlc.arg(session_id)
-ORDER BY id DESC
-LIMIT sqlc.arg(max_rows);
+ORDER BY id;
 
 -- name: DeleteTerminalTurnsForThread :exec
 DELETE FROM session_terminal_turns
 WHERE session_id = sqlc.arg(session_id)
   AND harness = sqlc.arg(harness)
   AND (native_session_id = sqlc.arg(native_session_id) OR native_session_id = '');
-
--- name: SetConversationBranchHandoffNote :exec
-UPDATE conversation_branches SET handoff_note = sqlc.arg(handoff_note) WHERE id = sqlc.arg(id);
-
--- name: ConversationBranchHandoffNote :one
-SELECT handoff_note FROM conversation_branches WHERE id = sqlc.arg(id);

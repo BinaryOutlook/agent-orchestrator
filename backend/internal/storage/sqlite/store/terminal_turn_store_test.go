@@ -42,17 +42,17 @@ func TestTerminalTurnsPairRequestsWithResponses(t *testing.T) {
 	respond("a second stop does not overwrite a closed turn")
 	request(domain.HarnessCodex, "codex-1", "codex ask")
 
-	turns, err := s.ListTerminalTurns(ctx, session.ID, domain.TerminalTurnRetention)
+	turns, err := s.ListTerminalTurns(ctx, session.ID)
 	if err != nil {
 		t.Fatalf("list turns: %v", err)
 	}
 	if len(turns) != 2 {
 		t.Fatalf("turns = %d, want 2: %+v", len(turns), turns)
 	}
-	if turns[0].UserRequest != "first ask\n\nqueued ask" || turns[0].AgentResponse != "first answer" || turns[0].RespondedAt.IsZero() {
+	if turns[0].UserRequest != "first ask\n\nqueued ask" || turns[0].AgentResponse != "first answer" {
 		t.Fatalf("first turn = %+v, want both requests and the first answer", turns[0])
 	}
-	if turns[1].UserRequest != "codex ask" || !turns[1].RespondedAt.IsZero() || turns[1].Harness != domain.HarnessCodex {
+	if turns[1].UserRequest != "codex ask" || turns[1].AgentResponse != "" || turns[1].Harness != domain.HarnessCodex {
 		t.Fatalf("second turn = %+v, want an open Codex turn", turns[1])
 	}
 
@@ -60,7 +60,7 @@ func TestTerminalTurnsPairRequestsWithResponses(t *testing.T) {
 	if err := s.DeleteTerminalTurnsForThread(ctx, session.ID, domain.HarnessClaudeCode, "claude-1"); err != nil {
 		t.Fatalf("delete imported turns: %v", err)
 	}
-	turns, err = s.ListTerminalTurns(ctx, session.ID, domain.TerminalTurnRetention)
+	turns, err = s.ListTerminalTurns(ctx, session.ID)
 	if err != nil || len(turns) != 1 || turns[0].UserRequest != "codex ask" {
 		t.Fatalf("after import turns = %+v, %v; want only the Codex turn", turns, err)
 	}
@@ -86,11 +86,61 @@ func TestTerminalTurnsKeepOnlyTheNewest(t *testing.T) {
 			t.Fatalf("record response %d: %v", index, err)
 		}
 	}
-	turns, err := s.ListTerminalTurns(ctx, session.ID, 1000)
+	turns, err := s.ListTerminalTurns(ctx, session.ID)
 	if err != nil {
 		t.Fatalf("list turns: %v", err)
 	}
 	if len(turns) != domain.TerminalTurnRetention || turns[0].UserRequest != "ask-6" {
 		t.Fatalf("kept %d turns starting at %q, want %d starting at ask-6", len(turns), turns[0].UserRequest, domain.TerminalTurnRetention)
+	}
+}
+
+func TestTerminalTurnsJoinOnlyOnTheSameThread(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "threads")
+	session, err := s.CreateSession(ctx, sampleRecord("threads"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	other := sampleRecord("threads")
+	other.ID = "threads-2"
+	if _, err := s.CreateSession(ctx, other); err != nil {
+		t.Fatalf("create second session: %v", err)
+	}
+	at := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+	request := func(id domain.SessionID, thread, text string) {
+		t.Helper()
+		at = at.Add(time.Minute)
+		if err := s.RecordTerminalTurnRequest(ctx, domain.TerminalTurn{
+			SessionID: id, Harness: domain.HarnessClaudeCode, NativeSessionID: thread, UserRequest: text, RequestedAt: at,
+		}); err != nil {
+			t.Fatalf("record request %q: %v", text, err)
+		}
+	}
+	request(session.ID, "thread-1", "first ask")
+	request(session.ID, "thread-1", "queued on the same thread")
+	request(session.ID, "thread-2", "another thread starts its own turn")
+	request(session.ID, "", "a request with no id joins the open turn")
+	request(other.ID, "thread-2", "another session never joins")
+	request(session.ID, "thread-2", "   ")
+	if err := s.RecordTerminalTurnResponse(ctx, other.ID, "  other answer  ", at); err != nil {
+		t.Fatalf("record response: %v", err)
+	}
+
+	turns, err := s.ListTerminalTurns(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	want := []string{
+		"first ask\n\nqueued on the same thread",
+		"another thread starts its own turn\n\na request with no id joins the open turn",
+	}
+	if len(turns) != len(want) || turns[0].UserRequest != want[0] || turns[1].UserRequest != want[1] ||
+		turns[0].AgentResponse != "" || turns[1].AgentResponse != "" {
+		t.Fatalf("turns = %+v, want %q with no responses", turns, want)
+	}
+	if turns, err := s.ListTerminalTurns(ctx, other.ID); err != nil || len(turns) != 1 || turns[0].AgentResponse != "other answer" {
+		t.Fatalf("other session turns = %+v, %v; want its one answered turn", turns, err)
 	}
 }

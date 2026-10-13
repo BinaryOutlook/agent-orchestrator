@@ -114,13 +114,13 @@ INSERT INTO conversation_branches (
     id, conversation_id, session_id, provider_conversation_id,
     parent_branch_id, fork_after_turn_id, replaced_turn_id,
     replacement_turn_id, fork_after_sequence, strategy, replay_cutoff_sequence,
-    replay_truncated, provider_scope_id, provider_ids_scoped, created_at
+    replay_truncated, provider_scope_id, provider_ids_scoped, created_at, handoff_note
 ) VALUES (
     sqlc.arg(id), sqlc.arg(conversation_id), sqlc.narg(session_id),
     sqlc.arg(provider_conversation_id), sqlc.narg(parent_branch_id),
     sqlc.narg(fork_after_turn_id), sqlc.narg(replaced_turn_id),
     sqlc.narg(replacement_turn_id), sqlc.arg(fork_after_sequence), sqlc.arg(strategy),
-    sqlc.arg(replay_cutoff_sequence), sqlc.arg(replay_truncated), sqlc.arg(provider_scope_id), sqlc.arg(provider_ids_scoped), sqlc.arg(created_at)
+    sqlc.arg(replay_cutoff_sequence), sqlc.arg(replay_truncated), sqlc.arg(provider_scope_id), sqlc.arg(provider_ids_scoped), sqlc.arg(created_at), sqlc.arg(handoff_note)
 );
 
 -- name: InsertReviewConversationBranch :exec
@@ -207,8 +207,8 @@ ORDER BY b.created_at, b.id;
 -- provider events. The previous provider turn is the fork target; it is empty for
 -- the first prompt, which tells the service to start a fresh provider thread.
 -- A provider boundary is the nearest ancestor that is either the root or has no
--- replaced turn. Older AO history stays visible, but provider turn ids outside
--- the active boundary can never be sent to the current driver.
+-- replaced turn. Agent switching creates the latter kind: older AO history stays
+-- visible, but its provider turn ids can never be sent to the new driver.
 -- name: SelectConversationEditAnchor :one
 WITH RECURSIVE active_path(branch_id, max_sequence, depth) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER), 0

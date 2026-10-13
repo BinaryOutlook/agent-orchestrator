@@ -12,17 +12,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type sessionHistoryTurn struct {
-	UserRequest   string    `json:"userRequest"`
-	AgentResponse string    `json:"agentResponse"`
-	At            time.Time `json:"at"`
-	Harness       string    `json:"harness,omitempty"`
-}
-
 type sessionHistoryResponse struct {
-	Turns  []sessionHistoryTurn `json:"turns"`
-	Total  int                  `json:"total"`
-	Offset int                  `json:"offset"`
+	Turns []struct {
+		UserRequest   string    `json:"userRequest"`
+		AgentResponse string    `json:"agentResponse"`
+		At            time.Time `json:"at"`
+		Harness       string    `json:"harness,omitempty"`
+	} `json:"turns"`
+	Total  int `json:"total"`
+	Offset int `json:"offset"`
 }
 
 // newSessionHistoryCommand prints a session's turns in full, newest first. It
@@ -35,16 +33,12 @@ func newSessionHistoryCommand(ctx *commandContext) *cobra.Command {
 		Short: "Print a session's turns, newest first (defaults to the current session)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			raw := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
+			id := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
 			if len(args) == 1 {
-				raw = args[0]
+				id = strings.TrimSpace(args[0])
 			}
-			if raw == "" {
+			if id == "" {
 				return usageError{errors.New("session id is required outside an AO session (AO_SESSION_ID is not set)")}
-			}
-			id, err := normalizeSessionID(raw)
-			if err != nil {
-				return err
 			}
 			if offset < 0 || limit < 1 {
 				return usageError{errors.New("--offset must be 0 or more and --limit must be 1 or more")}
@@ -71,19 +65,17 @@ func (c *commandContext) printSessionHistory(ctx context.Context, cmd *cobra.Com
 	for index, turn := range response.Turns {
 		// Turn 1 is the oldest, so a number keeps meaning the same turn as the
 		// session grows.
-		number := response.Total - response.Offset - index
-		header := fmt.Sprintf("## Turn %d of %d", number, response.Total)
+		header := fmt.Sprintf("## Turn %d of %d", response.Total-response.Offset-index, response.Total)
 		if !turn.At.IsZero() {
 			header += "  " + turn.At.UTC().Format(time.RFC3339)
 		}
 		if turn.Harness != "" {
 			header += "  " + turn.Harness
 		}
-		answer := turn.AgentResponse
-		if strings.TrimSpace(answer) == "" {
-			answer = "(no final response recorded)"
+		if strings.TrimSpace(turn.AgentResponse) == "" {
+			turn.AgentResponse = "(no final response recorded)"
 		}
-		if _, err := fmt.Fprintf(out, "%s\nUser:\n%s\n\nAssistant:\n%s\n\n", header, turn.UserRequest, answer); err != nil {
+		if _, err := fmt.Fprintf(out, "%s\nUser:\n%s\n\nAssistant:\n%s\n\n", header, turn.UserRequest, turn.AgentResponse); err != nil {
 			return err
 		}
 	}

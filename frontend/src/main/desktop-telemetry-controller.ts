@@ -1,4 +1,4 @@
-import { TELEMETRY_PRODUCTION_ENABLED, type RendererTelemetryCapture, type TelemetryPolicySnapshot, type TelemetryPolicyView } from "../shared/telemetry-policy";
+import { AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED, type RendererTelemetryCapture, type TelemetryPolicySnapshot, type TelemetryPolicyView } from "../shared/telemetry-policy";
 
 const RETRY_BACKOFF_INIT_MS = 2_000;
 const RETRY_BACKOFF_MAX_MS = 60_000;
@@ -68,7 +68,6 @@ export class DesktopTelemetryController {
 		return this.serialize(async () => {
 			if (this.view.state === "applied" || !this.options.authority.durabilitySupported) return this.snapshot();
 			if (this.clock() < this.nextRetryAtMs) return this.snapshot();
-			let desktopCleanupFailed = false;
 			let authorityVerified = false;
 			try {
 				let snapshot = this.options.authority.snapshot();
@@ -77,7 +76,7 @@ export class DesktopTelemetryController {
 					snapshot.consentGeneration === this.view.consentGeneration &&
 					snapshot.eventsEnabled === this.view.eventsEnabled;
 				if (!authorityVerified) throw new Error("durable policy authority was not acknowledged");
-				if (!snapshot.eventsEnabled && this.pendingDesktopCleanup && !(await this.pendingDesktopCleanup())) { desktopCleanupFailed = true; throw new Error("desktop cleanup is incomplete"); }
+				if (!snapshot.eventsEnabled && this.pendingDesktopCleanup && !(await this.pendingDesktopCleanup())) throw new Error("desktop cleanup is incomplete");
 				this.pendingDesktopCleanup = null;
 				this.view = this.toView(snapshot, "applied", this.baseReason());
 				if (this.captureEnabled(this.view) && !this.transport) this.transport = await this.options.transportFactory();
@@ -162,7 +161,7 @@ export class DesktopTelemetryController {
 	}
 
 	private captureEnabled(snapshot: Pick<TelemetryPolicySnapshot, "eventsEnabled" | "acknowledged">): boolean {
-		return snapshot.eventsEnabled && snapshot.acknowledged && this.options.authority.durabilitySupported && this.options.environmentAllowsEvents && (this.options.productionEnabled ?? TELEMETRY_PRODUCTION_ENABLED);
+		return snapshot.eventsEnabled && snapshot.acknowledged && this.options.authority.durabilitySupported && this.options.environmentAllowsEvents && (this.options.productionEnabled ?? AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED);
 	}
 
 	private toView(snapshot: TelemetryPolicySnapshot, state: TelemetryPolicyView["state"], reason = this.baseReason()): TelemetryPolicyView {
@@ -172,7 +171,7 @@ export class DesktopTelemetryController {
 	private baseReason(): TelemetryPolicyView["reason"] {
 		if (!this.options.authority.durabilitySupported) return "durability_unsupported";
 		if (!this.options.environmentAllowsEvents) return "environment_veto";
-		if (!(this.options.productionEnabled ?? TELEMETRY_PRODUCTION_ENABLED)) return "release_blocked";
+		if (!(this.options.productionEnabled ?? AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED)) return "release_blocked";
 		return undefined;
 	}
 

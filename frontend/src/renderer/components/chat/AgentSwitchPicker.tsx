@@ -1,13 +1,11 @@
 /**
- * One menu for who answers the next message and how: saved setups first, then
- * Agent, Model and Effort rows that each open a list, then the on/off settings.
+ * One menu for who answers the next message and how: saved setups, then Agent,
+ * Model and Effort rows that each open a list, then the on/off settings.
  * Typing searches every agent's models.
  *
- * Changing the running agent's settings applies straight away. Picking another
- * agent changes nothing yet: the choice is held as pending and the switch runs
- * when the next message is sent (or on Switch, in a terminal), so the handoff
- * note is written at the moment it is needed and looking through the lists
- * never restarts anything. Picking the running agent again clears it.
+ * The running agent's settings apply straight away. Another agent is only held
+ * as pending: the switch runs with the next message (or on Switch, in a
+ * terminal), so browsing the lists never restarts anything.
  */
 
 import { useQueries } from "@tanstack/react-query";
@@ -30,8 +28,10 @@ import {
 	modelGroupLabel,
 	pickModelVariant,
 	readableModelLabel,
+	type ModelVariant,
 } from "../../lib/model-variants";
 import { cn } from "../../lib/utils";
+import type { TurnSettings } from "../../types/conversation";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import {
 	OptionMenu,
@@ -63,7 +63,7 @@ export interface PendingAgentSwitch {
 	/** Run Claude Code with Ultracode: set at launch in a terminal, asked per message in chat. */
 	ultracode?: boolean;
 	/** Terminal only: where Claude Code compacts on its own, "200k" or "1m". */
-	autoCompactWindow?: string;
+	autoCompactWindow?: TurnSettings["autoCompactWindow"];
 }
 
 /** What the chat surface passes down to turn the model control into this one. */
@@ -74,11 +74,10 @@ export interface AgentSwitchProps {
 	onPendingChange: (next: PendingAgentSwitch | undefined) => void;
 	/** Switching is refused while the agent is working. */
 	disabled?: boolean;
-}
-
-export interface EffortChoice {
-	value: string;
-	label: string;
+	/** Claude Code's Ultracode: Extra High effort plus its workflows, asked for by a keyword in each message. */
+	ultracode?: { on: boolean; onChange: (on: boolean) => void };
+	/** When Claude Code compacts on its own. Applies the next time it starts. */
+	autoCompact?: AutoCompactControl;
 }
 
 export interface PickerModel {
@@ -102,11 +101,9 @@ export interface PickerSource {
 	onPickModel?: (id: string) => void;
 	/** Selects a model together with its settings in one step, for a favourite. */
 	onPickSetup?: (setup: ModelFavorite) => void;
-	efforts: EffortChoice[];
+	efforts: Array<{ value: string; label: string }>;
 	effort?: string;
 	onPickEffort?: (value: string) => void;
-	/** Returns effort to the model's own default. Absent when it is already there. */
-	onResetEffort?: () => void;
 	/** Undefined when the agent has no speed setting. */
 	fast?: boolean;
 	onToggleFast?: (next: boolean) => void;
@@ -115,16 +112,9 @@ export interface PickerSource {
 	onToggleThinking?: (next: boolean) => void;
 }
 
-/** Kept as the name the settings bar builds for the running agent. */
-export type CurrentAgentChoices = PickerSource;
-
-type PickedVariant = { id: string; label: string; effort?: string; fast: boolean; thinking: boolean };
-
 const TRIGGER_CLASS =
 	"h-7 gap-1.5 bg-transparent rounded-lg px-2 text-[12px]! leading-none text-foreground hover:bg-interactive-active data-[state=open]:bg-interactive-active";
-const MENU_CLASS = "chat-settings-menu w-64 text-[12px]!";
 const SUB_CLASS = "chat-settings-menu min-w-48 text-[12px]!";
-const LIST_SCROLL = "model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain";
 const DIVIDER = "mt-1 border-t border-border pt-1";
 
 /**
@@ -135,7 +125,7 @@ function variantSource(
 	models: PickerModel[],
 	selectedId: string | undefined,
 	fallbackLabel: string,
-	onPick: ((variant: PickedVariant) => void) | undefined,
+	onPick: ((variant: ModelVariant, label: string) => void) | undefined,
 	t: TFunction,
 ): PickerSource {
 	const families = collapseModelVariants(models);
@@ -143,48 +133,24 @@ function variantSource(
 	const family = selected?.family;
 	const variant = selected?.variant;
 	const choose = onPick && family
-		? (want: { effort?: string; thinking?: boolean; fast?: boolean }) => {
-			const next = pickModelVariant(family, {
-				effort: want.effort ?? variant?.effort,
-				thinking: want.thinking ?? variant?.thinking,
-				fast: want.fast ?? variant?.fast,
-			});
-			onPick({ id: next.id, label: family.label, effort: next.effort, fast: next.fast, thinking: next.thinking });
-		}
+		? (want: Partial<ModelVariant>) => onPick(pickModelVariant(family, { ...variant, ...want }), family.label)
 		: undefined;
-	const resettable = Boolean(onPick && family && variant && variant.id !== family.defaultVariant.id);
 	return {
 		models: families.map((entry) => ({ id: entry.id, label: entry.label, group: entry.group, sendId: entry.defaultVariant.id })),
 		modelId: family?.id,
 		sendId: variant?.id,
-		onPickSetup: onPick
-			? (setup) => {
-				const found = findModelVariant(families, setup.model);
-				if (!found) return;
-				onPick({ id: found.variant.id, label: found.family.label, effort: found.variant.effort, fast: found.variant.fast, thinking: found.variant.thinking });
-			}
-			: undefined,
+		onPickSetup: onPick && ((setup) => {
+			const found = findModelVariant(families, setup.model);
+			if (found) onPick(found.variant, found.family.label);
+		}),
 		modelLabel: family?.label ?? fallbackLabel,
-		onPickModel: onPick
-			? (id) => {
-				const next = families.find((entry) => entry.id === id);
-				if (!next) return;
-				const chosen = next.defaultVariant;
-				onPick({ id: chosen.id, label: next.label, effort: chosen.effort, fast: chosen.fast, thinking: chosen.thinking });
-			}
-			: undefined,
+		onPickModel: onPick && ((id) => {
+			const next = families.find((entry) => entry.id === id);
+			if (next) onPick(next.defaultVariant, next.label);
+		}),
 		efforts: (family?.efforts ?? []).map((value) => ({ value, label: formatEffortLabel(value, t) })),
 		effort: variant?.effort,
 		onPickEffort: choose ? (effort) => choose({ effort }) : undefined,
-		onResetEffort: resettable && family
-			? () => onPick?.({
-				id: family.defaultVariant.id,
-				label: family.label,
-				effort: family.defaultVariant.effort,
-				fast: family.defaultVariant.fast,
-				thinking: family.defaultVariant.thinking,
-			})
-			: undefined,
 		fast: family?.hasFast ? Boolean(variant?.fast) : undefined,
 		onToggleFast: choose ? (fast) => choose({ fast }) : undefined,
 		thinking: family?.hasThinkingChoice ? Boolean(variant?.thinking) : undefined,
@@ -209,10 +175,7 @@ export function AgentModelPicker({
 	currentHarness: string;
 	current: PickerSource;
 	agentSwitch: AgentSwitchProps;
-	/**
-	 * Over a terminal session. AO cannot change the running agent's model there,
-	 * so the control names that agent and only offers a switch to another one.
-	 */
+	/** Over a terminal session, where AO cannot change the running agent's model: the control names it and only offers a switch. */
 	terminal?: boolean;
 	/** The current agent's own settings cannot be changed right now. */
 	disabled?: boolean;
@@ -240,32 +203,13 @@ export function AgentModelPicker({
 	const management = useAgentManagementMenu(undefined, hostId);
 	const [open, setOpen] = useState(false);
 	const favorites = useModelFavorites();
-	const keepCurrent = () => {
-		if (pending) onPendingChange(undefined);
-	};
-	const currentSource: PickerSource = (() => {
-		const pickModel = current.onPickModel;
-		const base = listsModelVariants(currentHarness)
-			? variantSource(
-				current.models,
-				current.modelId,
-				current.modelLabel,
-				pickModel ? (variant) => pickModel(variant.id) : undefined,
-				t,
-			)
-			: current;
-		return disabled
-			? {
-				...base,
-				onPickModel: undefined,
-				onPickSetup: undefined,
-				onPickEffort: undefined,
-				onResetEffort: undefined,
-				onToggleFast: undefined,
-				onToggleThinking: undefined,
-			}
-			: base;
-	})();
+	const keepCurrent = () => { if (pending) onPendingChange(undefined); };
+	const live = listsModelVariants(currentHarness)
+		? variantSource(current.models, current.modelId, current.modelLabel, current.onPickModel && ((variant) => current.onPickModel?.(variant.id)), t)
+		: current;
+	const currentSource: PickerSource = disabled
+		? { ...live, onPickModel: undefined, onPickSetup: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined }
+		: live;
 	// The other agents' model lists load once the menu is open: the picked
 	// agent's for its rows, the rest so search reaches every model.
 	const others = agents.filter((agent) => agent.id !== currentHarness);
@@ -279,16 +223,14 @@ export function AgentModelPicker({
 	const shownHarness = pending?.harness ?? currentHarness;
 	const source = pending ? otherSource(pending.harness, pending) : currentSource;
 	const settable = !terminal || Boolean(pending);
-
 	const shownModel = pending ? pending.modelLabel ?? agentLabel(pending.harness) : currentSource.modelLabel;
 	const pendingEffort = pending?.ultracode ? "ultracode" : pending?.effort ?? pending?.shownEffort;
 	const shownEffort = pending
 		? pendingEffort ? formatEffortLabel(pendingEffort, t) : undefined
 		: currentSource.efforts.find((effort) => effort.value === currentSource.effort)?.label;
 	const shownUltra = isUltraEffort(pending ? pendingEffort : currentSource.effort);
-	const shownFast = pending ? pending.fast : currentSource.fast;
+	const shownFast = pending ? pending.fast || pending.fastMode : currentSource.fast;
 	const shownThinking = pending ? pending.thinking : currentSource.thinking;
-
 	const pickModel = (harness: string, id: string) => {
 		if (harness !== currentHarness) return otherSource(harness, pending?.harness === harness ? pending : undefined).onPickModel?.(id);
 		keepCurrent();
@@ -299,17 +241,11 @@ export function AgentModelPicker({
 			keepCurrent();
 			if (currentSource.onPickSetup) currentSource.onPickSetup(favorite);
 			else currentSource.onPickModel?.(favorite.model);
-		} else if (listsModelVariants(favorite.harness)) {
-			// The variant id already carries its effort, thinking and speed.
-			onPendingChange({
-				harness: favorite.harness, model: favorite.model, modelLabel: favorite.label,
-				shownEffort: favorite.effort, fast: favorite.fast, thinking: favorite.thinking,
-			});
 		} else {
 			onPendingChange({
-				harness: favorite.harness, model: favorite.model, modelLabel: favorite.label,
-				effort: favorite.effort, shownEffort: favorite.effort,
-				fast: favorite.fast, fastMode: favorite.fast,
+				harness: favorite.harness, model: favorite.model, modelLabel: favorite.label, shownEffort: favorite.effort, fast: favorite.fast,
+				// A variant id already carries its effort, thinking and speed.
+				...(listsModelVariants(favorite.harness) ? { thinking: favorite.thinking } : { effort: favorite.effort, fastMode: favorite.fast }),
 			});
 		}
 	};
@@ -321,17 +257,12 @@ export function AgentModelPicker({
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
 	const setups = favorites.filter((entry) => !(terminal && entry.harness === currentHarness));
 	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
-	const searchRows = open
-		? [
-			...(terminal ? [] : [{ id: currentHarness, models: currentSource.models }]),
-			...others.map((agent) => ({ id: agent.id, models: otherSource(agent.id).models })),
-		].flatMap((agent) => agent.models.filter((model) => model.id).map((model) => ({
-			id: `${agent.id} ${model.id}`,
-			label: `${model.label} ${agentLabel(agent.id)}`,
-			harness: agent.id,
-			model,
-		})))
-		: [];
+	const searchRows = (open ? agents : []).flatMap((agent) => {
+		const models = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
+		return models.filter((model) => model.id).map((model) => ({
+			id: `${agent.id} ${model.id}`, label: `${model.label} ${agentLabel(agent.id)}`, harness: agent.id, model,
+		}));
+	});
 	const modelValue = pending
 		? pending.modelLabel ?? source.models.find((model) => model.hint === "default")?.label ?? "Default"
 		: source.modelLabel;
@@ -357,20 +288,18 @@ export function AgentModelPicker({
 					<>
 						{shownFast ? <Zap aria-label="Fast mode" className="size-3 shrink-0 fill-current" /> : null}
 						{shownThinking ? <Brain aria-label="Thinking" className="size-3 shrink-0" /> : null}
-						{shownEffort ? (
-							<span className={cn("shrink-0", shownUltra ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span>
-						) : null}
+						{shownEffort ? <span className={cn("shrink-0", shownUltra ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
 						{mark}
 					</>
 				)}
 			</OptionMenuTrigger>
-			<OptionMenuContent align={terminal ? "start" : "end"} side={terminal ? "right" : "top"} className={MENU_CLASS}
+			<OptionMenuContent align={terminal ? "start" : "end"} side={terminal ? "right" : "top"} className="chat-settings-menu w-64 text-[12px]!"
 				onCloseAutoFocus={(event) => {
 					management.onCloseAutoFocus(event);
 					if (!event.defaultPrevented) onCloseAutoFocus?.(event);
 				}}
 			>
-				<ModelMenuChoices models={searchRows} alwaysSearch divided searchPlaceholder="Search agents and models">
+				<ModelMenuChoices models={searchRows} searchable searchPlaceholder="Search agents and models">
 					{(matches, searchActiveID, optionID, query) => query ? matches.map((row) => (
 						<OptionMenuItem
 							key={row.id}
@@ -409,7 +338,7 @@ export function AgentModelPicker({
 								<OptionMenuSub>
 									<OptionMenuSubTrigger label="Agent" value={agentLabel(shownHarness)} />
 									<OptionMenuSubContent scrollable className={SUB_CLASS}>
-										<div className={LIST_SCROLL}>
+										<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
 											{agents.map((agent) => (
 												<OptionMenuItem
 													key={agent.id}
@@ -468,22 +397,16 @@ export function AgentModelPicker({
 							</div>
 							{settable && (source.fast !== undefined || source.thinking !== undefined) ? (
 								<div className={DIVIDER}>
-									{source.fast === undefined ? null : (
-										<ToggleRow label="Fast mode" checked={source.fast} onChange={source.onToggleFast} />
-									)}
-									{source.thinking === undefined ? null : (
-										<ToggleRow label="Thinking" checked={source.thinking} onChange={source.onToggleThinking} />
-									)}
+									<ToggleRow label="Fast mode" checked={source.fast} onChange={source.onToggleFast} />
+									<ToggleRow label="Thinking" checked={source.thinking} onChange={source.onToggleThinking} />
 								</div>
 							) : null}
 							{extras && !pending ? <div className={DIVIDER}>{extras}</div> : null}
 							{offersAutoCompact ? (
 								<div className={DIVIDER}>
 									<AutoCompactRow
-										control={{
-											value: pending?.autoCompactWindow,
-											onChange: (value) => pending && onPendingChange({ ...pending, autoCompactWindow: value }),
-										}}
+										value={pending?.autoCompactWindow}
+										onChange={(value) => pending && onPendingChange({ ...pending, autoCompactWindow: value })}
 										title="When Claude Code compacts the conversation on its own."
 									/>
 								</div>
@@ -497,8 +420,9 @@ export function AgentModelPicker({
 	);
 }
 
-/** An on/off setting as a menu row. The row owns the switch, so a click or Enter fires once. */
-function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange?: (next: boolean) => void }) {
+/** An on/off setting the agent has, as a menu row. The row owns the switch, so a click or Enter fires once. */
+function ToggleRow({ label, checked, onChange }: { label: string; checked?: boolean; onChange?: (next: boolean) => void }) {
+	if (checked === undefined) return null;
 	return (
 		<OptionMenuItem
 			disabled={!onChange}
@@ -525,15 +449,11 @@ function otherAgentSource(
 			id: model.id,
 			label: readableModelLabel(agentModelDisplayLabel(harness, model.label)),
 			group: modelGroupLabel(model.provider, harness),
+			hint: model.isDefault ? "default" : undefined,
 		}));
 	if (listsModelVariants(harness)) {
-		return variantSource(listed, pending?.model, agentLabel(harness), (variant) => onPick({
-			harness,
-			model: variant.id,
-			modelLabel: variant.label,
-			shownEffort: variant.effort,
-			fast: variant.fast,
-			thinking: variant.thinking,
+		return variantSource(listed, pending?.model, agentLabel(harness), (variant, modelLabel) => onPick({
+			harness, model: variant.id, modelLabel, shownEffort: variant.effort, fast: variant.fast, thinking: variant.thinking,
 		}), t);
 	}
 	const chosen = pending ? pending.model ?? "" : undefined;
@@ -545,35 +465,29 @@ function otherAgentSource(
 	const levels = (effortSource?.efforts ?? []).filter((value) => value && value.toLowerCase() !== "default");
 	// Ultracode runs at Extra High, so it is only for models that have that level.
 	const offersUltracode = harness === "claude-code" && levels.includes("xhigh");
-	const ultracodeOn = offersUltracode && Boolean(pending?.ultracode);
 	const keep = {
 		harness,
 		model: pending?.model,
 		modelLabel: pending?.modelLabel,
 		shownEffort: defaultEffort,
-		fast: fastOn || undefined,
 		fastMode: fastOn || undefined,
 		autoCompactWindow: pending?.autoCompactWindow,
 	};
 	return {
 		// With a model list, the agent's default is one of its rows. The
 		// plain row is only for an agent that lists none.
-		models: listed.length > 0
-			? listed.map((model) => catalog?.find((entry) => entry.id === model.id)?.isDefault ? { ...model, hint: "default" } : model)
-			: [{ id: "", label: "Default model" }],
+		models: listed.length > 0 ? listed : [{ id: "", label: "Default model" }],
 		modelId: chosen,
 		modelLabel: pending?.modelLabel ?? agentLabel(harness),
 		onPickModel: (id) => {
 			// Fast mode carries over only to a model that also offers it.
 			const next = catalog?.find((model) => (id ? model.id === id : model.isDefault));
-			const fast = Boolean(next?.supportsFast && pending?.fastMode) || undefined;
 			onPick({
 				harness,
 				model: id || undefined,
 				modelLabel: listed.find((model) => model.id === id)?.label,
 				shownEffort: next?.defaultEffort,
-				fast,
-				fastMode: fast,
+				fastMode: Boolean(next?.supportsFast && pending?.fastMode) || undefined,
 				autoCompactWindow: pending?.autoCompactWindow,
 			});
 		},
@@ -581,13 +495,10 @@ function otherAgentSource(
 			...levels.map((value) => ({ value, label: formatEffortLabel(value, t) })),
 			...(offersUltracode ? [{ value: "ultracode", label: "Ultracode" }] : []),
 		],
-		effort: ultracodeOn ? "ultracode" : pending?.effort ?? defaultEffort,
-		onPickEffort: (effort) => onPick(effort === "ultracode"
-			? { ...keep, effort: "xhigh", ultracode: true }
-			: { ...keep, effort }),
-		onResetEffort: ultracodeOn || (pending?.effort && pending.effort !== defaultEffort) ? () => onPick(keep) : undefined,
+		effort: offersUltracode && pending?.ultracode ? "ultracode" : pending?.effort ?? defaultEffort,
+		onPickEffort: (effort) => onPick(effort === "ultracode" ? { ...keep, effort: "xhigh", ultracode: true } : { ...keep, effort }),
 		fast: offersFast ? fastOn : undefined,
-		onToggleFast: (fast) => onPick({ ...keep, effort: pending?.effort, ultracode: pending?.ultracode, fast: fast || undefined, fastMode: fast || undefined }),
+		onToggleFast: (fast) => onPick({ ...keep, effort: pending?.effort, ultracode: pending?.ultracode, fastMode: fast || undefined }),
 	};
 }
 
@@ -595,16 +506,14 @@ function otherAgentSource(
 function ModelRows({ source, harness }: { source: PickerSource; harness: string }) {
 	const favorites = useModelFavorites();
 	return (
-		<ModelMenuChoices models={source.models} alwaysSearch noSearch={source.models.filter((model) => model.id).length <= 10} divided>
+		<ModelMenuChoices models={source.models} searchable={source.models.filter((model) => model.id).length > 10}>
 			{(matches, searchActiveID, optionID) => matches.map((model, index) => {
 				const active = model.id === source.modelId;
 				const key = model.id || "default";
 				return (
 					<Fragment key={key}>
 						{model.group && model.group !== matches[index - 1]?.group ? (
-							<OptionMenuLabel className="px-3 pt-2.5 pb-0.5 text-[10px]! text-muted-foreground/70">
-								{model.group}
-							</OptionMenuLabel>
+							<OptionMenuLabel className="px-3 pt-2.5 pb-0.5 text-[10px]! text-muted-foreground/70">{model.group}</OptionMenuLabel>
 						) : null}
 						<OptionMenuItem
 							id={optionID?.(key)}
@@ -635,10 +544,7 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 	);
 }
 
-/**
- * What starring a row saves. The chosen row is saved with the settings it has
- * now; any other row is saved as the model on its own.
- */
+/** What starring a row saves: the chosen row with the settings it has now, any other row as the model on its own. */
 function favoriteFor(harness: string, model: PickerModel, chosen: PickerSource | undefined): ModelFavorite {
 	const plain = { harness, row: model.id, model: model.sendId ?? model.id, label: model.label };
 	// Ultracode is asked for per message or at launch; it is not a level to restore.
@@ -681,15 +587,7 @@ function isUltraEffort(value: string | undefined): boolean {
 }
 
 /** The strip on top of the chat box while a switch waits for the next message. */
-export function PendingAgentSwitchNotice({
-	pending,
-	switching,
-	onCancel,
-}: {
-	pending: PendingAgentSwitch;
-	switching?: boolean;
-	onCancel: () => void;
-}) {
+export function PendingAgentSwitchNotice({ pending, switching, onCancel }: { pending: PendingAgentSwitch; switching?: boolean; onCancel: () => void }) {
 	const target = [agentLabel(pending.harness), pending.modelLabel].filter(Boolean).join(" · ");
 	return (
 		<div
@@ -700,33 +598,24 @@ export function PendingAgentSwitchNotice({
 			<span className="shrink-0">{switching ? "Handing off to" : "Next message goes to"}</span>
 			<ProviderMark provider={pending.harness} className="-mx-0.5 size-3.5" />
 			<span className="min-w-0 truncate">{switching ? `${target}…` : `${target}. It gets a summary and this session's history.`}</span>
-			{switching ? null : (
-				<button
-					type="button"
-					aria-label="Keep the current agent"
-					title="Keep the current agent"
-					onClick={onCancel}
-					className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground hover:bg-interactive-active hover:text-foreground"
-				>
-					<X aria-hidden="true" className="size-3.5" />
-				</button>
-			)}
+			{switching ? null : <DismissButton label="Keep the current agent" onClick={onCancel} className="ml-auto" />}
 		</div>
 	);
 }
 
+export function DismissButton({ label, onClick, disabled, className }: { label: string; onClick: () => void; disabled?: boolean; className?: string }) {
+	return (
+		<button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick}
+			className={cn("shrink-0 rounded p-0.5 text-muted-foreground hover:bg-interactive-active hover:text-foreground", className)}>
+			<X aria-hidden="true" className="size-3.5" />
+		</button>
+	);
+}
+
 /** An error from a switch, shown as a strip on top of the chat box. */
-export function ComposerErrorNotice({
-	title,
-	message,
-	onDismiss,
-	dismissLabel = "Dismiss",
-}: {
-	title: string;
-	message: string;
-	onDismiss?: () => void;
-	dismissLabel?: string;
-}) {
+export function ComposerErrorNotice(
+	{ title, message, onDismiss, dismissLabel = "Dismiss" }: { title: string; message: string; onDismiss: () => void; dismissLabel?: string },
+) {
 	return (
 		<div
 			role="alert"
@@ -737,37 +626,23 @@ export function ComposerErrorNotice({
 				<p className="font-medium text-foreground">{title}</p>
 				<p className="break-words text-muted-foreground">{message}</p>
 			</div>
-			{onDismiss ? (
-				<button
-					type="button"
-					aria-label={dismissLabel}
-					title={dismissLabel}
-					onClick={onDismiss}
-					className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-interactive-active hover:text-foreground"
-				>
-					<X aria-hidden="true" className="size-3.5" />
-				</button>
-			) : null}
+			<DismissButton label={dismissLabel} onClick={onDismiss} />
 		</div>
 	);
 }
 
 export interface AutoCompactControl {
-	/** "200k", "1m", or unset to leave it to Claude Code. */
-	value?: string;
+	/** Unset leaves it to Claude Code. */
+	value?: TurnSettings["autoCompactWindow"];
 	/** The agent is working or already restarting. */
 	disabled?: boolean;
-	onChange: (value: string | undefined) => void;
+	onChange: (value: TurnSettings["autoCompactWindow"]) => void;
 }
 
-const AUTO_COMPACT_CHOICES = [
-	{ value: undefined, label: "Auto" },
-	{ value: "200k", label: "200k" },
-	{ value: "1m", label: "1M" },
-] as const;
+const AUTO_COMPACT_CHOICES = [{ value: undefined, label: "Auto" }, { value: "200k", label: "200k" }, { value: "1m", label: "1M" }] as const;
 
-/** One row under the effort slider: where Claude Code compacts on its own. */
-export function AutoCompactRow({ control, title }: { control: AutoCompactControl; title: string }) {
+/** A menu row: where Claude Code compacts on its own. */
+export function AutoCompactRow({ value, disabled, onChange, title }: AutoCompactControl & { title: string }) {
 	return (
 		<div className="flex h-9 items-center gap-2 px-3 text-xs" title={title}>
 			<span className="text-muted-foreground">Auto-compact</span>
@@ -777,12 +652,12 @@ export function AutoCompactRow({ control, title }: { control: AutoCompactControl
 						key={choice.label}
 						type="button"
 						role="radio"
-						aria-checked={control.value === choice.value}
-						disabled={control.disabled || control.value === choice.value}
-						onClick={() => control.onChange(choice.value)}
+						aria-checked={value === choice.value}
+						disabled={disabled || value === choice.value}
+						onClick={() => onChange(choice.value)}
 						className={cn(
 							"rounded px-2 py-0.5 disabled:cursor-default",
-							control.value === choice.value ? "bg-settings-menu text-foreground" : "text-muted-foreground hover:text-foreground",
+							value === choice.value ? "bg-settings-menu text-foreground" : "text-muted-foreground hover:text-foreground",
 						)}
 					>
 						{choice.label}

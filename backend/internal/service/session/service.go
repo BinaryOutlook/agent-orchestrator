@@ -1286,6 +1286,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrAgentExitInProgress):
 		return apierr.Conflict("AGENT_EXIT_IN_PROGRESS",
 			"The agent is already exiting", nil)
+	case errors.Is(err, sessionmanager.ErrOperationInProgress):
+		return apierr.Conflict("SESSION_OPERATION_IN_PROGRESS", "Another operation is already running on this session", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionInProgress):
 		return apierr.Conflict("INTERFACE_TRANSITION_IN_PROGRESS",
 			"This session is already switching interfaces", nil)

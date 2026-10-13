@@ -6043,22 +6043,16 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	border-radius: 10px;
 }
 
-/* The top effort level ("Ultra", "Ultracode"): a slow colour sweep on the
-   slider's fill and on the chosen model's text, so the costliest setting is
-   visibly different from the rest. */
+/* The top effort level ("Ultra", "Ultracode"): a slow colour sweep on its label. */
 @keyframes ultra-sweep {
 	from { background-position: 0% 50%; }
 	to { background-position: 200% 50%; }
 }
 
-.ultra-fill,
 .ultra-text {
 	background-image: linear-gradient(90deg, #5aa2ff, #9b6dff, #ed6ac4, #9b6dff, #5aa2ff);
 	background-size: 200% 100%;
 	animation: ultra-sweep 3.2s linear infinite;
-}
-
-.ultra-text {
 	-webkit-background-clip: text;
 	background-clip: text;
 	color: transparent;
@@ -6066,8 +6060,5 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.ultra-fill,
-	.ultra-text {
-		animation: none;
-	}
+	.ultra-text { animation: none; }
 }

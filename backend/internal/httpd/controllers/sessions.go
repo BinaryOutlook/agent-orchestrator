@@ -2000,20 +2000,18 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 	// never match its pre/post counterpart, so overlong values are dropped by
 	// the CLI; the cap here is defense against non-AO callers).
 	sig := ports.ActivitySignal{
-		Timestamp:             in.ObservedAt,
-		Valid:                 state != "",
-		State:                 state,
-		Event:                 capActivityMeta(domain.SanitizeControlChars(in.Event)),
-		ToolName:              capActivityMeta(domain.SanitizeControlChars(in.ToolName)),
-		ToolUseID:             capActivityMeta(domain.SanitizeControlChars(in.ToolUseID)),
-		SubagentID:            capActivityMeta(domain.SanitizeControlChars(in.SubagentID)),
-		AgentSessionID:        agentSessionID,
-		LatestUserPrompt:      capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestUserPrompt)), 16<<10),
-		LatestAssistantUpdate: capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestAssistantUpdate)), 16<<10),
-		FinalAssistantMessage: capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.FinalAssistantMessage)), 16<<10),
-		TurnUserRequest:       capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.TurnUserRequest)), 16<<10),
-		// After a provider switch the previous agent's hook config can still be
-		// in the workspace. Its hooks must not report as the agent now running.
+		Timestamp:                    in.ObservedAt,
+		Valid:                        state != "",
+		State:                        state,
+		Event:                        capActivityMeta(domain.SanitizeControlChars(in.Event)),
+		ToolName:                     capActivityMeta(domain.SanitizeControlChars(in.ToolName)),
+		ToolUseID:                    capActivityMeta(domain.SanitizeControlChars(in.ToolUseID)),
+		SubagentID:                   capActivityMeta(domain.SanitizeControlChars(in.SubagentID)),
+		AgentSessionID:               agentSessionID,
+		LatestUserPrompt:             capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestUserPrompt)), 16<<10),
+		LatestAssistantUpdate:        capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestAssistantUpdate)), 16<<10),
+		FinalAssistantMessage:        capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.FinalAssistantMessage)), 16<<10),
+		TurnUserRequest:              capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.TurnUserRequest)), 16<<10),
 		ExpectedHarness:              domain.AgentHarness(capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Harness)))),
 		ConversationCheckpointOrigin: checkpointOrigin,
 		CoordinationID:               capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.CoordinationID))),

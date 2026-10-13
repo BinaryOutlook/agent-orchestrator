@@ -136,7 +136,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
-import { ComposerModeItems, TurnSettingsBar, type AutoCompactControl, type UltracodeControl } from "./TurnSettingsBar";
+import { ComposerModeItems, TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner } from "./ChatStatusBanners";
 import {
@@ -412,8 +412,6 @@ export interface ChatWorkspaceProps {
 	composerNotice?: ReactNode;
 	/** A control after the permission picker, such as the switch to the terminal view. */
 	composerAction?: ReactNode;
-	ultracode?: UltracodeControl;
-	autoCompact?: AutoCompactControl;
 	/** The AO session this surface renders for. Used to attach the reviewer pane. */
 	session?: WorkspaceSession;
 	/** Refresh the owning workspace cache after the shared primary tab is renamed. */
@@ -669,8 +667,6 @@ function ChatWorkspaceContent({
 	agentSwitch,
 	composerNotice,
 	composerAction,
-	ultracode,
-	autoCompact,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -1335,8 +1331,6 @@ function ChatWorkspaceContent({
 					agentSwitch={agentSwitch}
 					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} /> : undefined}
 					afterPermissions={composerAction}
-					ultracode={ultracode}
-					autoCompact={autoCompact}
 					models={models ?? []}
 					settings={stableSettings}
 					onRememberPermissions={onRememberPermissions}
@@ -1374,8 +1368,6 @@ function ChatWorkspaceContent({
 			models,
 			agentSwitch,
 			composerAction,
-			ultracode,
-			autoCompact,
 			stableUsage,
 			newWorkDisabled,
 			session?.provisionState,

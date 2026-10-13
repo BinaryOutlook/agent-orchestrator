@@ -523,18 +523,6 @@ type ConversationSettings struct {
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
 }
 
-// AutoCompactTokens is the chosen compaction window as a token count, or "".
-func (s ConversationSettings) AutoCompactTokens() string {
-	switch s.AutoCompactWindow {
-	case "200k":
-		return "200000"
-	case "1m":
-		return "1000000"
-	default:
-		return ""
-	}
-}
-
 // ConversationTurn is one user or automation request plus the agent work it
 // caused.
 type ConversationTurn struct {

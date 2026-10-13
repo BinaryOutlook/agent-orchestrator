@@ -209,17 +209,14 @@ func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions) []string {
 	if options.Ultracode {
 		settings["ultracode"] = true
 	}
-	if tokens := options.AutoCompactTokens(); tokens > 0 {
+	if tokens := domain.AutoCompactTokens[options.AutoCompactWindow]; tokens > 0 {
 		settings["autoCompactEnabled"] = true
 		settings["autoCompactWindow"] = tokens
 	}
 	if len(settings) == 0 {
 		return nil
 	}
-	encoded, err := json.Marshal(settings)
-	if err != nil {
-		return nil
-	}
+	encoded, _ := json.Marshal(settings)
 	return []string{"--settings", string(encoded)}
 }
 

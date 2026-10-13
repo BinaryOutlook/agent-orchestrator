@@ -39,10 +39,7 @@ function createdSessionID(value: any): string | null {
   return typeof id === "string" && id.trim() ? id.trim() : null
 }
 
-// Assistant message ids seen this turn, and the text of the assistant text part
-// updated most recently. Text parts stream, so the last update of the last part
-// is the turn's final message; `stop` reports it so AO can keep the turn's
-// response alongside its request.
+// This turn's assistant message ids and the assistant text part updated last: the turn's final message.
 const assistantMessages = new Set<string>()
 let lastAssistantText = ""
 
@@ -99,15 +96,8 @@ export default {
             const id = sessionID(message) ?? currentSessionID
             if (id) reportPrompt(id, message.id, part.text ?? "")
             if (part.text) messageStore.delete(part.messageID)
-          } else if (
-            part?.messageID &&
-            assistantMessages.has(part.messageID) &&
-            part.type === "text" &&
-            !part.synthetic &&
-            !part.ignored &&
-            typeof part.text === "string" &&
-            part.text.trim().length > 0
-          ) {
+          } else if (part?.messageID && assistantMessages.has(part.messageID) && part.type === "text" && !part.synthetic && !part.ignored &&
+            typeof part.text === "string" && part.text.trim().length > 0) {
             lastAssistantText = part.text
           }
           break
@@ -117,8 +107,6 @@ export default {
           const id = event.properties?.sessionID ?? currentSessionID
           if (id) {
             callHook("stop", { session_id: id, model: currentModel ?? "", last_assistant_message: lastAssistantText })
-            // The next turn must not repeat this one's answer if it ends
-            // without producing text of its own.
             assistantMessages.clear()
             lastAssistantText = ""
           }

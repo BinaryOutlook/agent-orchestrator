@@ -376,8 +376,7 @@ func (m *Manager) CancelLaunch(id domain.SessionID, launchID string) {
 // ReleaseLaunch publishes that the caller has durably committed the prepared
 // generation. Hooks waiting behind PrepareLaunch may now re-read the session
 // row and pass normal generation fencing. Unlike MarkSpawned, this does not
-// rewrite session ownership; interface transitions commit that ownership at
-// their controller epoch boundary.
+// rewrite session ownership.
 func (m *Manager) ReleaseLaunch(id domain.SessionID, launchID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

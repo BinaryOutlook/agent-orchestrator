@@ -104,10 +104,10 @@ vi.mock("../../hooks/useConversation", () => ({
 	}),
 	useConversationCommands: () => conversationCommandState,
 	useProviderSwitchCommand: () => ({
-		switchProvider: vi.fn(),
-		switchProviderPending: false,
-		switchProviderError: undefined,
-		resetSwitchProviderError: vi.fn(),
+		mutateAsync: vi.fn(),
+		isPending: false,
+		error: null,
+		reset: vi.fn(),
 	}),
 	useConversationConfigOptions: vi.fn((_sessionId: string, enabled: boolean) => {
 		catalogObserverState.enabled.push(enabled);

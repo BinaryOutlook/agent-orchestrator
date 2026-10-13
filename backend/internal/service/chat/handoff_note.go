@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,10 +18,6 @@ import (
 )
 
 const handoffChangedFilesTimeout = 5 * time.Second
-
-type terminalTurnReader interface {
-	ListTerminalTurns(ctx context.Context, id domain.SessionID, limit int) ([]domain.TerminalTurn, error)
-}
 
 // SessionTurns returns every turn AO holds for a session, oldest first: the
 // completed Chat exchanges merged by time with the stored Terminal UI turns.
@@ -40,32 +37,22 @@ func (s *Service) SessionTurns(ctx context.Context, id domain.SessionID) ([]doma
 		}
 		turns = chatHandoffTurns(rows.Turns, rows.Messages, rows.Activities)
 	}
-	if reader, ok := s.store.(terminalTurnReader); ok {
-		stored, listErr := reader.ListTerminalTurns(ctx, id, domain.TerminalTurnRetention)
-		if listErr != nil {
-			return nil, listErr
-		}
-		for _, turn := range stored {
-			turns = append(turns, domain.HandoffTurn{
-				UserRequest: turn.UserRequest, AgentResponse: turn.AgentResponse,
-				At: turn.RequestedAt, Harness: turn.Harness,
-			})
-		}
+	stored, err := s.store.ListTerminalTurns(ctx, id)
+	if err != nil {
+		return nil, err
 	}
+	turns = append(turns, stored...)
 	sort.SliceStable(turns, func(i, j int) bool { return turns[i].At.Before(turns[j].At) })
 	return turns, nil
 }
 
 // chatHandoffTurns reduces a conversation to one request and one final response
-// per completed turn. Tool activity and streamed deltas are not turns. A request
-// is what a person typed or what was sent to the session through AO, which is
-// how an orchestrator and `ao send` talk to it and what the Terminal UI history
-// records too. The daemon's own messages are not requests.
+// per completed turn. A request is what a person typed or what was sent to the
+// session through AO; the daemon's own messages are not requests.
 //
 // Each turn is credited to the provider that answered it, read from the markers
-// earlier provider switches left: a marker names the provider of the branch it
-// opened, and the first marker's source answered everything before it. A
-// conversation that never switched has no marker, and its turns stay uncredited.
+// earlier switches left: a marker names the provider of the branch it opened,
+// and the first marker's source answered everything before it.
 func chatHandoffTurns(turns []domain.ConversationTurn, messages []domain.ConversationMessage, activities []domain.ConversationActivity) []domain.HandoffTurn {
 	branchHarness := make(map[string]domain.AgentHarness)
 	var firstSource domain.AgentHarness
@@ -79,61 +66,44 @@ func chatHandoffTurns(turns []domain.ConversationTurn, messages []domain.Convers
 		}
 		branchHarness[marker.BranchID] = marker.TargetHarness
 	}
-	eligible := make(map[string]bool, len(turns))
-	turnHarness := make(map[string]domain.AgentHarness, len(turns))
+	type exchange struct {
+		user, assistant *domain.ConversationMessage
+		harness         domain.AgentHarness
+	}
+	exchanges := make(map[string]*exchange, len(turns))
 	for _, turn := range turns {
 		if turn.State == domain.TurnStateCompleted && turn.RolledBackAt == nil {
-			eligible[turn.ID] = true
-			harness, switched := branchHarness[turn.BranchID]
-			if !switched {
-				harness = firstSource
-			}
-			turnHarness[turn.ID] = harness
+			exchanges[turn.ID] = &exchange{harness: cmp.Or(branchHarness[turn.BranchID], firstSource)}
 		}
 	}
-	type exchange struct {
-		user, assistant       domain.ConversationMessage
-		hasUser, hasAssistant bool
-	}
-	exchanges := make(map[string]*exchange)
-	for _, message := range messages {
-		if message.TurnID == "" || !eligible[message.TurnID] || message.Streaming {
-			continue
-		}
+	for index := range messages {
+		message := &messages[index]
 		pair := exchanges[message.TurnID]
-		if pair == nil {
-			pair = &exchange{}
-			exchanges[message.TurnID] = pair
+		if pair == nil || message.Streaming {
+			continue
 		}
 		switch message.Role {
 		case domain.MessageRoleUser:
-			if message.Origin != domain.MessageOriginHuman && message.Origin != domain.MessageOriginAutomation {
-				continue
-			}
-			if !pair.hasUser || message.Sequence < pair.user.Sequence {
+			asked := message.Origin == domain.MessageOriginHuman || message.Origin == domain.MessageOriginAutomation
+			if asked && (pair.user == nil || message.Sequence < pair.user.Sequence) {
 				pair.user = message
 			}
-			pair.hasUser = true
 		case domain.MessageRoleAssistant:
-			if !pair.hasAssistant || message.Sequence > pair.assistant.Sequence {
+			if pair.assistant == nil || message.Sequence > pair.assistant.Sequence {
 				pair.assistant = message
 			}
-			pair.hasAssistant = true
 		}
 	}
 	complete := make([]*exchange, 0, len(exchanges))
 	for _, pair := range exchanges {
-		if pair.hasUser && pair.hasAssistant && strings.TrimSpace(pair.user.Text) != "" {
+		if pair.user != nil && pair.assistant != nil && strings.TrimSpace(pair.user.Text) != "" {
 			complete = append(complete, pair)
 		}
 	}
 	sort.Slice(complete, func(i, j int) bool { return complete[i].user.Sequence < complete[j].user.Sequence })
 	out := make([]domain.HandoffTurn, 0, len(complete))
 	for _, pair := range complete {
-		out = append(out, domain.HandoffTurn{
-			UserRequest: pair.user.Text, AgentResponse: pair.assistant.Text, At: pair.user.CreatedAt,
-			Harness: turnHarness[pair.user.TurnID],
-		})
+		out = append(out, domain.HandoffTurn{UserRequest: pair.user.Text, AgentResponse: pair.assistant.Text, At: pair.user.CreatedAt, Harness: pair.harness})
 	}
 	return out
 }
@@ -141,30 +111,24 @@ func chatHandoffTurns(turns []domain.ConversationTurn, messages []domain.Convers
 // HandoffNote builds the note a provider receives when it takes over record's
 // session. It reads AO's own stores and the workspace only: no provider is
 // asked to summarise, and nothing is written.
-func (s *Service) HandoffNote(
-	ctx context.Context,
-	record domain.SessionRecord,
-	target domain.AgentHarness,
-	switchID string,
-) (string, error) {
+func (s *Service) HandoffNote(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string) (string, error) {
 	turns, err := s.SessionTurns(ctx, record.ID)
 	if err != nil {
 		return "", err
 	}
 	return domain.BuildHandoffNote(domain.HandoffNoteInput{
-		SwitchID:       switchID,
-		SourceHarness:  record.Harness,
-		TargetHarness:  target,
-		SessionTitle:   record.DisplayName,
-		Project:        string(record.ProjectID),
-		WorkspacePath:  record.Metadata.WorkspacePath,
-		Branch:         record.Metadata.Branch,
-		At:             s.now(),
-		OriginalTask:   record.Metadata.Prompt,
-		ChangedFiles:   handoffChangedFiles(ctx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA),
-		Turns:          turns,
-		HistoryCommand: true,
-		Terminal:       domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI,
+		SwitchID:      switchID,
+		SourceHarness: record.Harness,
+		TargetHarness: target,
+		SessionTitle:  record.DisplayName,
+		Project:       string(record.ProjectID),
+		WorkspacePath: record.Metadata.WorkspacePath,
+		Branch:        record.Metadata.Branch,
+		At:            s.now(),
+		OriginalTask:  record.Metadata.Prompt,
+		ChangedFiles:  handoffChangedFiles(ctx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA),
+		Turns:         turns,
+		Terminal:      domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI,
 	}), nil
 }
 
@@ -199,13 +163,10 @@ func handoffChangedFiles(ctx context.Context, workspace, base string) []string {
 	}
 	ctx, cancel := context.WithTimeout(ctx, handoffChangedFilesTimeout)
 	defer cancel()
-	if strings.TrimSpace(base) == "" {
-		base = "HEAD"
-	}
 	seen := make(map[string]bool)
 	var files []string
 	for _, args := range [][]string{
-		{"diff", "--name-only", "-z", base},
+		{"diff", "--name-only", "-z", cmp.Or(strings.TrimSpace(base), "HEAD")},
 		{"ls-files", "-z", "-o", "--exclude-standard"},
 	} {
 		globalArgs := []string{"--no-pager", "--no-optional-locks", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-C", workspace}

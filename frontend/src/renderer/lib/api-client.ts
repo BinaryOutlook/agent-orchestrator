@@ -117,7 +117,6 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/sessions/{sessionId}/preview/files/*",
 	"/api/v1/sessions/{sessionId}/preview/server",
 	"/api/v1/sessions/{sessionId}/provider-switch",
-	"/api/v1/sessions/{sessionId}/provider-switch/capabilities/{targetHarness}",
 	"/api/v1/sessions/{sessionId}/renders/{renderId}/artifact",
 	"/api/v1/sessions/{sessionId}/resume-agent",
 	"/api/v1/sessions/{sessionId}/restore",
@@ -212,7 +211,6 @@ function reportApiError(
 	status?: number,
 	code?: string,
 	requestId?: string,
-	_reporter?: string,
 ): void {
 	const key = `${operation}|${category}|${status ?? ""}`;
 	const now = Date.now();

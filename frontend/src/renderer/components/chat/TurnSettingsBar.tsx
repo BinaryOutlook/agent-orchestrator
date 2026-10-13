@@ -36,15 +36,7 @@ import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } 
 import { agentModelDisplayLabel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
 import { agentLabel } from "../../lib/agent-options";
-import {
-	AgentModelPicker,
-	AutoCompactRow,
-	type AgentSwitchProps,
-	type AutoCompactControl,
-	type CurrentAgentChoices,
-} from "./AgentSwitchPicker";
-
-export type { AutoCompactControl };
+import { AgentModelPicker, AutoCompactRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import type {
 	ApprovalMode,
@@ -112,8 +104,6 @@ export function TurnSettingsBar({
 	agentSwitch,
 	beforePicker,
 	afterPermissions,
-	ultracode,
-	autoCompact,
 	children,
 }: {
 	models: ChatModel[];
@@ -152,23 +142,12 @@ export function TurnSettingsBar({
 	autoSelectEffortOnOpen?: boolean;
 	error?: string;
 	disabled?: boolean;
-	/**
-	 * Turns the model control into one picker for agent, model and effort, and
-	 * lays the row out with permissions first and that picker last.
-	 */
+	/** Turns the model control into one picker for agent, model and effort, laid out after the permissions. */
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
 	/** A control after the permission picker, such as the switch to the terminal view. */
 	afterPermissions?: ReactNode;
-	/**
-	 * Claude Code's Ultracode: Extra High effort plus its workflows. Claude Code
-	 * takes it from a keyword in the message, so it is one more stop past the
-	 * agent's own effort levels.
-	 */
-	ultracode?: UltracodeControl;
-	/** When Claude Code compacts on its own. Applies the next time it starts. */
-	autoCompact?: AutoCompactControl;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
@@ -285,12 +264,8 @@ export function TurnSettingsBar({
 	const planOn = planning || Boolean(settings.planMode);
 	const planLeaveValue = planReturn ?? grouped.executionMode?.choices.find((choice) => !isPlanChoice(choice))?.value;
 	const leavePlan = () => {
-		if (settings.planMode) {
-			onChange?.({ ...settings, planMode: undefined });
-			return;
-		}
-		const option = grouped.executionMode;
-		if (option && planLeaveValue) applyOption(option.id, { value: planLeaveValue });
+		if (settings.planMode) onChange?.({ ...settings, planMode: undefined });
+		else if (grouped.executionMode && planLeaveValue) applyOption(grouped.executionMode.id, { value: planLeaveValue });
 	};
 	// A provider that keeps plan in its one mode setting has no permission mode
 	// while planning, so the picker shows the one it goes back to.
@@ -298,33 +273,22 @@ export function TurnSettingsBar({
 		? { ...modeOption, currentValue: planLeaveValue }
 		: modeOption;
 	const primaryModelOption = grouped.model.at(0);
-	const primaryEffortOption = grouped.effort.at(0);
 	const fastOption = grouped.toggles.find(isFastOption);
 	const fastControls = fastOption && onChangeConfigOption
-		? {
-			fast: optionIsEnabled(fastOption),
-			onToggleFast: (enabled: boolean) => setConfigToggle(fastOption, enabled, applyOption),
-		}
+		? { fast: optionIsEnabled(fastOption), onToggleFast: (on: boolean) => setConfigToggle(fastOption, on, applyOption) }
 		: {};
-	const nativeDefaultEffort = (selected ?? fallback)?.defaultEffort ?? fallbackEffort(efforts);
 	const nativeFastControls = (selected ?? fallback)?.supportsFast && onChange
-		? {
-			fast: Boolean(settings.fastMode),
-			onToggleFast: (enabled: boolean) => onChange({ ...settings, fastMode: enabled || undefined }),
-		}
+		? { fast: Boolean(settings.fastMode), onToggleFast: (on: boolean) => onChange({ ...settings, fastMode: on || undefined }) }
 		: fastControls;
-	const acpDefaultChoice = primaryEffortOption?.choices.some((choice) => choice.value === "default");
+	const { ultracode, autoCompact } = agentSwitch ?? {};
 	// Ultracode runs at Extra High, so it is only for models that have that level.
 	const offersUltracode = Boolean(
 		ultracode && harness === "claude-code" && onChangeConfigOption &&
-		primaryEffortOption?.choices.some((choice) => choice.value === "xhigh"),
+		acpEffortOption?.choices.some((choice) => choice.value === "xhigh"),
 	);
-	const ultracodeOn = offersUltracode && Boolean(ultracode?.on);
 	// Claude Code only compacts early on its larger-window models.
-	const offersAutoCompact = Boolean(
-		autoCompact && harness === "claude-code" && !/haiku|opus-4-5/.test(primaryModelOption?.currentValue ?? ""),
-	);
-	const current: CurrentAgentChoices = nativeModelMenu && onChange
+	const offersAutoCompact = Boolean(autoCompact && harness === "claude-code" && !/haiku|opus-4-5/.test(primaryModelOption?.currentValue ?? ""));
+	const current: PickerSource = nativeModelMenu && onChange
 		? {
 			models: (harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels)
 				.map((model) => ({ id: model.id, label: model.displayName })),
@@ -346,68 +310,51 @@ export function TurnSettingsBar({
 				reasoningEffort: setup.effort,
 				fastMode: (setup.fast && displayModels.find((model) => model.id === setup.model)?.supportsFast) || undefined,
 			}),
-			onResetEffort: nativeDefaultEffort && nativeDefaultEffort !== effortLabel
-				? () => onChange({ ...settings, reasoningEffort: nativeDefaultEffort })
-				: undefined,
 			...nativeFastControls,
 		}
 		: {
-			models: (primaryModelOption?.choices ?? []).map((choice) => ({
-				id: choice.value,
-				label: choice.name,
-				group: choice.groupName || choice.group,
-			})),
+			models: (primaryModelOption?.choices ?? [])
+				.map((choice) => ({ id: choice.value, label: choice.name, group: choice.groupName || choice.group })),
 			modelId: primaryModelOption?.currentValue,
 			modelLabel: primaryModelOption ? optionCurrentLabel(primaryModelOption) : agentLabel(harness ?? ""),
-			onPickModel: primaryModelOption && onChangeConfigOption
-				? (id) => applyOption(primaryModelOption.id, { value: id })
-				: undefined,
+			onPickModel: primaryModelOption && onChangeConfigOption ? (id) => applyOption(primaryModelOption.id, { value: id }) : undefined,
 			// The effort is set after the model, because the agent offers levels per model.
 			onPickSetup: primaryModelOption && onChangeConfigOption
 				? (setup) => {
 					ultracode?.onChange(false);
 					void Promise.resolve(onChangeConfigOption(primaryModelOption.id, { value: setup.model }))
-						.then(() => setup.effort && primaryEffortOption
-							? onChangeConfigOption(primaryEffortOption.id, { value: setup.effort })
-							: undefined)
+						.then(() => setup.effort && acpEffortOption ? onChangeConfigOption(acpEffortOption.id, { value: setup.effort }) : undefined)
 						.catch(() => {});
 				}
 				: undefined,
 			efforts: [
-				...(primaryEffortOption?.choices ?? [])
+				...(acpEffortOption?.choices ?? [])
 					.filter((choice) => choice.value && choice.value !== "default")
 					.map((choice) => ({ value: choice.value, label: choice.name })),
 				...(offersUltracode ? [{ value: ULTRACODE, label: "Ultracode" }] : []),
 			],
-			effort: ultracodeOn
+			effort: offersUltracode && ultracode?.on
 				? ULTRACODE
-				: primaryEffortOption?.currentValue && primaryEffortOption.currentValue !== "default"
-					? primaryEffortOption.currentValue
+				: acpEffortOption?.currentValue && acpEffortOption.currentValue !== "default"
+					? acpEffortOption.currentValue
 					: undefined,
-			onPickEffort: primaryEffortOption && onChangeConfigOption
+			onPickEffort: acpEffortOption && onChangeConfigOption
 				? (value) => {
 					ultracode?.onChange(value === ULTRACODE);
-					applyOption(primaryEffortOption.id, { value: value === ULTRACODE ? "xhigh" : value });
+					applyOption(acpEffortOption.id, { value: value === ULTRACODE ? "xhigh" : value });
 				}
 				: undefined,
-			onResetEffort: ultracodeOn
-				? () => ultracode?.onChange(false)
-				: primaryEffortOption && onChangeConfigOption && acpDefaultChoice && primaryEffortOption.currentValue !== "default"
-					? () => applyOption(primaryEffortOption.id, { value: "default" })
-					: undefined,
 			...fastControls,
 		};
 	// Plan mode and the on/off settings live in the add menu. What is left here
 	// is anything the agent offers beyond its first model and effort setting.
-	const hasPickerExtras = unified && Boolean(onChangeConfigOption) && (
-		(!nativeModelMenu && (grouped.model.length > 1 || grouped.effort.length > 1)) || grouped.extra.length > 0 ||
-		offersAutoCompact
-	);
+	const hasPickerExtras = unified && Boolean(onChangeConfigOption) && (offersAutoCompact || grouped.extra.length > 0 ||
+		(!nativeModelMenu && (grouped.model.length > 1 || grouped.effort.length > 1)));
 	const pickerExtras = hasPickerExtras ? (
 		<>
 			{offersAutoCompact && autoCompact ? (
 				<AutoCompactRow
-					control={autoCompact}
+					{...autoCompact}
 					title="When Claude Code compacts the conversation on its own. Changing it restarts the agent; the conversation is kept."
 				/>
 			) : null}
@@ -427,7 +374,6 @@ export function TurnSettingsBar({
 				<div className={cn("flex h-7 min-w-0 flex-wrap items-center gap-0.5", unified ? "order-2 ml-auto shrink-0" : undefined)}>
 					{unified && agentSwitch && harness ? (
 						<>
-							{children}
 							{beforePicker}
 							<AgentModelPicker
 								currentHarness={harness}
@@ -436,7 +382,7 @@ export function TurnSettingsBar({
 								disabled={optionDisabled}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
 								mark={reroute ? <Shuffle className="size-3 shrink-0 text-warning" aria-hidden="true" /> : undefined}
-								extras={pickerExtras ?? undefined}
+								extras={pickerExtras}
 								onCloseAutoFocus={restoreComposerFocus}
 							/>
 						</>
@@ -489,38 +435,30 @@ export function TurnSettingsBar({
 
 				{showRightDropdown || children || (unified && (planOn || afterPermissions)) ? (
 					<div className={cn("flex h-7 shrink-0 items-center gap-1", unified ? "order-1 min-w-0 flex-1" : undefined)}>
-						{unified ? null : children}
+						{children}
 						{showPermissions && shownModeOption && onChangeConfigOption ? (
 							<ConfigOptionPicker
 								option={shownModeOption}
 								disabled={optionDisabled}
 								onChange={(value) => applyOption(shownModeOption.id, value)}
 								footer={rememberAction}
-								leadFirst={unified}
-								leadIcon={permissionIcon(shownModeOption.choices.find((choice) => choice.value === shownModeOption.currentValue)?.permissionMode)}
+								leadIcon={unified ? permissionIcon(shownModeOption.choices.find((choice) => choice.value === shownModeOption.currentValue)?.permissionMode) : undefined}
 							/>
 						) : showApprovalMode && onChange ? (
 							<Picker
 								label={approvalLabel}
 													title="Approval policy for the next turn"
 													disabled={optionDisabled}
-								leadFirst={unified}
-								leadIcon={permissionIcon(
-									settings.approvalMode ?? "default",
-									harness === "codex" && (settings.approvalMode ?? "default") === "default",
-									harness === "codex" && settings.approvalMode === "accept-edits",
-								)}
+								leadIcon={unified ? permissionIcon(permissionLook(harness, settings.approvalMode ?? "default")) : undefined}
 							>
 								{approvalOrder.filter((mode) => !approvalModes || approvalModes.includes(mode)).map((mode) => (
 									unified ? (
 										<PermissionRow
 											key={mode}
-											mode={mode}
+											mode={permissionLook(harness, mode)}
 											title={approvalCopy[mode].label}
 											description={approvalCopy[mode].description}
 											active={mode === (settings.approvalMode ?? "default")}
-											fullAccess={harness === "codex" && mode === "default"}
-											asks={harness === "codex" && mode === "accept-edits"}
 											onSelect={() => onChange({ ...settings, approvalMode: mode })}
 										/>
 									) : (
@@ -1054,7 +992,6 @@ function ConfigOptionPicker({
 	onChange,
 	disabled,
 	footer,
-	leadFirst,
 	leadIcon,
 	groupClaude,
 }: {
@@ -1064,7 +1001,6 @@ function ConfigOptionPicker({
 	onChange: (value: ChatConfigOptionValue) => void;
 	disabled?: boolean;
 	footer?: ReactNode;
-	leadFirst?: boolean;
 	leadIcon?: LucideIcon;
 	groupClaude?: boolean;
 }) {
@@ -1073,13 +1009,12 @@ function ConfigOptionPicker({
 			label={label ?? optionCurrentLabel(option)}
 			title={title || option.description || option.name}
 			disabled={disabled}
-			leadFirst={leadFirst}
 			leadIcon={leadIcon}
 			onFocus={isModelOption(option) ? focusModelSearch : undefined}
 		>
 			{isModelOption(option) ? (
 				<ConfigModelChoices option={option} onChange={onChange} groupClaude={groupClaude} />
-			) : leadFirst && option.type === "select" ? (
+			) : leadIcon && option.type === "select" ? (
 				option.choices.map((choice) => (
 					<PermissionRow
 						key={choice.value}
@@ -1244,9 +1179,14 @@ function setConfigToggle(
 	if (next) apply(option.id, { value: next.value });
 }
 
-function permissionIcon(mode: ApprovalMode | undefined, fullAccess = false, asks = false): LucideIcon {
-	if (fullAccess || mode === "bypass-permissions") return ShieldAlert;
-	if (asks) return Hand;
+/** Codex names its modes differently: its default has a free hand and its accept-edits asks first. */
+function permissionLook(harness: string | undefined, mode: ApprovalMode): ApprovalMode {
+	if (harness !== "codex") return mode;
+	return mode === "default" ? "bypass-permissions" : mode === "accept-edits" ? "default" : mode;
+}
+
+function permissionIcon(mode: ApprovalMode | undefined): LucideIcon {
+	if (mode === "bypass-permissions") return ShieldAlert;
 	if (mode === "accept-edits") return PencilLine;
 	if (mode === "auto") return ShieldCheck;
 	return Hand;
@@ -1258,22 +1198,16 @@ function PermissionRow({
 	title,
 	description,
 	active,
-	fullAccess = false,
-	asks = false,
 	onSelect,
 }: {
 	mode?: ApprovalMode;
 	title: string;
 	description?: string;
 	active: boolean;
-	/** The mode gives the agent a free hand, whatever it is called. */
-	fullAccess?: boolean;
-	/** The mode asks first, whatever it is called. */
-	asks?: boolean;
 	onSelect: () => void;
 }) {
-	const Icon = permissionIcon(mode, fullAccess, asks);
-	const unrestricted = fullAccess || mode === "bypass-permissions";
+	const Icon = permissionIcon(mode);
+	const unrestricted = mode === "bypass-permissions";
 	return (
 		<OptionMenuItem active={active} radio onSelect={onSelect} className="items-start gap-3 whitespace-normal px-3 py-2">
 			<Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", unrestricted ? "text-warning" : "text-muted-foreground")} />
@@ -1316,23 +1250,14 @@ export function ComposerMenuRow({
 	);
 }
 
-/**
- * The agent's on/off settings as add-menu rows: plan mode, fast mode and any
- * other switch it advertises. They read and write the same options as the
- * model picker, so the two always agree.
- */
 const ULTRACODE = "ultracode";
-
-export interface UltracodeControl {
-	on: boolean;
-	onChange: (on: boolean) => void;
-}
 
 /** Claude Code turns Ultracode on for a turn when the user's message names it. */
 export function withUltracode(text: string): string {
 	return /\bultracode\b/i.test(text) ? text : `Ultracode:\n${text}`;
 }
 
+/** The agent's on/off settings as add-menu rows: plan mode, fast mode and any other switch it advertises. */
 export function ComposerModeItems({
 	configOptions,
 	settings,
@@ -1360,64 +1285,41 @@ export function ComposerModeItems({
 		? grouped.executionMode
 		: undefined;
 	const planning = isPlanMode(executionMode);
-	const planReturn = grouped.mode?.choices.find(
-		(choice) => choice.permissionMode === (settings.approvalMode ?? "default"),
-	)?.value;
-	const planTarget = executionMode
-		? planning
-			? planReturn ?? executionMode.choices.find((choice) => !isPlanChoice(choice))?.value
-			: executionMode.choices.find((choice) => isPlanChoice(choice))?.value
-		: undefined;
+	const planReturn = grouped.mode?.choices.find((choice) => choice.permissionMode === (settings.approvalMode ?? "default"))?.value;
+	const planTarget = planning
+		? planReturn ?? executionMode?.choices.find((choice) => !isPlanChoice(choice))?.value
+		: executionMode?.choices.find(isPlanChoice)?.value;
+	const planOn = executionMode ? planning : Boolean(settings.planMode);
+	const togglePlan = executionMode
+		? planTarget ? () => apply(executionMode.id, { value: planTarget }) : undefined
+		: nativePlan && onChange ? () => onChange({ ...settings, planMode: settings.planMode ? undefined : true }) : undefined;
 	const model = models?.find((entry) => entry.id === settings.model) ?? models?.find((entry) => entry.default);
-	const nativeFast = Boolean(model?.supportsFast && onChange);
-	return (
-		<>
-			{executionMode && planTarget ? (
-				<ComposerMenuRow
-					icon={ListTodo}
-					title="Plan mode"
-					description={planning ? "Turn plan mode off" : "Turn plan mode on"}
-					checked={planning}
-					disabled={disabled}
-					onSelect={() => apply(executionMode.id, { value: planTarget })}
-				/>
-			) : null}
-			{nativePlan && onChange && !executionMode ? (
-				<ComposerMenuRow
-					icon={ListTodo}
-					title="Plan mode"
-					description={settings.planMode ? "Turn plan mode off" : "Turn plan mode on"}
-					checked={Boolean(settings.planMode)}
-					disabled={disabled}
-					onSelect={() => onChange({ ...settings, planMode: settings.planMode ? undefined : true })}
-				/>
-			) : null}
-			{nativeFast ? (
-				<ComposerMenuRow
-					icon={Zap}
-					title="Fast mode"
-					description={settings.fastMode ? "Turn fast mode off" : "Turn fast mode on"}
-					checked={Boolean(settings.fastMode)}
-					disabled={disabled}
-					onSelect={() => onChange?.({ ...settings, fastMode: settings.fastMode ? undefined : true })}
-				/>
-			) : null}
-			{onChangeConfigOption ? grouped.toggles.map((option) => {
-				const on = optionIsEnabled(option);
-				return (
-					<ComposerMenuRow
-						key={option.id}
-						icon={isFastOption(option) ? Zap : SlidersHorizontal}
-						title={option.name}
-						description={`Turn ${option.name.toLowerCase()} ${on ? "off" : "on"}`}
-						checked={on}
-						disabled={disabled}
-						onSelect={() => setConfigToggle(option, !on, apply)}
-					/>
-				);
-			}) : null}
-		</>
-	);
+	const rows = [
+		...(togglePlan ? [{ icon: ListTodo, title: "Plan mode", on: planOn, toggle: togglePlan }] : []),
+		...(model?.supportsFast && onChange ? [{
+			icon: Zap,
+			title: "Fast mode",
+			on: Boolean(settings.fastMode),
+			toggle: () => onChange({ ...settings, fastMode: settings.fastMode ? undefined : true }),
+		}] : []),
+		...(onChangeConfigOption ? grouped.toggles : []).map((option) => ({
+			icon: isFastOption(option) ? Zap : SlidersHorizontal,
+			title: option.name,
+			on: optionIsEnabled(option),
+			toggle: () => setConfigToggle(option, !optionIsEnabled(option), apply),
+		})),
+	];
+	return rows.map((row, index) => (
+		<ComposerMenuRow
+			key={index}
+			icon={row.icon}
+			title={row.title}
+			description={`Turn ${row.title.toLowerCase()} ${row.on ? "off" : "on"}`}
+			checked={row.on}
+			disabled={disabled}
+			onSelect={row.toggle}
+		/>
+	));
 }
 
 /**
@@ -1433,14 +1335,12 @@ function Picker({
 	badge,
 	children,
 	onFocus,
-	leadFirst,
-	leadIcon: LeadIcon = ShieldCheck,
+	leadIcon: LeadIcon,
 }: {
 	label: string;
 	title: string;
 	disabled?: boolean;
-	/** The permission control when it leads the row: marked, with a caret, opening rightwards. */
-	leadFirst?: boolean;
+	/** Set on the permission control when it leads the row: marked with this, with a caret, opening rightwards. */
 	leadIcon?: LucideIcon;
 	/** A note that belongs on the trigger, e.g. the model that was overridden. */
 	badge?: React.ReactNode;
@@ -1450,19 +1350,19 @@ function Picker({
 	return (
 		<OptionMenu>
 				<OptionMenuTrigger
-					showCaret={Boolean(leadFirst)}
+					showCaret={Boolean(LeadIcon)}
 					aria-label={title}
 					title={title}
 					disabled={disabled}
-					className={cn(TRIGGER_CLASS, leadFirst ? "px-2" : undefined)}
+					className={cn(TRIGGER_CLASS, LeadIcon ? "px-2" : undefined)}
 				>
-					{leadFirst ? <LeadIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
+					{LeadIcon ? <LeadIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
 					<span className="min-w-0 max-w-[16ch] truncate">{label}</span>
 					{badge}
 				</OptionMenuTrigger>
 			<OptionMenuContent
-				align={leadFirst ? "start" : "end"}
-				className={cn(CHAT_MENU_CLASS, leadFirst ? "w-80" : undefined)}
+				align={LeadIcon ? "start" : "end"}
+				className={cn(CHAT_MENU_CLASS, LeadIcon ? "w-80" : undefined)}
 				onFocus={onFocus}
 			>
 				{children}

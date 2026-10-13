@@ -1,6 +1,7 @@
 package codexappserver
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -337,45 +338,27 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	applyTurnSettings(params, msg.Settings, c.readOnly)
 	// A service tier sticks to the thread once set, so leaving the fast tier
 	// has to be said: an explicit null returns the thread to its default.
-	fastTier := c.fastTier
 	if msg.Settings.Fast {
-		tier := c.fastTiers[msg.Settings.Model]
-		if tier == "" {
-			tier = c.fastTiers[c.threadModel]
-		}
-		if tier == "" {
-			tier = codexFastServiceTier
-		}
-		params["serviceTier"] = tier
-		fastTier = true
+		params["serviceTier"] = cmp.Or(c.fastTiers[msg.Settings.Model], c.fastTiers[c.threadModel], codexFastServiceTier)
 	} else if c.fastTier {
 		params["serviceTier"] = nil
-		fastTier = false
 	}
 
 	// Plan mode is one of the provider's collaboration modes. It too sticks to
 	// the thread, so leaving it is sent as the default mode. The mode names the
 	// model it runs on; with none known the thread is left as it is.
 	planMode := c.planMode
-	if msg.Settings.Plan != c.planMode {
-		model := msg.Settings.Model
-		if model == "" {
-			model = c.threadModel
+	if model := cmp.Or(msg.Settings.Model, c.threadModel); msg.Settings.Plan != c.planMode && model != "" {
+		mode := "default"
+		if msg.Settings.Plan {
+			mode = "plan"
 		}
-		if model != "" {
-			mode := "default"
-			if msg.Settings.Plan {
-				mode = "plan"
-			}
-			settings := map[string]any{"model": model, "developer_instructions": nil}
-			if effort := msg.Settings.Effort; effort != "" {
-				settings["reasoning_effort"] = effort
-			} else if c.threadEffort != "" {
-				settings["reasoning_effort"] = c.threadEffort
-			}
-			params["collaborationMode"] = map[string]any{"mode": mode, "settings": settings}
-			planMode = msg.Settings.Plan
+		settings := map[string]any{"model": model, "developer_instructions": nil}
+		if effort := cmp.Or(msg.Settings.Effort, c.threadEffort); effort != "" {
+			settings["reasoning_effort"] = effort
 		}
+		params["collaborationMode"] = map[string]any{"mode": mode, "settings": settings}
+		planMode = msg.Settings.Plan
 	}
 
 	var resp struct {
@@ -386,7 +369,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	if err := c.conn.request(ctx, "turn/start", params, &resp); err != nil {
 		return ports.ChatTurnRef{}, fmt.Errorf("turn/start: %w", err)
 	}
-	c.fastTier = fastTier
+	c.fastTier = msg.Settings.Fast
 	c.planMode = planMode
 
 	c.mu.Lock()

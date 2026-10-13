@@ -8003,7 +8003,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ProviderSwitchResponse'
+                additionalProperties:
+                  type: string
+                type: object
           description: OK
         "400":
           content:
@@ -8017,12 +8019,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
-        "413":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Request Entity Too Large
         "500":
           content:
             application/json:
@@ -8042,52 +8038,6 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Switch an idle Chat session to another provider
-      tags:
-      - conversations
-  /api/v1/sessions/{sessionId}/provider-switch/capabilities/{targetHarness}:
-    get:
-      operationId: getSessionProviderSwitchCapability
-      parameters:
-      - description: Session identifier, e.g. project-1.
-        in: path
-        name: sessionId
-        required: true
-        schema:
-          description: Session identifier, e.g. project-1.
-          type: string
-      - description: Registered Chat provider harness to evaluate.
-        in: path
-        name: targetHarness
-        required: true
-        schema:
-          description: Registered Chat provider harness to evaluate.
-          type: string
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderSwitchCapabilityResponse'
-          description: OK
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Check whether an idle Chat session can switch providers
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/renders:
@@ -14673,21 +14623,6 @@ components:
       - providerTurnId
       - activityId
       type: object
-    ProviderSwitchCapabilityResponse:
-      properties:
-        harness:
-          type: string
-        reason:
-          type: string
-        retryable:
-          type: boolean
-        supported:
-          type: boolean
-      required:
-      - harness
-      - supported
-      - retryable
-      type: object
     ProviderSwitchRequest:
       properties:
         autoCompactWindow:
@@ -14711,28 +14646,6 @@ components:
           type: boolean
       required:
       - targetHarness
-      type: object
-    ProviderSwitchResponse:
-      properties:
-        branchId:
-          type: string
-        conversationId:
-          type: string
-        providerConversationId:
-          type: string
-        sessionId:
-          type: string
-        sourceHarness:
-          type: string
-        targetHarness:
-          type: string
-      required:
-      - sessionId
-      - conversationId
-      - branchId
-      - sourceHarness
-      - targetHarness
-      - providerConversationId
       type: object
     PublishRenderRequest:
       properties:

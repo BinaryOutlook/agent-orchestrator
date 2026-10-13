@@ -103,7 +103,6 @@ import {
 
 type CenterFileOpenRequest = { commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
 const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
-
 // Centre-file open requests take keys from this process-wide counter, not a
 // per-mount one: the display mode remembered for a request (ui-store) outlives a
 // SessionView remount, so a new request must never reuse a recorded key.
@@ -1403,22 +1402,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// The chat/terminal control sits beside the agent picker: in the chat box,
-	// or over the terminal. Only a Cloud chat, which has neither, keeps it in the tab.
-	const interfaceSwitchControl = interfaceUi.unsupported ? null : interfaceUi.switchControl;
-	// A terminal session keeps its agent and the switch to chat in the tab's menu.
+	// A local terminal session keeps its agent and the switch to chat in the tab's
+	// menu. A Cloud session cannot switch agent, so it keeps the plain control.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
-	const sessionTabActions = !session || showChatSurface
-		? (session?.cloud ? interfaceSwitchControl : null)
+	const sessionTabActions = !session || showChatSurface || session.cloud
+		? (session?.cloud ? interfaceUi.switchControl : null)
 		: (
 			<TerminalSessionMenu
 				key={uiSessionId}
 				session={session}
 				hostId={hostId}
 				blocked={agentWorking}
-				switchAction={interfaceUi.unsupported ? undefined : interfaceUi.switchAction}
-				switchControl={interfaceSwitchControl}
+				switchAction={interfaceUi.switchAction}
+				switchControl={interfaceUi.switchControl}
 			/>
 		);
 	const sessionHeaderActions = (
@@ -1918,7 +1915,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									agentResuming={quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
-									interfaceSwitch={{ control: interfaceSwitchControl, errorNotice: interfaceUi.switchErrorNotice }}
+									interfaceSwitch={{ control: interfaceUi.switchControl, errorNotice: interfaceUi.switchErrorNotice }}
 									onOpenShell={addShellTerminal}
 									openingShell={openShellTerminal.isPending}
 									shellError={

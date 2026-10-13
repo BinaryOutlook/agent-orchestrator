@@ -673,15 +673,6 @@ type TelemetryEvent struct {
 	PayloadJson string
 }
 
-type TuiProviderSwitch struct {
-	ID         string
-	SessionID  string
-	RequestID  string
-	Phase      string
-	RecordJson string
-	CreatedAt  time.Time
-}
-
 type UsageBinding struct {
 	ID             int64
 	SessionID      domain.SessionID

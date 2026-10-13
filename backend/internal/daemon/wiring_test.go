@@ -933,7 +933,8 @@ func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 	return f.restoreErr
 }
 
-func (*fakeSessionLifecycle) WaitBackgroundWorkers(context.Context) error { return nil }
+func (*fakeSessionLifecycle) WaitAgentSwitchWorkers(context.Context) error { return nil }
+func (*fakeSessionLifecycle) WaitBackgroundWorkers(context.Context) error  { return nil }
 
 func (f *fakeSessionLifecycle) SetShellTerminalCloser(sessionmanager.ShellTerminalCloser) {}
 func (f *fakeSessionLifecycle) SetTerminalInputGate(sessionmanager.TerminalInputGate)     {}
@@ -954,8 +955,7 @@ func (f *fakeSessionLifecycle) RecoverCodexAccountSwitch(context.Context, string
 func (f *fakeSessionLifecycle) GetActiveCodexAccountSwitch(context.Context) (domain.CodexAccountSwitch, bool, error) {
 	return domain.CodexAccountSwitch{}, false, nil
 }
-func (f *fakeSessionLifecycle) SetCodexAccountSwitchObserver(func())               {}
-func (f *fakeSessionLifecycle) WaitInterfaceRecoveryWorkers(context.Context) error { return nil }
+func (f *fakeSessionLifecycle) SetCodexAccountSwitchObserver(func()) {}
 func (f *fakeSessionLifecycle) PersistChatModel(_ context.Context, _ domain.SessionID, _ string) error {
 	return nil
 }

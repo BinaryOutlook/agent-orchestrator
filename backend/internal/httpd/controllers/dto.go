@@ -2421,44 +2421,16 @@ type ConversationExcerptReferenceRequest struct {
 	Text           string `json:"text"`
 }
 
-// ProviderSwitchRequest starts an idle Chat-to-Chat provider handoff.
+// ProviderSwitchRequest switches an idle session to another provider. See
+// domain.ProviderSwitchRequest for what each field starts the target with.
 type ProviderSwitchRequest struct {
-	TargetHarness  string `json:"targetHarness"`
-	IdempotencyKey string `json:"idempotencyKey,omitempty"`
-	// Model is the target provider's model id. Empty uses its default.
-	Model string `json:"model,omitempty" maxLength:"200"`
-	// Effort is the target's reasoning effort. Empty uses its default.
-	Effort string `json:"effort,omitempty" maxLength:"64"`
-	// FastMode starts the target on its faster tier, where its model has one.
-	FastMode bool `json:"fastMode,omitempty"`
-	// Ultracode starts a Claude Code terminal target with Ultracode on.
-	Ultracode bool `json:"ultracode,omitempty"`
-	// AutoCompactWindow is where a Claude Code terminal target compacts on its own.
+	TargetHarness     string `json:"targetHarness"`
+	IdempotencyKey    string `json:"idempotencyKey,omitempty"`
+	Model             string `json:"model,omitempty" maxLength:"200"`
+	Effort            string `json:"effort,omitempty" maxLength:"64"`
+	FastMode          bool   `json:"fastMode,omitempty"`
+	Ultracode         bool   `json:"ultracode,omitempty"`
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
-}
-
-// ProviderSwitchResponse returns only the published provider identities; the
-// bounded bootstrap remains internal to the daemon.
-type ProviderSwitchResponse struct {
-	SessionID            string `json:"sessionId"`
-	ConversationID       string `json:"conversationId"`
-	BranchID             string `json:"branchId"`
-	SourceHarness        string `json:"sourceHarness"`
-	TargetHarness        string `json:"targetHarness"`
-	ProviderConversation string `json:"providerConversationId"`
-}
-
-// ProviderSwitchCapabilityResponse describes one target without launching it.
-type ProviderSwitchCapabilityResponse struct {
-	Harness   string `json:"harness"`
-	Supported bool   `json:"supported"`
-	Reason    string `json:"reason,omitempty"`
-	Retryable bool   `json:"retryable"`
-}
-
-// ProviderSwitchTargetParam names a target provider in the capability route.
-type ProviderSwitchTargetParam struct {
-	TargetHarness string `path:"targetHarness" description:"Registered Chat provider harness to evaluate."`
 }
 
 // SessionHistoryQuery pages GET /api/v1/sessions/{sessionId}/history.
@@ -2467,18 +2439,9 @@ type SessionHistoryQuery struct {
 	Limit  int `query:"limit,omitempty" minimum:"1" maximum:"50" description:"Maximum turns to return. Defaults to 10."`
 }
 
-// SessionHistoryTurn is one turn of a session, whichever UI it happened in:
-// the user's request and the agent's final response.
-type SessionHistoryTurn struct {
-	UserRequest   string    `json:"userRequest"`
-	AgentResponse string    `json:"agentResponse"`
-	At            time.Time `json:"at"`
-	Harness       string    `json:"harness,omitempty"`
-}
-
 // SessionHistoryResponse is one page of a session's turns, newest first.
 type SessionHistoryResponse struct {
-	Turns  []SessionHistoryTurn `json:"turns"`
+	Turns  []domain.HandoffTurn `json:"turns"`
 	Total  int                  `json:"total"`
 	Offset int                  `json:"offset"`
 }
@@ -2704,12 +2667,9 @@ type ConversationTurnSettingsPayload struct {
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	ApprovalMode    string `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
-	// FastMode asks for the provider's faster tier on models that offer one.
-	FastMode bool `json:"fastMode,omitempty"`
-	// PlanMode asks the provider to plan rather than act, where it supports that.
-	PlanMode bool `json:"planMode,omitempty"`
-	// AutoCompactWindow is where Claude Code compacts on its own. Empty leaves
-	// it to Claude Code. It applies the next time the agent starts.
+	// The rest are described on domain.ConversationSettings.
+	FastMode          bool   `json:"fastMode,omitempty"`
+	PlanMode          bool   `json:"planMode,omitempty"`
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
 }
 

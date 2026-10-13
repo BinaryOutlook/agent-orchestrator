@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"strings"
@@ -29,9 +30,6 @@ func (m *Manager) recordTerminalTurn(ctx context.Context, rec domain.SessionReco
 	switch s.Event {
 	case "user-prompt-submit":
 		request := strings.TrimSpace(s.TurnUserRequest)
-		if request == "" {
-			request = s.LatestUserPrompt
-		}
 		if s.ConversationCheckpointOrigin == domain.ConversationCheckpointOriginCoordination || request == "" {
 			// The user did not ask for this turn: AO's own message opened it,
 			// or the hook carried no text. Close any turn still open so the
@@ -39,25 +37,16 @@ func (m *Manager) recordTerminalTurn(ctx context.Context, rec domain.SessionReco
 			err = recorder.RecordTerminalTurnResponse(ctx, rec.ID, "", at)
 			break
 		}
-		nativeID := s.AgentSessionID
-		if nativeID == "" {
-			nativeID = rec.Metadata.AgentSessionID
-		}
 		err = recorder.RecordTerminalTurnRequest(ctx, domain.TerminalTurn{
-			SessionID: rec.ID, Harness: rec.Harness, NativeSessionID: nativeID,
-			UserRequest: request, RequestedAt: at,
+			SessionID: rec.ID, Harness: rec.Harness, UserRequest: request, RequestedAt: at,
+			NativeSessionID: cmp.Or(s.AgentSessionID, rec.Metadata.AgentSessionID),
 		})
 	case "stop":
-		if s.SubagentID != "" {
-			break
-		}
-		response := strings.TrimSpace(s.FinalAssistantMessage)
-		if response == "" {
-			response = s.LatestAssistantUpdate
-		}
 		// The turn is over even when the hook carries no text. Closing it
 		// keeps the next request from piling onto this one.
-		err = recorder.RecordTerminalTurnResponse(ctx, rec.ID, response, at)
+		if s.SubagentID == "" {
+			err = recorder.RecordTerminalTurnResponse(ctx, rec.ID, strings.TrimSpace(s.FinalAssistantMessage), at)
+		}
 	}
 	if err != nil {
 		slog.Default().Warn("lifecycle: record terminal turn", "session", rec.ID, "event", s.Event, "error", err)

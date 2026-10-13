@@ -39,7 +39,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
-	t?: TFunction,
 ): BoardSessionPresentation {
 	const provisioningStatus =
 		session.provisionState === "provisioning"
@@ -290,8 +289,8 @@ function DesktopSessionCard({
 			renderAvatar={(provider) => <AgentAvatar provider={provider} />}
 			session={
 				hideTerminatedStatus
-					? hideTerminatedCardStatus(toBoardSessionPresentation(session, t))
-					: toBoardSessionPresentation(session, t)
+					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
+					: toBoardSessionPresentation(session)
 			}
 			translate={translate}
 			renderUsage={(usage) => (

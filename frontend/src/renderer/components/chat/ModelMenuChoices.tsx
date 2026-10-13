@@ -6,26 +6,20 @@ import { cn } from "../../lib/utils";
 /** Mounted inside menu content so closing either menu also clears its query. */
 export function ModelMenuChoices<T extends { id: string; label: string }>({
 	models,
-	alwaysSearch = false,
-	noSearch = false,
-	divided = false,
+	searchable,
 	searchPlaceholder,
 	children,
 }: {
 	models: T[];
-	/** Show the search field however short the list is. */
-	alwaysSearch?: boolean;
-	/** A short list is quicker to read than to search. */
-	noSearch?: boolean;
-	/** Rule off the search field from the list under it. */
-	divided?: boolean;
+	/** Whether to show the search field, ruled off from the list. Unset shows a plain one on a long list. */
+	searchable?: boolean;
 	/** Set where the rows are a menu that search replaces with matches; nothing is "not found" before a query. */
 	searchPlaceholder?: string;
 	children: (models: T[], searchActiveID?: string, optionID?: (id: string) => string, query?: string) => ReactNode;
 }) {
 	const { t } = useTranslation();
 	const [search, setSearch] = useState("");
-	const showSearch = !noSearch && (alwaysSearch || models.length >= 10);
+	const showSearch = searchable ?? models.length >= 10;
 	const query = showSearch ? search.trim() : "";
 	const normalizedQuery = query.toLocaleLowerCase();
 	const matches = useMemo(() => {
@@ -62,7 +56,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				<div
 					// No inline padding: the field then shares the menu rows' silhouette,
 					// since their highlight spans the same content box.
-					className={cn("relative shrink-0 pb-1", divided ? "mb-1 border-b border-border" : undefined)}
+					className={cn("relative shrink-0 pb-1", searchable ? "mb-1 border-b border-border" : undefined)}
 					onClick={(event) => event.stopPropagation()}
 					onKeyDown={(event) => {
 						if (event.nativeEvent.isComposing) {

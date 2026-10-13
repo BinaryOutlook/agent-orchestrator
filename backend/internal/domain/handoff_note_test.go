@@ -24,7 +24,7 @@ func TestBuildHandoffNoteTiersTurnsAndCountsTheRest(t *testing.T) {
 	got := BuildHandoffNote(HandoffNoteInput{
 		SwitchID: "switch-1", SourceHarness: HarnessClaudeCode, TargetHarness: HarnessCodex,
 		SessionTitle: "Importer", Branch: "feature/importer", OriginalTask: "ship the importer",
-		ChangedFiles: []string{"a.go", "b.go"}, Turns: handoffTestTurns(30), HistoryCommand: true, Terminal: true,
+		ChangedFiles: []string{"a.go", "b.go"}, Turns: handoffTestTurns(30), Terminal: true,
 	})
 	if !strings.HasPrefix(got, HandoffNotePrefix) || !strings.HasSuffix(got, "</ao-handoff-request>") {
 		t.Fatalf("note is not wrapped in the handoff block:\n%s", got)

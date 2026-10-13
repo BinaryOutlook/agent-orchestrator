@@ -2622,23 +2622,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/sessions/{sessionId}/provider-switch/capabilities/{targetHarness}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Check whether an idle Chat session can switch providers */
-        get: operations["getSessionProviderSwitchCapability"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/sessions/{sessionId}/renders": {
         parameters: {
             query?: never;
@@ -5057,12 +5040,6 @@ export interface components {
             providerTurnId: string;
             sourceTurnId: string;
         };
-        ProviderSwitchCapabilityResponse: {
-            harness: string;
-            reason?: string;
-            retryable: boolean;
-            supported: boolean;
-        };
         ProviderSwitchRequest: {
             /** @enum {string} */
             autoCompactWindow?: "200k" | "1m";
@@ -5072,14 +5049,6 @@ export interface components {
             model?: string;
             targetHarness: string;
             ultracode?: boolean;
-        };
-        ProviderSwitchResponse: {
-            branchId: string;
-            conversationId: string;
-            providerConversationId: string;
-            sessionId: string;
-            sourceHarness: string;
-            targetHarness: string;
         };
         PublishRenderRequest: {
             /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
@@ -16273,7 +16242,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProviderSwitchResponse"];
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Bad Request */
@@ -16287,15 +16258,6 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Request Entity Too Large */
-            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16323,58 +16285,6 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    getSessionProviderSwitchCapability: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Session identifier, e.g. project-1. */
-                sessionId: string;
-                /** @description Registered Chat provider harness to evaluate. */
-                targetHarness: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProviderSwitchCapabilityResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
                 headers: {
                     [name: string]: unknown;
                 };

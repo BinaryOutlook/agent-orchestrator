@@ -187,11 +187,11 @@ func (m *Manager) resumeDeferredInterfaceRecoveryLocked(id domain.SessionID) {
 	if !deferred {
 		return
 	}
-	if err := m.beginInterfaceRecoveryAttempt(); err != nil {
+	if err := m.beginAgentSwitchAttempt(); err != nil {
 		return // Preserve the fence for the next boot after shutdown admission closes.
 	}
 	go func() {
-		defer m.interfaceRecoveryWorkers.Done()
+		defer m.agentSwitchWorkers.Done()
 		recovered, err := m.recoverInterfaceTransitions(m.backgroundContext, transitionID)
 		if err != nil {
 			m.logger.Error("interface transition: deferred recovery failed", "sessionID", id, "error", err)

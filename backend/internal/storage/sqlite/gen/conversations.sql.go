@@ -892,13 +892,13 @@ INSERT INTO conversation_branches (
     id, conversation_id, session_id, provider_conversation_id,
     parent_branch_id, fork_after_turn_id, replaced_turn_id,
     replacement_turn_id, fork_after_sequence, strategy, replay_cutoff_sequence,
-    replay_truncated, provider_scope_id, provider_ids_scoped, created_at
+    replay_truncated, provider_scope_id, provider_ids_scoped, created_at, handoff_note
 ) VALUES (
     ?1, ?2, ?3,
     ?4, ?5,
     ?6, ?7,
     ?8, ?9, ?10,
-    ?11, ?12, ?13, ?14, ?15
+    ?11, ?12, ?13, ?14, ?15, ?16
 )
 `
 
@@ -918,6 +918,7 @@ type InsertConversationBranchParams struct {
 	ProviderScopeID        string
 	ProviderIdsScoped      int64
 	CreatedAt              time.Time
+	HandoffNote            string
 }
 
 func (q *Queries) InsertConversationBranch(ctx context.Context, arg InsertConversationBranchParams) error {
@@ -937,6 +938,7 @@ func (q *Queries) InsertConversationBranch(ctx context.Context, arg InsertConver
 		arg.ProviderScopeID,
 		arg.ProviderIdsScoped,
 		arg.CreatedAt,
+		arg.HandoffNote,
 	)
 	return err
 }
@@ -2441,8 +2443,8 @@ type SelectConversationEditAnchorRow struct {
 // provider events. The previous provider turn is the fork target; it is empty for
 // the first prompt, which tells the service to start a fresh provider thread.
 // A provider boundary is the nearest ancestor that is either the root or has no
-// replaced turn. Older AO history stays visible, but provider turn ids outside
-// the active boundary can never be sent to the current driver.
+// replaced turn. Agent switching creates the latter kind: older AO history stays
+// visible, but its provider turn ids can never be sent to the new driver.
 func (q *Queries) SelectConversationEditAnchor(ctx context.Context, arg SelectConversationEditAnchorParams) (SelectConversationEditAnchorRow, error) {
 	row := q.db.QueryRowContext(ctx, selectConversationEditAnchor, arg.ConversationID, arg.ReplacedTurnID)
 	var i SelectConversationEditAnchorRow

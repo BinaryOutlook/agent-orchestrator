@@ -70,13 +70,16 @@ var (
 	// not an orchestrator (orchestrators are promptless by design and relaunch fresh
 	// with the system prompt only). Workers without a task and without a native
 	// session id have nothing meaningful to restore.
-	ErrNotResumable              = errors.New("session: nothing to resume from")
-	ErrOperationInProgress       = errors.New("session: another session operation is in progress")
-	ErrControllerStopUnconfirmed = errors.New("session: controller stop could not be confirmed")
+	ErrNotResumable        = errors.New("session: nothing to resume from")
+	ErrOperationInProgress = errors.New("session: another session operation is in progress")
 	// ErrTargetAgentUnauthorized is returned only when the target adapter's
 	// local auth probe conclusively reports missing or invalid credentials.
 	// Unknown/probe failures remain advisory and are allowed to reach launch.
 	ErrTargetAgentUnauthorized = errors.New("session: target agent is not authenticated")
+	// ErrSwitchSourceStopUnconfirmed means runtime teardown returned an error and
+	// AO could not prove whether the source still owns the session. No target is
+	// launched in this case.
+	ErrSwitchSourceStopUnconfirmed = errors.New("session: source agent stop could not be confirmed")
 	// ErrInterfaceHandoffUnsupported means the harness has not proven that its
 	// TUI resume identity and Chat protocol identity name the same conversation.
 	ErrInterfaceHandoffUnsupported = errors.New("session: interface handoff unsupported")
@@ -90,7 +93,8 @@ var (
 	// ErrInterfaceAlreadySelected makes a stale/double switch request an explicit
 	// conflict instead of leaking a generic 500 after the first switch commits.
 	ErrInterfaceAlreadySelected = errors.New("session: requested interface is already selected")
-	// ErrInterfaceTransitionInProgress distinguishes an in-progress TUI/Chat controller handoff.
+	// ErrInterfaceTransitionInProgress distinguishes TUI/Chat controller handoff
+	// from a provider agent switch so the API can report the correct operation.
 	ErrInterfaceTransitionInProgress = errors.New("session: interface transition already in progress")
 	// ErrInterfaceTransitionNotFound distinguishes a missing handoff from a
 	// missing session when DELETE is retried after the transition settled.
@@ -354,10 +358,11 @@ type conversationSettingsStore interface {
 // Manager coordinates internal session spawn, restore, kill, and cleanup over
 // the outbound ports. User-facing read-model assembly lives in the service package.
 type Manager struct {
-	runtime        runtimeController
-	agents         ports.AgentResolver
-	workspace      ports.Workspace
-	store          Store
+	runtime   runtimeController
+	agents    ports.AgentResolver
+	workspace ports.Workspace
+	store     Store
+	// agentReadiness is late-bound by SetAgentReadiness.
 	agentReadiness ports.AgentReadinessProvider
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
@@ -436,11 +441,12 @@ type Manager struct {
 	deferredInterfaceRecovery   map[domain.SessionID]string
 	inputLeases                 map[domain.SessionID]int
 	inputDrained                map[domain.SessionID]chan struct{}
-	// backgroundContext owns deferred interface-transition recovery work.
-	backgroundContext              context.Context
-	interfaceRecoveryWorkers       sync.WaitGroup
-	interfaceRecoveryWorkerMu      sync.Mutex
-	interfaceRecoveryWorkersClosed bool
+	// backgroundContext owns asynchronous agent-switch execution independently
+	// of the admitting request. The daemon cancels it before waiting for workers.
+	backgroundContext        context.Context
+	agentSwitchWorkers       sync.WaitGroup
+	agentSwitchWorkerMu      sync.Mutex
+	agentSwitchWorkersClosed bool
 
 	transitionMu sync.Mutex
 	transitions  map[domain.SessionID]*interfaceTransitionRun
@@ -741,30 +747,23 @@ type Deps struct {
 	Logger *slog.Logger
 }
 
-func (m *Manager) beginInterfaceRecoveryAttempt() error {
-	m.interfaceRecoveryWorkerMu.Lock()
-	defer m.interfaceRecoveryWorkerMu.Unlock()
-	if m.interfaceRecoveryWorkersClosed {
+func (m *Manager) beginAgentSwitchAttempt() error {
+	m.agentSwitchWorkerMu.Lock()
+	defer m.agentSwitchWorkerMu.Unlock()
+	if m.agentSwitchWorkersClosed {
 		return errors.New("session: interface recovery is shutting down")
 	}
-	m.interfaceRecoveryWorkers.Add(1)
+	m.agentSwitchWorkers.Add(1)
 	return nil
 }
 
-// WaitInterfaceRecoveryWorkers closes admission and waits for deferred
-// TUI/Chat recovery work. It is unrelated to provider/harness switching.
-func (m *Manager) WaitInterfaceRecoveryWorkers(ctx context.Context) error {
-	m.interfaceRecoveryWorkerMu.Lock()
-	m.interfaceRecoveryWorkersClosed = true
-	m.interfaceRecoveryWorkerMu.Unlock()
-	done := make(chan struct{})
-	go func() { m.interfaceRecoveryWorkers.Wait(); close(done) }()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+// WaitAgentSwitchWorkers closes admission and waits for deferred TUI/Chat
+// interface recovery work.
+func (m *Manager) WaitAgentSwitchWorkers(ctx context.Context) error {
+	m.agentSwitchWorkerMu.Lock()
+	m.agentSwitchWorkersClosed = true
+	m.agentSwitchWorkerMu.Unlock()
+	return waitForWorkers(ctx, &m.agentSwitchWorkers)
 }
 
 // New builds a Session Manager from its dependencies, defaulting the clock to
@@ -2874,7 +2873,7 @@ func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.Se
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, ErrNotFound)
 	}
 	if exited.Activity.State != domain.ActivityExited {
-		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, ErrControllerStopUnconfirmed)
+		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, ErrSwitchSourceStopUnconfirmed)
 	}
 	return exited, nil
 }
@@ -2901,36 +2900,28 @@ func (m *Manager) stopAgentController(ctx context.Context, rec domain.SessionRec
 	})
 }
 
-// stopSourceRuntime stops one fenced TUI runtime and verifies ambiguous
-// destroy failures before reporting them. It is shared by exit and interface
-// transition teardown; provider replacement no longer owns this primitive.
+// stopSourceRuntime stops one fenced TUI runtime. A failed destroy is checked
+// against the runtime's own liveness and retried once before it is reported.
 func (m *Manager) stopSourceRuntime(ctx context.Context, ref ports.FencedRuntimeRef) error {
 	if strings.TrimSpace(ref.Handle.ID) == "" {
 		return ErrIncompleteHandle
 	}
-	firstErr := m.runtime.Destroy(ctx, ref.Handle)
-	if firstErr == nil {
-		return nil
+	var errs []error
+	var probe ports.FencedProbeResult
+	for range 2 {
+		err := m.runtime.Destroy(ctx, ref.Handle)
+		if err == nil {
+			return nil
+		}
+		errs = append(errs, err)
+		if ctx.Err() != nil {
+			return errors.Join(append(errs, ctx.Err())...)
+		}
+		if probe = m.runtime.ProbeFencedRuntime(ctx, ref); probe.Liveness == ports.FencedDead {
+			return nil
+		}
 	}
-	if ctx.Err() != nil {
-		return errors.Join(firstErr, ctx.Err())
-	}
-	probe := m.runtime.ProbeFencedRuntime(ctx, ref)
-	if probe.Liveness == ports.FencedDead {
-		return nil
-	}
-	secondErr := m.runtime.Destroy(ctx, ref.Handle)
-	if secondErr == nil {
-		return nil
-	}
-	if ctx.Err() != nil {
-		return errors.Join(firstErr, secondErr, ctx.Err())
-	}
-	secondProbe := m.runtime.ProbeFencedRuntime(ctx, ref)
-	if secondProbe.Liveness == ports.FencedDead {
-		return nil
-	}
-	return errors.Join(firstErr, secondErr, fmt.Errorf("runtime ownership remains unresolved: %s", secondProbe.Reason))
+	return errors.Join(append(errs, fmt.Errorf("runtime ownership remains unresolved: %s", probe.Reason))...)
 }
 
 func (m *Manager) recordAgentExited(ctx context.Context, rec domain.SessionRecord) error {
@@ -3187,10 +3178,10 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		ProjectID: rec.ProjectID,
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || meta.RuntimeHandleID == "" {
-		return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, nil, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict)
+		return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, nil, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict, nil)
 	}
 	handle := ports.RuntimeHandle{ID: meta.RuntimeHandleID}
-	return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, &handle, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict)
+	return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, &handle, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict, nil)
 }
 
 func (m *Manager) relaunchSession(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle) (RestoreResult, error) {
@@ -3217,19 +3208,10 @@ func (m *Manager) relaunchSessionWithPolicy(
 	forceFresh, requireNativeHistory bool,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 ) (RestoreResult, error) {
-	return m.relaunchSessionWithPolicyAndGenerationPrompt(ctx, operation, rec, project, ws, restartHandle, forceFresh, requireNativeHistory, "", historyPolicy, nil)
+	return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, restartHandle, forceFresh, requireNativeHistory, "", historyPolicy, nil)
 }
 
-func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy) (RestoreResult, error) {
-	return m.relaunchSessionWithPolicyAndGenerationPrompt(ctx, operation, rec, project, ws, restartHandle, forceFresh, requireNativeHistory, reservedGeneration, historyPolicy, nil)
-}
-
-// relaunchSessionWithPolicyAndGenerationPrompt is the restore path with an
-// optional one-shot prompt override. Provider handoffs use this to seed a
-// fresh target without replacing the session's durable original task prompt.
-// The override is launch-only: lifecycle metadata continues to retain the
-// user's original prompt for ordinary restore and retry behavior.
-func (m *Manager) relaunchSessionWithPolicyAndGenerationPrompt(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy, promptOverride *string) (RestoreResult, error) {
+func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy, promptOverride *string) (RestoreResult, error) {
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
 	// after stopping the old controller, then reuses this ordinary restore path.
@@ -3248,7 +3230,6 @@ func (m *Manager) relaunchSessionWithPolicyAndGenerationPrompt(ctx context.Conte
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness)
 	}
-	// Recompute standing instructions for the restored controller.
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
@@ -3267,9 +3248,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGenerationPrompt(ctx context.Conte
 	if model := strings.TrimSpace(rec.Metadata.Model); model != "" {
 		agentConfig.Model = model
 	}
-	// The effort chosen with that model is the same kind of choice. Without
-	// this, a terminal switch to any agent but Claude Code started on the
-	// project's default effort instead of the one picked.
+	// The effort chosen with that model is the same kind of choice.
 	if effort := strings.TrimSpace(rec.Metadata.Effort); effort != "" {
 		agentConfig.Effort = effort
 	}
@@ -3299,21 +3278,22 @@ func (m *Manager) relaunchSessionWithPolicyAndGenerationPrompt(ctx context.Conte
 	var argv []string
 	var delivery ports.PromptDeliveryStrategy
 	var mode RestoreMode
-	launchPrompt := rec.Metadata.Prompt
+	// A provider handoff seeds its fresh target with a note for this launch
+	// only: the session keeps the user's original prompt for later restores.
+	savedPrompt := rec.Metadata.Prompt
 	if promptOverride != nil {
-		launchPrompt = *promptOverride
+		rec.Metadata.Prompt = *promptOverride
 	}
 	// A provider handoff starts a new native conversation in a session that
-	// may have run this agent before. An agent that pins its native id to the
-	// AO session (Claude Code) would be handed the id its earlier conversation
-	// already used and refuse to start, so it is given a new one.
+	// may have run this agent before. Claude Code pins its native id to the AO
+	// session and refuses the id its earlier conversation used, so it gets a new one.
 	freshNativeSessionID := ""
 	if provider, ok := agent.(ports.AgentFreshNativeSessionIDProvider); ok && forceFresh && promptOverride != nil {
 		freshNativeSessionID = provider.NewNativeSessionID()
 	}
 	if forceFresh {
-		argv, delivery, mode, err = freshLaunchArgvWithPrompt(ctx, agent, rec.ID, ws.Path, rec.Metadata,
-			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, launchPrompt, freshNativeSessionID)
+		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 	} else {
 		argv, delivery, mode, err = restoreArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
 			systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir, env)
@@ -3331,14 +3311,14 @@ func (m *Manager) relaunchSessionWithPolicyAndGenerationPrompt(ctx context.Conte
 		SessionID:        string(rec.ID),
 		WorkspacePath:    ws.Path,
 		Kind:             rec.Kind,
-		Prompt:           launchPrompt,
+		Prompt:           rec.Metadata.Prompt,
 		SystemPrompt:     systemPrompt,
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
 		NativeSessionID:  freshNativeSessionID,
 	}
-	afterStartPrompt := launchPrompt
+	afterStartPrompt := rec.Metadata.Prompt
 	if delivery == ports.PromptDeliveryAfterStart && mode != RestoreModeNative {
 		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
 		if err != nil {
@@ -3400,7 +3380,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGenerationPrompt(ctx context.Conte
 		RuntimeHandleID:           handle.ID,
 		RuntimeLaunchID:           launchID,
 		AgentSessionID:            rec.Metadata.AgentSessionID,
-		Prompt:                    rec.Metadata.Prompt,
+		Prompt:                    savedPrompt,
 		BrowserCapabilityVerifier: rec.Metadata.BrowserCapabilityVerifier,
 	}
 	// Bind an exact native resume to the target launch immediately. Passive Codex
@@ -3802,13 +3782,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	return m.ReconcileBackground(ctx)
 }
 
-// ReconcileStartupSafety closes interrupted interface transitions with a
-// restored input fence before the API accepts input.
+// ReconcileStartupSafety closes interrupted operations or quarantines ambiguous
+// interface targets with a restored input fence before the API accepts input.
 func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	m.startTransitionMessageDispatcher(ctx)
-	if err := m.reconcileInterruptedTUIProviderSwitches(ctx); err != nil {
-		return fmt.Errorf("reconcile: TUI provider switches: %w", err)
-	}
 	_, err := m.recoverInterruptedInterfaceTransitions(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile: interface transitions: %w", err)
@@ -6324,7 +6301,7 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 	// a saved prompt, rather than stranding the work behind ErrNotResumable. A
 	// worker that never got that far (no id, no prompt) still stays unresumable.
 	return freshLaunchArgv(ctx, agent, id, workspacePath, meta, systemPrompt,
-		systemPromptFile, agentConfig, kind, dataDir, conversationLost)
+		systemPromptFile, agentConfig, kind, dataDir, conversationLost, "")
 }
 
 // nativeConversationMissing reports whether the agent can see a persisted
@@ -6359,15 +6336,11 @@ func nativeConversationMissing(ctx context.Context, agent ports.Agent, ref ports
 // freshLaunchArgv builds the non-resume half of restoreArgv. Interface
 // transitions also use it when an adapter proves its reserved id has no
 // persisted history, both for preflight and for the actual target launch.
-func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string, allowPromptless bool) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
-	return freshLaunchArgvWithPrompt(ctx, agent, id, workspacePath, meta, systemPrompt, systemPromptFile, agentConfig, kind, dataDir, allowPromptless, meta.Prompt, "")
-}
-
-func freshLaunchArgvWithPrompt(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string, allowPromptless bool, prompt, nativeSessionID string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
+func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string, allowPromptless bool, nativeSessionID string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	// A saved prompt is replayed fresh. An orchestrator is promptless by design
 	// and relaunches with the system prompt only. A promptless WORKER has no task
 	// and no session id to restore from: do not blank-relaunch it.
-	if prompt == "" && kind != domain.KindOrchestrator && !allowPromptless {
+	if meta.Prompt == "" && kind != domain.KindOrchestrator && !allowPromptless {
 		return nil, "", "", ErrNotResumable
 	}
 	// Fall through to a fresh launch. Command-delivered agents receive
@@ -6378,7 +6351,7 @@ func freshLaunchArgvWithPrompt(ctx context.Context, agent ports.Agent, id domain
 		SessionID:        string(id),
 		WorkspacePath:    workspacePath,
 		Kind:             kind,
-		Prompt:           prompt,
+		Prompt:           meta.Prompt,
 		SystemPrompt:     systemPrompt,
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
@@ -6397,7 +6370,7 @@ func freshLaunchArgvWithPrompt(ctx context.Context, agent ports.Agent, id domain
 		return nil, "", "", fmt.Errorf("launch command: %w", err)
 	}
 	mode := RestoreModeFresh
-	if prompt != "" {
+	if meta.Prompt != "" {
 		mode = RestoreModeSavedPrompt
 	}
 	return argv, delivery, mode, nil
@@ -6449,17 +6422,12 @@ func (m *Manager) augmentRuntimePATHForLaunchBinary(ctx context.Context, env map
 	AugmentRuntimePATHForLaunchBinary(ctx, env, argv, m.lookPath, PinnedHookDir(m.executable, m.dataDir))
 }
 
-const conversationFactBytes = 16 << 10
-
 func boundedConversationFact(value string) string {
-	return boundedString(strings.TrimSpace(value), conversationFactBytes)
-}
-
-func boundedString(value string, maxBytes int) string {
-	if maxBytes <= 0 || len(value) <= maxBytes {
-		return value
+	const limit = 16 << 10
+	if value = strings.TrimSpace(value); len(value) > limit {
+		return strings.ToValidUTF8(value[:limit], "�")
 	}
-	return strings.ToValidUTF8(value[:maxBytes], "�")
+	return value
 }
 
 // AugmentRuntimePATHForLaunchBinary is retained at the session-manager boundary
@@ -6496,8 +6464,7 @@ func (m *Manager) superviseAgentProcessMode(agent ports.Agent, id domain.Session
 }
 
 // wrapAgentProcessWithLaunchID rebuilds a preflighted launch command without
-// changing its already-reserved generation. Callers use this after assembling
-// the final in-memory launch configuration for CLIs that accept direct input.
+// changing its already-reserved generation.
 func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, launchID string, force bool) ([]string, error) {
 	if strings.TrimSpace(launchID) == "" {
 		return nil, errors.New("empty launch id")

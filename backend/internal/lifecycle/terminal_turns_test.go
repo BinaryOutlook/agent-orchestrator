@@ -28,7 +28,8 @@ func (s *turnRecordingStore) RecordTerminalTurnResponse(_ context.Context, _ dom
 
 func TestTerminalTurnsAreRecordedFromHooksInTerminalModeOnly(t *testing.T) {
 	signals := []ports.ActivitySignal{
-		{Event: "user-prompt-submit", LatestUserPrompt: "fix the importer"},
+		// Claude and Codex report the request as a replay checkpoint too.
+		{Event: "user-prompt-submit", LatestUserPrompt: "fix the importer", TurnUserRequest: "fix the importer"},
 		// Codex reports its final message without making it a replay checkpoint.
 		{Event: "stop", FinalAssistantMessage: "importer fixed"},
 		// AO's own message opens a turn the user did not ask for.

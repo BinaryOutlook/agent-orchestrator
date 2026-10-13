@@ -1,29 +1,22 @@
-import { MoreHorizontal, X } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { MoreHorizontal } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProviderSwitchCommand } from "../hooks/useConversation";
 import { agentLabel } from "../lib/agent-options";
 import { apiErrorMessage } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
-import { AgentModelPicker, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
+import { AgentModelPicker, DismissButton, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
 import { ProviderMark } from "./chat/ProviderMark";
-import { RoundedChatIcon } from "./SessionInterfaceSwitch";
+import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
 import { TopbarButton } from "./TopbarButton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 const NO_CHOICES = { models: [], modelLabel: "", efforts: [] };
 
-export interface TerminalSwitchAction {
-	target: "chat" | "tui";
-	disabled: boolean;
-	reason?: string;
-	run: () => void;
-}
-
 /**
  * The menu on a terminal session's tab: the running agent, which opens the
- * agent picker beside the menu, the switch to the chat view, and a new terminal.
+ * agent picker beside the menu, and the switch to the chat view.
  * Picking another agent adds Switch and Cancel under its settings; the switch
  * runs when Switch is pressed, because a terminal has no next message to wait on.
  */
@@ -38,26 +31,21 @@ export function TerminalSessionMenu({
 	hostId?: string;
 	/** The agent is working, so it cannot be replaced right now. */
 	blocked: boolean;
-	switchAction?: TerminalSwitchAction;
+	switchAction?: { disabled: boolean; reason?: string; run: () => void };
 	/** Shown in place of the menu while a switch to chat is running. */
 	switchControl?: ReactNode;
 }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const [pending, setPending] = useState<PendingAgentSwitch>();
-	const commands = useProviderSwitchCommand(session.id, hostId);
+	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const agentSwitch = useMemo(
-		() => ({ projectId: session.workspaceId, hostId, pending, onPendingChange: setPending }),
-		[hostId, pending, session.workspaceId],
-	);
+	const agentSwitch = { projectId: session.workspaceId, hostId, pending, onPendingChange: setPending };
 	if (!switchAction && switchControl) return <div className="inline-flex shrink-0 items-center">{switchControl}</div>;
 	const switchNow = () => {
 		if (!pending) return;
-		void commands.switchProvider(pending.harness, pending.model, pending.effort, pending.fastMode, {
-			ultracode: pending.ultracode,
-			autoCompactWindow: pending.autoCompactWindow,
-		})
+		const { harness: targetHarness, model, effort, fastMode, ultracode, autoCompactWindow } = pending;
+		void providerSwitch.mutateAsync({ targetHarness, model, effort, fastMode, ultracode, autoCompactWindow })
 			.then(() => { setPending(undefined); setOpen(false); })
 			.catch((error) => showGlobalToast("Agent switch failed", apiErrorMessage(error), "error"));
 	};
@@ -70,23 +58,14 @@ export function TerminalSessionMenu({
 				<span className="min-w-0 flex-1 truncate">{target}</span>
 				<button
 					type="button"
-					disabled={blocked || commands.switchProviderPending}
+					disabled={blocked || providerSwitch.isPending}
 					title={blocked ? "The agent is working. Switch when it is idle." : `Switch this terminal to ${target}`}
 					onClick={switchNow}
 					className="shrink-0 rounded-md bg-primary px-2 py-px text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
 				>
-					{commands.switchProviderPending ? "Switching…" : "Switch"}
+					{providerSwitch.isPending ? "Switching…" : "Switch"}
 				</button>
-				<button
-					type="button"
-					aria-label="Cancel"
-					title="Cancel"
-					disabled={commands.switchProviderPending}
-					onClick={() => setPending(undefined)}
-					className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-interactive-active hover:text-foreground"
-				>
-					<X aria-hidden="true" className="size-3.5" />
-				</button>
+				<DismissButton label="Cancel" disabled={providerSwitch.isPending} onClick={() => setPending(undefined)} />
 			</div>
 		</div>
 	) : null;
@@ -108,7 +87,7 @@ export function TerminalSessionMenu({
 				<AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} />
 				{switchAction ? (
 					<DropdownMenuItem disabled={switchAction.disabled} title={switchAction.reason} onSelect={switchAction.run}>
-						<RoundedChatIcon className="size-icon-lg" />
+						<RoundedInterfaceIcon target="chat" className="size-icon-lg" />
 						Switch to chat UI
 					</DropdownMenuItem>
 				) : null}

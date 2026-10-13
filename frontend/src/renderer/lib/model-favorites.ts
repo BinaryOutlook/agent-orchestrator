@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { create } from "zustand";
 
 /**
  * A model the user starred in the agent picker, with the settings it had: one
@@ -19,48 +19,33 @@ export interface ModelFavorite {
 }
 
 const STORAGE_KEY = "ao.chat.modelFavorites";
-const listeners = new Set<() => void>();
-let cached: ModelFavorite[] | undefined;
 
-function read(): ModelFavorite[] {
-	if (cached) return cached;
+function readStored(): ModelFavorite[] {
 	try {
-		const parsed: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "[]");
-		cached = Array.isArray(parsed)
-			? parsed
-				.filter((entry) => typeof entry?.harness === "string" && typeof entry?.model === "string" && typeof entry?.label === "string")
-				// A favourite saved before rows were recorded was a plain model.
-				.map((entry) => ({ ...entry, row: typeof entry.row === "string" ? entry.row : entry.model }) as ModelFavorite)
-			: [];
-	} catch {
-		cached = [];
-	}
-	return cached;
+		const saved: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "[]");
+		if (Array.isArray(saved)) {
+			return saved.filter((entry) => [entry?.harness, entry?.row, entry?.model, entry?.label].every((field) => typeof field === "string"));
+		}
+	} catch {}
+	return [];
 }
 
-function write(next: ModelFavorite[]) {
-	cached = next;
-	try {
-		window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-	} catch {
-		// A full or blocked store only loses the favourite across restarts.
-	}
-	for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void) {
-	listeners.add(listener);
-	return () => listeners.delete(listener);
-}
+const useStore = create<{ favorites: ModelFavorite[] }>(() => ({ favorites: readStored() }));
 
 /** Adds the model to the favourites, or removes it if it is already one. */
 export function toggleModelFavorite(favorite: ModelFavorite) {
-	const current = read();
+	const current = useStore.getState().favorites;
 	const kept = current.filter((entry) => entry.harness !== favorite.harness || entry.row !== favorite.row);
-	write(kept.length === current.length ? [...current, favorite] : kept);
+	const favorites = kept.length === current.length ? [...current, favorite] : kept;
+	useStore.setState({ favorites });
+	try {
+		window.localStorage.setItem(STORAGE_KEY, JSON.stringify(favorites));
+	} catch {
+		// A full or blocked store only loses the favourite across restarts.
+	}
 }
 
 /** The starred models, in the order they were starred. */
 export function useModelFavorites(): ModelFavorite[] {
-	return useSyncExternalStore(subscribe, read, read);
+	return useStore((state) => state.favorites);
 }

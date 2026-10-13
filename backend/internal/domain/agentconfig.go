@@ -51,17 +51,8 @@ type AgentLaunchOptions struct {
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
 }
 
-// AutoCompactTokens is the chosen compaction window as a token count, or 0.
-func (o AgentLaunchOptions) AutoCompactTokens() int {
-	switch o.AutoCompactWindow {
-	case "200k":
-		return 200_000
-	case "1m":
-		return 1_000_000
-	default:
-		return 0
-	}
-}
+// AutoCompactTokens is each compaction window choice as a token count.
+var AutoCompactTokens = map[string]int{"200k": 200_000, "1m": 1_000_000}
 
 // IsZero reports whether the config carries no settings, so storage can persist
 // SQL NULL and resolution can skip an empty config.

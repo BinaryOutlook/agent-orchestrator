@@ -37,28 +37,17 @@ function nativeSessionId(context) {
   return typeof sessionId === "string" ? sessionId : "";
 }
 
-// The run's final assistant text, read defensively: the event shape belongs to
-// the agent, and a missing or different field must only mean "no text".
+// The run's final assistant text. The event shape is the agent's, so anything
+// unexpected only means "no text".
 function finalAssistantText(event) {
   try {
-    const messages = Array.isArray(event?.messages) ? event.messages : [];
-    for (let index = messages.length - 1; index >= 0; index--) {
-      const message = messages[index];
+    for (const message of [...(event?.messages ?? [])].reverse()) {
       if (message?.role !== "assistant") continue;
-      const content = message.content;
-      const text = typeof content === "string"
-        ? content
-        : Array.isArray(content)
-          ? content
-              .filter((part) => part?.type === "text" && typeof part.text === "string")
-              .map((part) => part.text)
-              .join("\n")
-          : "";
+      const parts = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
+      const text = (Array.isArray(parts) ? parts : []).filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
       if (text.trim()) return text;
     }
-  } catch {
-    // An unreadable event carries no text.
-  }
+  } catch {}
   return "";
 }
 

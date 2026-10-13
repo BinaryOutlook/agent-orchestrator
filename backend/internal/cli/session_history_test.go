@@ -51,21 +51,39 @@ func TestSessionHistory_RequiresASessionOutsideAO(t *testing.T) {
 	}
 }
 
-func TestHookConversationFactsFinalMessageFeedsTurnHistoryOnly(t *testing.T) {
-	payload := []byte(`{"turn_id":"turn-1","last_assistant_message":"all done"}`)
-	codex := hookConversationFacts(domain.HarnessCodex, "stop", payload)
-	if codex.FinalAssistantMessage != "all done" || codex.LatestAssistantUpdate != "" {
-		t.Fatalf("codex stop = %+v, want the final message without a replay checkpoint", codex)
+func TestHooks_StopFinalMessageFeedsTurnHistoryForEveryAgent(t *testing.T) {
+	const payload = `{"turn_id":"turn-1","last_assistant_message":"all done"}`
+	for _, tt := range []struct {
+		agent, payload               string
+		wantFinal, wantReplayAnswers bool
+	}{
+		// Codex reports its final message without making it a replay checkpoint.
+		{"codex", payload, true, false},
+		{"claude-code", payload, true, true},
+		{"codex", `{"agent_id":"child","last_assistant_message":"all done"}`, false, false},
+	} {
+		t.Run(tt.agent, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(tt.payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", tt.agent, "stop")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := strings.Contains(capture.body, `"finalAssistantMessage":"all done"`); got != tt.wantFinal {
+				t.Fatalf("final message in turn history = %v, want %v: %s", got, tt.wantFinal, capture.body)
+			}
+			if got := strings.Contains(capture.body, `"latestAssistantUpdate":"all done"`); got != tt.wantReplayAnswers {
+				t.Fatalf("final message as replay checkpoint = %v, want %v: %s", got, tt.wantReplayAnswers, capture.body)
+			}
+		})
 	}
-	claude := hookConversationFacts(domain.HarnessClaudeCode, "stop", payload)
-	if claude.FinalAssistantMessage != "all done" || claude.LatestAssistantUpdate != "all done" {
-		t.Fatalf("claude stop = %+v, want both fields", claude)
-	}
-	subagent := hookConversationFacts(domain.HarnessCodex, "stop", []byte(`{"agent_id":"child","last_assistant_message":"child done"}`))
-	if subagent.FinalAssistantMessage != "" {
-		t.Fatalf("a subagent stop reported a main-turn final message: %+v", subagent)
-	}
-	if other := hookConversationFacts(domain.HarnessCodex, "post-tool-use", payload); other.FinalAssistantMessage != "" {
+	if other := hookConversationFacts(domain.HarnessCodex, "post-tool-use", []byte(payload)); other.FinalAssistantMessage != "" {
 		t.Fatalf("a non-stop event reported a final message: %+v", other)
 	}
 }
@@ -83,9 +101,11 @@ func TestHookTurnHistoryFactsForwardsOpenCodeAndGrokText(t *testing.T) {
 		{"AO handoff note", "user-prompt-submit", `{"prompt":"<ao-handoff-request switch-id=\"x\">note</ao-handoff-request>"}`, "", ""},
 		{"subagent", "user-prompt-submit", `{"prompt":"child task","agent_id":"child"}`, "", ""},
 		{"other event", "pre-tool-use", `{"prompt":"add a retry","last_assistant_message":"x"}`, "", ""},
+		{"mistyped payload", "stop", `{"agent_id":7,"last_assistant_message":"child done"}`, "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			request, response := hookTurnHistoryFacts(tt.event, []byte(tt.payload))
+			facts := hookConversationFacts(domain.HarnessOpenCode, tt.event, []byte(tt.payload))
+			request, response := facts.TurnUserRequest, facts.FinalAssistantMessage
 			if request != tt.request || response != tt.response {
 				t.Fatalf("got request %q response %q, want %q and %q", request, response, tt.request, tt.response)
 			}

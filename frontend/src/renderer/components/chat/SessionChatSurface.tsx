@@ -13,7 +13,6 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
 
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import {
@@ -27,6 +26,7 @@ import {
 	useWorkspaceFilePaths,
 } from "../../hooks/useConversation";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
+import { useLatestCallback } from "../../hooks/useStable";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
@@ -34,7 +34,7 @@ import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { Theme } from "../../stores/ui-store";
 import { can } from "../../types/conversation";
-import type { ConversationSnapshot } from "../../types/conversation";
+import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, PendingAgentSwitchNotice, type PendingAgentSwitch } from "./AgentSwitchPicker";
@@ -216,47 +216,32 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Choosing another agent only records the choice. The switch runs with the
 	// next message, so the handoff note is written when it is needed.
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
-	const [chosenSwitch, setChosenSwitch] = useState<{ sessionId: string; target: PendingAgentSwitch }>();
+	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
 	const currentHarness = snapshot?.harness;
-	const pendingSwitch =
-		chosenSwitch?.sessionId === session.id && currentHarness && chosenSwitch.target.harness !== currentHarness
-			? chosenSwitch.target
-			: undefined;
+	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
 	// Ultracode is asked for in each message, so it is kept here, not on the agent.
-	const [ultracodeFor, setUltracodeFor] = useState<string>();
-	const ultracode = useMemo(() => ({
-		on: ultracodeFor === session.id,
-		onChange: (on: boolean) => setUltracodeFor(on ? session.id : undefined),
-	}), [session.id, ultracodeFor]);
-	// The control is rebuilt only when its value changes; the save reads the
-	// latest settings, so a streaming reply does not redraw the settings bar.
-	const latestSettings = useRef({ settings: snapshot?.settings, save: commands.chooseStartSettings });
-	latestSettings.current = { settings: snapshot?.settings, save: commands.chooseStartSettings };
+	const [ultracodeOn, setUltracodeOn] = useState(false);
+	const ultracode = useMemo(() => ({ on: ultracodeOn, onChange: setUltracodeOn }), [ultracodeOn]);
 	const autoCompactWindow = snapshot?.settings.autoCompactWindow;
 	const [applyingAutoCompact, setApplyingAutoCompact] = useState(false);
-	const autoCompact = useMemo(() => ({
-		value: autoCompactWindow,
-		// Claude Code reads this when it starts, so the agent is restarted to
-		// apply it. That is only safe while it is not working.
-		disabled: applyingAutoCompact || controllerBusy || hasRunningTurn || queuedTurnCount > 0,
-		onChange: (value: string | undefined) => {
-			const { settings, save } = latestSettings.current;
-			if (!settings) return;
-			setApplyingAutoCompact(true);
-			void save({ ...settings, autoCompactWindow: value }).catch(() => {}).finally(() => setApplyingAutoCompact(false));
-		},
-	}), [applyingAutoCompact, autoCompactWindow, controllerBusy, hasRunningTurn, queuedTurnCount]);
-	const switchBlocked = controllerBusy || hasRunningTurn || queuedTurnCount > 0 || providerSwitch.switchProviderPending;
+	// Claude Code reads this when it starts, so saving it restarts the agent.
+	const saveAutoCompact = useLatestCallback((value: TurnSettings["autoCompactWindow"]) => {
+		if (!snapshot) return;
+		setApplyingAutoCompact(true);
+		void commands.chooseStartSettings({ ...snapshot.settings, autoCompactWindow: value }).catch(() => {}).finally(() => setApplyingAutoCompact(false));
+	});
+	const agentBusy = controllerBusy || hasRunningTurn || queuedTurnCount > 0;
+	// The restart is only safe while the agent is not working.
+	const autoCompact = useMemo(
+		() => ({ value: autoCompactWindow, disabled: applyingAutoCompact || agentBusy, onChange: saveAutoCompact }),
+		[agentBusy, applyingAutoCompact, autoCompactWindow, saveAutoCompact],
+	);
+	const switchBlocked = agentBusy || providerSwitch.isPending;
 	const agentSwitch = useMemo(
-		() => currentHarness && !session.cloud && !newWorkDisabled ? {
-			projectId: session.workspaceId,
-			hostId,
-			pending: pendingSwitch,
-			onPendingChange: (target: PendingAgentSwitch | undefined) =>
-				setChosenSwitch(target ? { sessionId: session.id, target } : undefined),
-			disabled: switchBlocked,
-		} : undefined,
-		[currentHarness, hostId, newWorkDisabled, pendingSwitch, session.cloud, session.id, session.workspaceId, switchBlocked],
+		() => currentHarness && !session.cloud && !newWorkDisabled
+			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, onPendingChange: setChosenSwitch, disabled: switchBlocked, ultracode, autoCompact }
+			: undefined,
+		[autoCompact, currentHarness, hostId, newWorkDisabled, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
 	);
 	useEffect(() => {
 		if (acceptedLocalTurnObserved && pendingAcceptedTurnId) {
@@ -292,7 +277,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// A background resume keeps the last-known catalogs visible so the model
 	// picker doesn't blank out while the agent spins up.
 	const controllerCatalogsEnabled = (targetChatControllerReady || agentResuming) && !controllerTransitioning && !newWorkDisabled;
-	const catalogsEnabled = true;
 	const configOptions = useConversationConfigOptions(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot && can(snapshot, "config_options")),
@@ -493,7 +477,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				assetBaseUrl={assetBaseUrl}
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
-				agentInputDisabled={false}
 				newWorkDisabled={newWorkDisabled}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
@@ -550,7 +533,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					if (pendingSwitch) {
 						// Nothing was sent if the switch fails, so the draft must stay editable
 						// instead of being held as a delivery that might have gone through.
-						await providerSwitch.switchProvider(pendingSwitch.harness, pendingSwitch.model, pendingSwitch.effort, pendingSwitch.fastMode)
+						const { harness: targetHarness, model, effort, fastMode } = pendingSwitch;
+						await providerSwitch.mutateAsync({ targetHarness, model, effort, fastMode })
 							.catch((error) => { throw Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED }); });
 						setChosenSwitch(undefined);
 						// Ultracode picked with the switch stays on for the messages after it.
@@ -571,14 +555,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
 				composerAction={interfaceSwitch?.control}
-				ultracode={ultracode}
-				autoCompact={autoCompact}
-				composerNotice={interfaceSwitch?.errorNotice ?? (providerSwitch.switchProviderError ? (
-					<ComposerErrorNotice title="Couldn't switch agent" message={providerSwitch.switchProviderError} onDismiss={providerSwitch.resetSwitchProviderError} />
+				composerNotice={interfaceSwitch?.errorNotice ?? (providerSwitch.error ? (
+					<ComposerErrorNotice title="Couldn't switch agent" message={apiErrorMessage(providerSwitch.error)} onDismiss={providerSwitch.reset} />
 				) : pendingSwitch ? (
 					<PendingAgentSwitchNotice
 						pending={pendingSwitch}
-						switching={providerSwitch.switchProviderPending}
+						switching={providerSwitch.isPending}
 						onCancel={() => setChosenSwitch(undefined)}
 					/>
 				) : undefined)}
