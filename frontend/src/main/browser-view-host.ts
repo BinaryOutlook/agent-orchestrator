@@ -3371,6 +3371,7 @@ export function createBrowserViewHost(
 				emitLiveState(session);
 			},
 			(code, message) => live.sink.error(code, message),
+			() => liveViewport(session),
 		);
 		live.screencast = cast;
 		live.tabId = entry.tabId;
@@ -3469,13 +3470,17 @@ export function createBrowserViewHost(
 			}
 			if (input.kind === "wheel") {
 				if (!Number.isFinite(input.deltaX) || !Number.isFinite(input.deltaY)) throw browserError("INVALID_ARGUMENT", "Wheel delta is invalid");
-				entry.view.webContents.sendInputEvent({
+				// Native window input depends on a visible, focused surface. CDP
+				// targets this page even while its view or owning window is hidden.
+				await ensureDebugger(entry);
+				await entry.view.webContents.debugger!.sendCommand("Input.dispatchMouseEvent", {
 					type: "mouseWheel",
 					x: Math.round(bounds.width / 2),
 					y: Math.round(bounds.height / 2),
-					deltaX: Math.max(-2_000, Math.min(2_000, input.deltaX)),
-					deltaY: Math.max(-2_000, Math.min(2_000, input.deltaY)),
-				} as never);
+					// Electron wheel deltas have the opposite sign to CDP deltas.
+					deltaX: -Math.max(-2_000, Math.min(2_000, input.deltaX)),
+					deltaY: -Math.max(-2_000, Math.min(2_000, input.deltaY)),
+				});
 				return;
 			}
 			if (input.kind === "text") {

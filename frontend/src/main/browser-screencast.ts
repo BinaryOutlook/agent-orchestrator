@@ -10,12 +10,16 @@ type DebuggerLike = {
 export class BrowserScreencast {
 	private sequence = 0n;
 	private stopped = false;
+	private lastFrameAt = 0;
+	private fallbackTimer?: ReturnType<typeof setInterval>;
+	private fallbackPending = false;
 	private readonly listener: (event: unknown, method: string, params: Record<string, unknown>) => void;
 
 	constructor(
 		private readonly debug: DebuggerLike,
 		private readonly emit: (frame: BrowserLiveFrame) => void,
 		private readonly fail: (code: string, message: string) => void,
+		private readonly viewport: () => { width: number; height: number } = () => ({ width: 1280, height: 720 }),
 	) {
 		this.listener = (_event, method, params) => {
 			if (method !== "Page.screencastFrame" || this.stopped) return;
@@ -34,6 +38,10 @@ export class BrowserScreencast {
 				maxHeight: 720,
 				everyNthFrame: 1,
 			});
+			if (!this.stopped) {
+				this.lastFrameAt = Date.now();
+				this.fallbackTimer = setInterval(() => void this.captureHiddenFrame(), 500);
+			}
 		} catch (error) {
 			this.removeListener();
 			throw error;
@@ -43,6 +51,8 @@ export class BrowserScreencast {
 	async stop(): Promise<void> {
 		if (this.stopped) return;
 		this.stopped = true;
+		if (this.fallbackTimer) clearInterval(this.fallbackTimer);
+		this.fallbackTimer = undefined;
 		this.removeListener();
 		try {
 			await this.debug.sendCommand("Page.stopScreencast");
@@ -56,22 +66,49 @@ export class BrowserScreencast {
 		else this.debug.removeListener?.("message", this.listener);
 	}
 
+	// Chromium stops screencast events when a native surface is hidden or its
+	// window is minimized. Request a clipped paint without unhiding the view,
+	// with at most one screenshot in flight.
+	private async captureHiddenFrame(): Promise<void> {
+		if (this.stopped || this.fallbackPending || Date.now() - this.lastFrameAt < 500) return;
+		this.fallbackPending = true;
+		try {
+			const { width, height } = this.viewport();
+			const scale = Math.min(1, 1280 / width, 720 / height);
+			const metrics = await this.debug.sendCommand("Page.getLayoutMetrics") as {
+				cssVisualViewport?: { pageX: number; pageY: number };
+			};
+			if (this.stopped) return;
+			const x = metrics?.cssVisualViewport?.pageX ?? 0;
+			const y = metrics?.cssVisualViewport?.pageY ?? 0;
+			const result = await this.debug.sendCommand("Page.captureScreenshot", {
+				format: "jpeg", quality: 70, fromSurface: true, captureBeyondViewport: true,
+				clip: { x, y, width, height, scale },
+			}) as { data?: string };
+			if (!this.stopped && typeof result?.data === "string") this.emitJPEG(result.data);
+		} catch {
+			// Navigation or teardown can temporarily remove the capture target.
+			// Retry on the next tick; the stream owner reports target closure.
+		} finally {
+			this.fallbackPending = false;
+		}
+	}
+
+	private emitJPEG(encoded: string): void {
+		if (this.stopped) return;
+		const jpeg = Buffer.from(encoded, "base64");
+		if (jpeg.byteLength === 0 || jpeg.byteLength > 2 << 20) throw new Error("Browser frame is empty or too large");
+		const dimensions = jpegDimensions(jpeg);
+		this.sequence += 1n;
+		this.lastFrameAt = Date.now();
+		this.emit({ sequence: this.sequence, capturedAtMs: BigInt(Date.now()), width: dimensions.width, height: dimensions.height, jpeg });
+	}
+
 	private async consume(params: Record<string, unknown>): Promise<void> {
 		const sessionId = typeof params.sessionId === "number" ? params.sessionId : undefined;
 		if (sessionId === undefined) return;
 		try {
-			const encoded = typeof params.data === "string" ? params.data : "";
-			const jpeg = Buffer.from(encoded, "base64");
-			if (jpeg.byteLength === 0 || jpeg.byteLength > 2 << 20) throw new Error("Browser frame is empty or too large");
-			const dimensions = jpegDimensions(jpeg);
-			this.sequence += 1n;
-			this.emit({
-				sequence: this.sequence,
-				capturedAtMs: BigInt(Date.now()),
-				width: dimensions.width,
-				height: dimensions.height,
-				jpeg,
-			});
+			this.emitJPEG(typeof params.data === "string" ? params.data : "");
 		} catch (error) {
 			this.fail("BROWSER_CAPTURE_INVALID_FRAME", error instanceof Error ? error.message : "Browser frame was invalid");
 		} finally {

@@ -32,4 +32,33 @@ describe("BrowserScreencast", () => {
 		await cast.stop();
 		expect(sendCommand).toHaveBeenCalledWith("Page.stopScreencast");
 	});
+	it("captures bounded frames when the native surface stops painting and stops on teardown", async () => {
+		vi.useFakeTimers();
+		try {
+			const emit = vi.fn();
+			let finishCapture: ((value: { data: string }) => void) | undefined;
+			const sendCommand = vi.fn(async (method: string) => {
+				if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { pageX: 0, pageY: 400 } };
+				if (method === "Page.captureScreenshot") return new Promise<{ data: string }>((resolve) => { finishCapture = resolve; });
+				return undefined;
+			});
+			const cast = new BrowserScreencast({ on: vi.fn(), off: vi.fn(), sendCommand }, emit, vi.fn(), () => ({ width: 1920, height: 1080 }));
+			await cast.start();
+			await vi.advanceTimersByTimeAsync(1500);
+			expect(sendCommand.mock.calls.filter(([method]) => method === "Page.captureScreenshot")).toHaveLength(1);
+			expect(sendCommand).toHaveBeenCalledWith("Page.captureScreenshot", expect.objectContaining({
+				captureBeyondViewport: true, clip: { x: 0, y: 400, width: 1920, height: 1080, scale: 2 / 3 },
+			}));
+			finishCapture?.({ data: jpeg(1280, 720).toString("base64") });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(emit).toHaveBeenCalledWith(expect.objectContaining({ width: 1280, height: 720 }));
+			await vi.advanceTimersByTimeAsync(500);
+			await cast.stop();
+			finishCapture?.({ data: jpeg().toString("base64") });
+			await vi.advanceTimersByTimeAsync(1500);
+			expect(emit).toHaveBeenCalledTimes(1);
+			expect(sendCommand.mock.calls.filter(([method]) => method === "Page.captureScreenshot")).toHaveLength(2);
+		} finally { vi.useRealTimers(); }
+	});
+
 });

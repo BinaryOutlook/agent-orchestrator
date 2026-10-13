@@ -498,18 +498,31 @@ describe("browser live stream", () => {
 	});
 
 	it("lets a phone scroll while the desktop panel is focused but not click", async () => {
-		const { emit, host, invoke, setCurrentURL, webContents } = setupHost();
+		const { debuggerSendCommand, emit, host, invoke, setCurrentURL, webContents } = setupHost();
 		const { viewId } = await invoke("browser:ensure", "sess-1");
 		setCurrentURL("https://example.com/");
 		emit("browser:setBounds", 1, { viewId, revision: 1, rect: panelRect, visible: true });
 		await host.startLiveStream("sess-1", 7, liveSink());
 
 		await host.handleRemoteInput("sess-1", { kind: "wheel", deltaX: 0, deltaY: -40 });
-		expect(webContents.sendInputEvent).toHaveBeenLastCalledWith({ type: "mouseWheel", x: 240, y: 260, deltaX: 0, deltaY: -40 });
+		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Input.dispatchMouseEvent", { type: "mouseWheel", x: 240, y: 260, deltaX: -0, deltaY: 40 });
+		expect(webContents.sendInputEvent).not.toHaveBeenCalled();
 
 		await expect(
 			host.handleRemoteInput("sess-1", { kind: "pointer", phase: "down", x: 0.5, y: 0.5, button: "left" }),
 		).rejects.toMatchObject({ code: "BROWSER_REMOTE_READ_ONLY" });
+	});
+
+	it("dispatches scrolling to the parked page without native focus", async () => {
+		const { debuggerSendCommand, host, webContents } = setupHost();
+		await host.startLiveStream("sess-1", 7, liveSink());
+		await host.handleRemoteInput("sess-1", { kind: "wheel", deltaX: 30, deltaY: -400 });
+		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Input.dispatchMouseEvent", {
+			type: "mouseWheel", x: 640, y: 360, deltaX: -30, deltaY: 400,
+		});
+		expect(webContents.sendInputEvent).not.toHaveBeenCalled();
+		expect(webContents.focus).not.toHaveBeenCalled();
+		await expect(host.handleRemoteInput("sess-1", { kind: "wheel", deltaX: 0, deltaY: NaN })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
 	});
 
 	// Regression, reported live: a page the agent built showed in the phone's

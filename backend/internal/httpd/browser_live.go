@@ -175,17 +175,6 @@ func (h *BrowserLiveHub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sub.Close()
 
-	// The desktop panel opens a session's preview only once someone mounts it.
-	// Offer the same target to the stream so a phone that looks first does not
-	// watch an empty browser. The desktop ignores it when a page is already open.
-	if target := h.previewTarget(session); target != "" {
-		previewCtx, cancelPreview := context.WithTimeout(r.Context(), 5*time.Second)
-		if sendErr := h.broker.Send(previewCtx, sessionID, "preview", map[string]string{"url": target}); sendErr != nil {
-			h.log.Debug("browser live: preview offer failed", "session", sessionID, "err", sendErr)
-		}
-		cancelPreview()
-	}
-
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
 		h.log.Warn("browser live: websocket upgrade failed", "err", err)
@@ -207,6 +196,8 @@ func (h *BrowserLiveHub) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	go h.watchPreview(ctx, sessionID)
+
 	writeDone := make(chan error, 1)
 	go func() { writeDone <- h.writeBrowserEvents(ctx, c, sub.Events) }()
 	readDone := make(chan error, 1)
@@ -220,6 +211,33 @@ func (h *BrowserLiveHub) serve(w http.ResponseWriter, r *http.Request) {
 	cancel()
 	if err != nil && !errors.Is(err, context.Canceled) && websocket.CloseStatus(err) == -1 {
 		h.log.Debug("browser live connection ended", "session", sessionID, "err", err)
+	}
+}
+
+// Keep offering the current preview while a phone is watching. The page may
+// be generated after the WebSocket opens, or the first offer may arrive while
+// an agent command is active. Electron only accepts offers into an empty tab.
+func (h *BrowserLiveHub) watchPreview(ctx context.Context, sessionID string) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if session, err := h.sessions.Get(ctx, domain.SessionID(sessionID)); err == nil && !session.IsTerminated {
+			if target := h.previewTarget(session); target != "" {
+				previewCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				if err := h.broker.Send(previewCtx, sessionID, "preview", map[string]string{"url": target}); err != nil {
+					h.log.Debug("browser live: preview offer failed", "session", sessionID, "err", err)
+				}
+				cancel()
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 
