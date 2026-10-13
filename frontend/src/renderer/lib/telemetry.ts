@@ -192,6 +192,11 @@ function registerBaseProperties(): void {
 export async function identifyCloudUser(user: { id: string; email: string }): Promise<void> {
 	cloudUser = user;
 	if (analyticsOptedOut || identifiedId === user.id || !(await initTelemetry())) return;
+	// A sign-out, a different account or an opt-out may have landed while init
+	// was pending; this continuation must not identify who is no longer current.
+	if (analyticsOptedOut || cloudUser?.id !== user.id) return;
+	// Switching accounts without a sign-out: never layer B onto A's person.
+	if (identifiedId !== null) posthog.reset();
 	registerBaseProperties();
 	posthog.identify(user.id, {
 		email: user.email,

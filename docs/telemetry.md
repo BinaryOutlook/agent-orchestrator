@@ -158,6 +158,10 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   a personal account. Because Orchestrator.inc uses it to group events, events from that
   installation may be associated with the GitHub handle sent on a session-start
   event.
+  Signing in to AO Cloud links that identifier to your account. Signing out, or
+  signing in as a different account, retires it and creates a new one, and
+  while you are signed in the background service reports under your AO Cloud
+  user ID, so one account's activity is never attributed to another.
 - Project and session identifiers included in telemetry are one-way hashed.
   Hashing hides the plain text but still allows related events to be grouped.
 - Absolute local paths and local application URLs detected in desktop events

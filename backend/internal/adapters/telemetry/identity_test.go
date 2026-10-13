@@ -182,3 +182,133 @@ func TestNoEmailInAnyPayloadAllowlist(t *testing.T) {
 		}
 	}
 }
+
+// drainDistinct returns the distinct_id of each captured request, in order.
+func drainDistinct(t *testing.T, requests chan map[string]any, n int) []string {
+	t.Helper()
+	out := make([]string, 0, n)
+	for len(out) < n {
+		select {
+		case body := <-requests:
+			id, _ := body["distinct_id"].(string)
+			out = append(out, id)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("got %d requests, want %d", len(out), n)
+		}
+	}
+	return out
+}
+
+func TestAccountSwitchNeverReusesTheFirstAccountsInstallID(t *testing.T) {
+	dir := t.TempDir()
+	requests := make(chan map[string]any, 8)
+	sink := newTestSink(t, dir, requests, nil)
+	defer func() { _ = sink.Close(context.Background()) }()
+	ident := sink.Identity()
+	install0 := ident.InstallID()
+	emit := func() {
+		sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
+	}
+
+	emit() // anonymous: the install ID
+	ident.SetCloudUserID("user_A")
+	emit() // signed in: the account, not the install ID that identify() merges into A
+	ident.SetCloudUserID("")
+	install1 := ident.InstallID()
+	emit() // signed out: must not resolve to A
+	ident.SetCloudUserID("user_B")
+	emit()
+
+	got := drainDistinct(t, requests, 4)
+	if got[0] != install0 || got[1] != "user_A" || got[3] != "user_B" {
+		t.Fatalf("distinct ids = %v", got)
+	}
+	if install1 == install0 || got[2] != install1 {
+		t.Fatalf("signed-out events reused the install ID bound to A: %v (install0=%s install1=%s)", got, install0, install1)
+	}
+	// The desktop bootstrap and the phone read the same ID from disk.
+	if disk, _ := loadOrCreateInstallID(dir); disk != install1 {
+		t.Fatalf("install id on disk = %s, want %s", disk, install1)
+	}
+}
+
+func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
+	dir := t.TempDir()
+	first, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := first.InstallID()
+	first.SetCloudUserID("user_A")
+	if first.InstallID() != original {
+		t.Fatal("first sign-in must keep the install ID so identify() aliases it")
+	}
+
+	// Daemon restarts, A signed out while the app was closed, then the app pushes
+	// a signed-out state.
+	second, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.SetCloudUserID("user_A")
+	if second.InstallID() != original {
+		t.Fatal("same account replayed after restart must not rotate")
+	}
+	second.SetCloudUserID("")
+	rotated := second.InstallID()
+	if rotated == original {
+		t.Fatal("sign-out did not retire the bound install ID")
+	}
+
+	third, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third.SetCloudUserID("")
+	if third.InstallID() != rotated {
+		t.Fatal("repeated signed-out push must not keep rotating")
+	}
+	third.SetCloudUserID("user_B")
+	third.SetCloudUserID("user_C") // account switch without a signed-out step
+	if third.InstallID() == rotated {
+		t.Fatal("direct account switch did not retire the install ID")
+	}
+}
+
+func TestOptOutSinkKeepsOptedOutEventsOutOfAggregateBuckets(t *testing.T) {
+	rec := &syncRecordingSink{}
+	agg := NewAggregatingSink(rec, []string{"ao.http.5xx"}, time.Hour)
+	optedOut := true
+	gated := NewOptOutSink(agg, func() bool { return optedOut })
+
+	gated.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.http.5xx", Payload: map[string]any{"path": "/x"}})
+	optedOut = false // opt back in before the minute flush
+	agg.flush(context.Background())
+
+	if got := len(rec.snapshot()); got != 0 {
+		t.Fatalf("opted-out event was exported after opt-in: %d event(s)", got)
+	}
+}
+
+func TestSendRechecksOptOutBeforeRetry(t *testing.T) {
+	dir := t.TempDir()
+	attempts := 0
+	sink, err := NewPostHogSink(dir, "phc_test", "https://example.test", "", "", roundTripClient(func(_ *http.Request) (*http.Response, error) {
+		attempts++
+		// The user opts out while the first request is in flight; it then fails
+		// transiently, so the retry would otherwise go out.
+		if err := os.WriteFile(filepath.Join(dir, OptOutFile), []byte("1\n"), 0o600); err != nil {
+			t.Error(err)
+		}
+		return &http.Response{StatusCode: http.StatusInternalServerError, Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sink.Close(context.Background()) }()
+
+	sink.send(context.Background(), activeEvent())
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1 (retry after opt-out must not be sent)", attempts)
+	}
+}

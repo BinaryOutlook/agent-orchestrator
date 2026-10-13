@@ -3,11 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hooks = vi.hoisted(() => ({
 	session: null as unknown,
+	status: "authenticated" as string,
 	setCloudUser: vi.fn(async () => undefined),
 	identifyCloudUser: vi.fn(async () => undefined),
 	clearCloudUser: vi.fn(),
 }));
-vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: hooks.session }) }));
+vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: hooks.session, status: hooks.status }) }));
 vi.mock("../lib/bridge", () => ({ aoBridge: { telemetry: { setCloudUser: hooks.setCloudUser } } }));
 vi.mock("../lib/telemetry", () => ({ identifyCloudUser: hooks.identifyCloudUser, clearCloudUser: hooks.clearCloudUser }));
 
@@ -22,6 +23,15 @@ const account = (authProvider: "workos" | "local") => ({
 describe("TelemetryIdentityRuntime", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		hooks.status = "authenticated";
+	});
+
+	it("says nothing while the session is still loading, so a launch is not read as a sign-out", () => {
+		hooks.session = null;
+		hooks.status = "loading";
+		render(<TelemetryIdentityRuntime />);
+		expect(hooks.setCloudUser).not.toHaveBeenCalled();
+		expect(hooks.clearCloudUser).not.toHaveBeenCalled();
 	});
 
 	it("identifies a WorkOS sign-in and hands the user id (not the email) to main", () => {

@@ -8,13 +8,16 @@ import { clearCloudUser, identifyCloudUser } from "../lib/telemetry";
 // daemon through main so its events join the same person. Only the production
 // WorkOS account is identified; the dev-only local provider never is.
 export function TelemetryIdentityRuntime() {
-	const { session } = useCloudSession();
+	const { session, status } = useCloudSession();
 	const userId = session?.authProvider === "workos" ? session.user.id : null;
 	const email = session?.authProvider === "workos" ? session.user.email : "";
 	useEffect(() => {
+		// Until the session resolves, "no user" only means "not known yet"; telling
+		// the daemon would be read as a sign-out and retire the install ID.
+		if (status === "loading") return;
 		void aoBridge.telemetry.setCloudUser(userId).catch(() => undefined);
 		if (userId) void identifyCloudUser({ id: userId, email });
 		else clearCloudUser();
-	}, [userId, email]);
+	}, [userId, email, status]);
 	return null;
 }

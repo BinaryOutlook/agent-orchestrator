@@ -149,6 +149,55 @@ describe("PostHog identity and opt-out", () => {
 		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false });
 	});
 
+	it("does not identify a user who signed out while init was still pending", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => (release = resolve));
+		mockBridge(async () => {
+			await gate;
+			return bootstrap;
+		});
+		const { identifyCloudUser, clearCloudUser } = await import("./telemetry");
+		const pending = identifyCloudUser({ id: "user_A", email: "a@example.com" });
+		await Promise.resolve();
+		clearCloudUser(); // init has not finished, so there is nothing to reset yet
+		release();
+		await pending;
+		expect(posthogStub.identify).not.toHaveBeenCalled();
+	});
+
+	it("a pending identify for user A loses to a newer sign-in as user B", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => (release = resolve));
+		mockBridge(async () => {
+			await gate;
+			return bootstrap;
+		});
+		const { identifyCloudUser } = await import("./telemetry");
+		const a = identifyCloudUser({ id: "user_A", email: "a@example.com" });
+		const b = identifyCloudUser({ id: "user_B", email: "b@example.com" });
+		release();
+		await Promise.all([a, b]);
+		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
+		expect(posthogStub.identify).toHaveBeenCalledWith("user_B", expect.objectContaining({ email: "b@example.com" }));
+	});
+
+	it("A, sign-out, B: each identify starts from a reset, so B never joins A's person", async () => {
+		mockBridge(async () => bootstrap);
+		const { identifyCloudUser, clearCloudUser } = await import("./telemetry");
+		const order: string[] = [];
+		posthogStub.identify.mockImplementation((id: string) => order.push(`identify:${id}`));
+		posthogStub.reset.mockImplementation(() => order.push("reset"));
+
+		await identifyCloudUser({ id: "user_A", email: "a@example.com" });
+		clearCloudUser();
+		await identifyCloudUser({ id: "user_B", email: "b@example.com" });
+		// Direct switch with no sign-out in between also resets first.
+		await identifyCloudUser({ id: "user_C", email: "c@example.com" });
+		expect(order).toEqual(["identify:user_A", "reset", "identify:user_B", "reset", "identify:user_C"]);
+		posthogStub.identify.mockReset();
+		posthogStub.reset.mockReset();
+	});
+
 	it("opt-out stops capture and resets the SDK identity; a later sign-in does not identify", async () => {
 		mockBridge(async () => bootstrap);
 		const { initTelemetry, identifyCloudUser, applyAnalyticsOptOut } = await import("./telemetry");

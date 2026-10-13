@@ -224,7 +224,6 @@ type postHogClient interface {
 type PostHogSink struct {
 	apiKey       string
 	host         string
-	distinctID   string
 	defaultAgent string
 	tenure       *tenureTracker
 	// ident carries the opt-out switch and the signed-in user attributes. Nil
@@ -269,12 +268,10 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 	if err != nil {
 		return nil, err
 	}
-	distinctID := ident.installID
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &PostHogSink{
 		apiKey:       apiKey,
 		host:         strings.TrimRight(host, "/"),
-		distinctID:   distinctID,
 		ident:        ident,
 		defaultAgent: safeAgentSlug(defaultAgent),
 		tenure:       newTenureTracker(dataDir, time.Now),
@@ -377,12 +374,20 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	// volume, breaking the "retries add no volume" guarantee). PostHog dedupes
 	// events that carry the same uuid.
 	eventUUID := uuid.NewString()
+	props := s.properties(ev)
+	// A signed-in install reports as the AO Cloud user, so its events never
+	// depend on which account the anonymous install ID was once merged into.
+	// Signed out, the current anonymous install ID is used.
+	distinctID, _ := props["ao_cloud_user_id"].(string)
+	if distinctID == "" && s.ident != nil {
+		distinctID = s.ident.InstallID()
+	}
 	body := map[string]any{
 		"api_key":     s.apiKey,
 		"event":       eventName,
-		"distinct_id": s.distinctID,
+		"distinct_id": distinctID,
 		"uuid":        eventUUID,
-		"properties":  s.properties(ev),
+		"properties":  props,
 		"timestamp":   ev.OccurredAt.UTC().Format(time.RFC3339Nano),
 	}
 	payload, err := json.Marshal(body)
@@ -392,6 +397,11 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	}
 
 	for attempt := 1; attempt <= postHogSendMaxAttempts; attempt++ {
+		// The payload is already built, so a retry after a failed first attempt
+		// must honor an opt-out that landed during the request or the backoff.
+		if s.optedOut() {
+			return
+		}
 		retryable, err := s.sendOnce(ctx, payload)
 		if err == nil {
 			return
@@ -677,7 +687,7 @@ func versionChannel(appVersion string) string {
 }
 
 func loadOrCreateInstallID(dataDir string) (string, error) {
-	path := filepath.Join(dataDir, "telemetry_install_id")
+	path := filepath.Join(dataDir, installIDFile)
 	if b, err := os.ReadFile(path); err == nil {
 		if id := strings.TrimSpace(string(b)); id != "" {
 			return id, nil
@@ -688,6 +698,22 @@ func loadOrCreateInstallID(dataDir string) (string, error) {
 	id := "ins_" + uuid.NewString()
 	if err := os.WriteFile(path, []byte(id+"\n"), 0o600); err != nil {
 		return "", fmt.Errorf("write telemetry install id: %w", err)
+	}
+	return id, nil
+}
+
+// replaceInstallID mints a new anonymous install ID and swaps it in atomically,
+// so a concurrent reader (the desktop bootstrap) never sees a partial file.
+func replaceInstallID(dataDir string) (string, error) {
+	id := "ins_" + uuid.NewString()
+	path := filepath.Join(dataDir, installIDFile)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("write telemetry install id: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("replace telemetry install id: %w", err)
 	}
 	return id, nil
 }

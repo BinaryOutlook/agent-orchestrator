@@ -82,10 +82,13 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// job for every event name that isn't aggregated.
 	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
+	// Opt-out is enforced ahead of the aggregator: events folded into a rollup
+	// bucket while opted out would otherwise be flushed after an opt back in.
+	gated := telemetryadapter.NewOptOutSink(aggregated, remote.Identity().OptedOut)
 	// The kill switch sits outermost on the remote chain so a silenced stream
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.
-	denied := telemetryadapter.NewDenylistSink(aggregated, cfg.Telemetry.DisabledEvents)
+	denied := telemetryadapter.NewDenylistSink(gated, cfg.Telemetry.DisabledEvents)
 	return telemetryadapter.NewFanoutSink(local, denied), remote.Identity()
 }
 
