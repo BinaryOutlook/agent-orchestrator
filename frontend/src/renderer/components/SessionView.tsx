@@ -1406,8 +1406,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// The chat/terminal control sits beside the agent picker: in the chat box,
 	// or over the terminal. Only a Cloud chat, which has neither, keeps it in the tab.
 	const interfaceSwitchControl = interfaceUi.unsupported ? null : interfaceUi.switchControl;
-	// A terminal session keeps its agent, the switch to chat and a new terminal
-	// in the tab's menu.
+	// A terminal session keeps its agent and the switch to chat in the tab's menu.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
 	const sessionTabActions = !session || showChatSurface
@@ -1420,7 +1419,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				blocked={agentWorking}
 				switchAction={interfaceUi.unsupported ? undefined : interfaceUi.switchAction}
 				switchControl={interfaceSwitchControl}
-				onNewTerminal={isOrchestrator ? undefined : addShellTerminal}
 			/>
 		);
 	const sessionHeaderActions = (
@@ -1960,7 +1958,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
 									sessionTabActionWide={sessionTabActionWide}
-									tabStripAction={undefined}
+									tabStripAction={newShellTerminalAction}
 									workspaceTabs={centerFileTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}

@@ -9,6 +9,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	alwaysSearch = false,
 	noSearch = false,
 	divided = false,
+	searchPlaceholder,
 	children,
 }: {
 	models: T[];
@@ -18,7 +19,9 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	noSearch?: boolean;
 	/** Rule off the search field from the list under it. */
 	divided?: boolean;
-	children: (models: T[], searchActiveID?: string, optionID?: (id: string) => string) => ReactNode;
+	/** Set where the rows are a menu that search replaces with matches; nothing is "not found" before a query. */
+	searchPlaceholder?: string;
+	children: (models: T[], searchActiveID?: string, optionID?: (id: string) => string, query?: string) => ReactNode;
 }) {
 	const { t } = useTranslation();
 	const [search, setSearch] = useState("");
@@ -82,7 +85,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 						}
 						if (event.key === "ArrowDown" || event.key === "ArrowUp") {
 							event.preventDefault();
-							const items = scrollRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]');
+							const items = scrollRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]');
 							const target = event.key === "ArrowDown" ? items?.[0] : items?.[items.length - 1];
 							target?.focus();
 						}
@@ -102,7 +105,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 							onChange={(event) => setSearch(event.target.value)}
 							onFocus={() => setSearchFocused(true)}
 							onBlur={() => setSearchFocused(false)}
-							placeholder={t("settings.models.searchPlaceholder")}
+							placeholder={searchPlaceholder ?? t("settings.models.searchPlaceholder")}
 							className="menu-search-input h-control-form! rounded-[10px] pl-8!"
 						/>
 					</div>
@@ -119,8 +122,9 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 					onScroll={updateScrollCue}
 					onKeyDownCapture={(event) => {
-						if (!searchRef.current) return;
-						const firstItem = event.currentTarget.querySelector('[role="menuitemradio"]');
+						// A submenu's keys bubble here through React, not the DOM; they are its own.
+						if (!searchRef.current || !event.currentTarget.contains(event.target as Node)) return;
+						const firstItem = event.currentTarget.querySelector('[role^="menuitem"]');
 						if ((event.key === "ArrowUp" && event.target === firstItem) || (event.key === "Tab" && event.shiftKey)) {
 							// Return to search before the menu's roving focus handles the key.
 							event.preventDefault();
@@ -146,8 +150,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 						}
 					}}
 				>
-					{children(matches, searchActiveID, optionID)}
-					{matches.length === 0 && (
+					{children(matches, searchActiveID, optionID, normalizedQuery)}
+					{matches.length === 0 && (normalizedQuery || !searchPlaceholder) && (
 						<p className="px-2 py-1.5 text-xs text-settings-muted">{t("settings.models.noMatches")}</p>
 					)}
 				</div>

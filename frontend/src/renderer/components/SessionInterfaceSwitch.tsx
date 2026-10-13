@@ -53,17 +53,6 @@ export function RoundedChatIcon({ className }: { className?: string }) {
 	);
 }
 
-/** The rounded terminal box with a plus: open another terminal. */
-export function NewTerminalIcon({ className }: { className?: string }) {
-	return (
-		<svg {...ROUNDED_ICON} data-icon="new-terminal" className={className}>
-			<rect x="3" y="3" width="18" height="18" rx="6" />
-			<path d="m7 14 2-2-2-2" />
-			<path d="M12.5 12h4.5M14.75 9.75v4.5" />
-		</svg>
-	);
-}
-
 function targetLabel(target: SessionInterfaceMode): string {
 	return target === "chat" ? "chat UI" : "terminal UI";
 }

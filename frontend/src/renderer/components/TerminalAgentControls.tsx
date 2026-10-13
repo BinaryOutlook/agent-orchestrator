@@ -8,7 +8,7 @@ import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { AgentModelPicker, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
 import { ProviderMark } from "./chat/ProviderMark";
-import { NewTerminalIcon, RoundedChatIcon } from "./SessionInterfaceSwitch";
+import { RoundedChatIcon } from "./SessionInterfaceSwitch";
 import { TopbarButton } from "./TopbarButton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
@@ -33,7 +33,6 @@ export function TerminalSessionMenu({
 	blocked,
 	switchAction,
 	switchControl,
-	onNewTerminal,
 }: {
 	session: WorkspaceSession;
 	hostId?: string;
@@ -42,7 +41,6 @@ export function TerminalSessionMenu({
 	switchAction?: TerminalSwitchAction;
 	/** Shown in place of the menu while a switch to chat is running. */
 	switchControl?: ReactNode;
-	onNewTerminal?: () => void;
 }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
@@ -112,12 +110,6 @@ export function TerminalSessionMenu({
 					<DropdownMenuItem disabled={switchAction.disabled} title={switchAction.reason} onSelect={switchAction.run}>
 						<RoundedChatIcon className="size-icon-lg" />
 						Switch to chat UI
-					</DropdownMenuItem>
-				) : null}
-				{onNewTerminal ? (
-					<DropdownMenuItem onSelect={onNewTerminal}>
-						<NewTerminalIcon className="size-icon-lg" />
-						{t("shortcut.new-shell-terminal")}
 					</DropdownMenuItem>
 				) : null}
 			</DropdownMenuContent>

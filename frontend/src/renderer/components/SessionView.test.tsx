@@ -436,10 +436,9 @@ vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 }));
 // The terminal tab's menu is stood in for by the switch control it wraps.
 vi.mock("./TerminalAgentControls", () => ({
-	TerminalSessionMenu: ({ switchControl, onNewTerminal }: { switchControl?: ReactNode; onNewTerminal?: () => void }) => (
+	TerminalSessionMenu: ({ switchControl }: { switchControl?: ReactNode }) => (
 		<>
 			{switchControl}
-			{onNewTerminal ? <button type="button" aria-label="New terminal" onClick={onNewTerminal} /> : null}
 		</>
 	),
 }));

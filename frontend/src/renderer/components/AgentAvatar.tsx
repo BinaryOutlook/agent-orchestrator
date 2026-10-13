@@ -85,7 +85,7 @@ const LOGOS: AgentLogoSources = {
 // Single-colour marks. They are painted in the text colour through a mask so
 // they follow the theme; an <img> would keep one fixed colour.
 const TINTED = new Set([
-	"codex", "cursor", "opencode", "opencode-v2", "droid", "grok", "pi", "devin",
+	"cursor", "opencode", "opencode-v2", "droid", "grok", "pi", "devin",
 	"copilot", "cline", "goose", "kilocode", "auggie", "autohand",
 ]);
 

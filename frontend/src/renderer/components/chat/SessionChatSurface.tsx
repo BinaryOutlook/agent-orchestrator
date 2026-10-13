@@ -553,10 +553,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						await providerSwitch.switchProvider(pendingSwitch.harness, pendingSwitch.model, pendingSwitch.effort, pendingSwitch.fastMode)
 							.catch((error) => { throw Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED }); });
 						setChosenSwitch(undefined);
+						// Ultracode picked with the switch stays on for the messages after it.
+						ultracode.onChange(Boolean(pendingSwitch.ultracode));
 					}
 					const viaClaude = (pendingSwitch?.harness ?? currentHarness) === "claude-code";
 					return commands.send({
-						text: ultracode.on && viaClaude && !pendingSwitch ? withUltracode(text) : text,
+						text: viaClaude && (pendingSwitch ? pendingSwitch.ultracode : ultracode.on) ? withUltracode(text) : text,
 						attachments,
 						clientMessageId,
 						excerpts: excerpts?.map((excerpt) => ({
