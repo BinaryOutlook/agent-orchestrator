@@ -1190,6 +1190,20 @@ describe("BrowserPanel", () => {
 		expect(hookState.closeTab).toHaveBeenCalledWith("t1");
 	});
 
+	it.each(["", "about:blank"])("hides the close button on an empty tab (%s)", (url) => {
+		hookState.tabs = [{ id: "t1", url, title: "", active: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		expect(screen.getByRole("tab", { name: "New tab" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Close tab New tab" })).not.toBeInTheDocument();
+	});
+
+	it("hides the empty tab's close icon in its drag overlay", () => {
+		render(<BrowserTopTabDragOverlay tab={{ id: "t1", url: "about:blank", title: "", active: true }} />);
+		expect(screen.getByTestId("browser-tab-drag-overlay").querySelector(".browser-panel__tab-close")).toBeNull();
+	});
+
 	it("opens a new browser tab from the horizontal tab strip", async () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
 
