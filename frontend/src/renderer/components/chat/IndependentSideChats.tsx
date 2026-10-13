@@ -68,7 +68,7 @@ export function SideComposer({
 	side: Side;
 	onSettings: (model: string, effort: string) => void;
 	onRemoveReference: (id: string) => void;
-	onFocusSide: () => void;
+	onFocusSide?: () => void;
 	onCompact: () => void;
 	focusKey: number;
 	queuedDock?: ReactNode;
@@ -93,31 +93,20 @@ export function SideComposer({
 	const [trigger, setTrigger] = useState<ComposerTrigger>();
 	const commands = useMemo(
 		() => [
-			{
-				name: "btw",
-				displayName: "btw",
-				description: "Opens a side chat",
-				source: "AO",
-			},
-			{
-				name: "side",
-				displayName: "side",
-				description: "Opens a side chat",
-				source: "AO",
-			},
+			...(onFocusSide ? ["btw", "side"].map((name) => ({ name, displayName: name, description: "Opens a side chat", source: "AO" })) : []),
 			{
 				name: "compact",
 				displayName: "compact",
 				description: "Compacts this side chat",
 				source: "AO",
 			},
-			...skills.filter((skill) => skill.name !== "btw" && skill.name !== "side" && skill.name !== "compact"),
+			...skills.filter((skill) => skill.name !== "compact" && (!onFocusSide || (skill.name !== "btw" && skill.name !== "side"))),
 		],
-		[skills],
+		[skills, onFocusSide],
 	);
 	const suggestions = trigger?.kind === "skill" && trigger.key !== dismissed ? rankSkills(commands, trigger.query) : [];
 	const choose = (value: string) => {
-		if (value === "btw" || value === "side") {
+		if ((value === "btw" || value === "side") && onFocusSide) {
 			onChange((editor.current?.getSnapshot().text ?? draft.text).replace(/\/[^\s]*$/, "").trim());
 			onFocusSide();
 			setDismissed(trigger?.key);
@@ -233,7 +222,7 @@ export function SideComposer({
 						onComplete={(next, key) => {
 							const matches = next.trigger?.kind === "skill" ? rankSkills(commands, next.trigger.query) : [];
 							const chosen = matches[Math.min(highlighted, matches.length - 1)];
-							if ((chosen?.value === "btw" || chosen?.value === "side") && key === "Enter") {
+							if ((chosen?.value === "btw" || chosen?.value === "side") && key === "Enter" && onFocusSide) {
 								btwHandled.current = true;
 								onChange(next.text.replace(/\/[^\s]*$/, "").trim());
 								onFocusSide();
@@ -257,7 +246,7 @@ export function SideComposer({
 								compactHandled.current = false;
 								return true;
 							}
-							if (/^\/(?:btw|side)$/i.test(next.text.trim())) {
+							if (/^\/(?:btw|side)$/i.test(next.text.trim()) && onFocusSide) {
 								onChange("");
 								onFocusSide();
 								return true;
