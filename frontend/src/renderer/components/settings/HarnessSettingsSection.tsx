@@ -219,8 +219,8 @@ export function HarnessSettingsSection({
 				onChange={setSelectedHostId}
 				triggerClassName="w-fit max-w-full"
 			/> : null}
-		{!cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="px-3 text-xs text-settings-muted">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
-		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="px-3 text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} />}
+		{!cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="px-(--settings-row-inset) text-xs text-settings-muted">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
+		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="px-(--settings-row-inset) text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} />}
 	</SettingsSection>;
 }
 
@@ -250,7 +250,7 @@ function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: string; 
 
 	return <>
 		{!org?.id ? <div className="settings-grouped-rows"><div className="settings-row-bar text-sm text-settings-muted">{t("settings.cloudAgents.signIn")}</div></div>
-			: connections.error ? <p className="px-3 text-xs text-error" role="alert">{String(connections.error)}</p>
+			: connections.error ? <p className="px-(--settings-row-inset) text-xs text-error" role="alert">{String(connections.error)}</p>
 			: connections.isPending ? null
 			: <div className="settings-grouped-rows flex w-full flex-col" ref={rowsRef}>
 				{rows.map((agentId) => {
