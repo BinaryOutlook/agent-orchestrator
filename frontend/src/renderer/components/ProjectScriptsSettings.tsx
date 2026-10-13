@@ -9,6 +9,7 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { ProjectSettingsSection } from "@aoagents/product-ui";
 
 type Project = components["schemas"]["Project"];
 type ScriptKind = "setup" | "cleanup";
@@ -25,8 +26,8 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 			return data.project as Project;
 		},
 	});
-	if (query.isLoading) return <p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>;
-	if (query.isError || !query.data) return <p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
+	if (query.isLoading) return <p className="px-3 text-sm text-settings-muted">{t("settings.project.loading")}</p>;
+	if (query.isError || !query.data) return <p role="alert" className="px-3 text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
 	return <ScriptsEditor key={projectId} project={query.data} onSaveState={onSaveState} onSaved={() => {
 		void client.invalidateQueries({ queryKey: ["project", projectId] });
 		void client.invalidateQueries({ queryKey: workspaceQueryKey });
@@ -93,14 +94,15 @@ function ScriptsEditor({ project, onSaveState, onSaved }: { project: Project; on
 				<TabsTrigger value="setup">{t("settings.project.scriptSetup")}</TabsTrigger>
 				<TabsTrigger value="cleanup">{t("settings.project.scriptCleanup")}</TabsTrigger>
 			</TabsList>
-			{(["setup", "cleanup"] as const).map((kind) => <TabsContent className="space-y-4" key={kind} value={kind}>
-				{kind === "cleanup" && scratch ? <p className="text-sm text-settings-muted">{t("settings.project.cleanupScratchUnavailable")}</p> : <>
+			{(["setup", "cleanup"] as const).map((kind) => <TabsContent key={kind} value={kind}>
+				{kind === "cleanup" && scratch ? <p className="px-3 text-sm text-settings-muted">{t("settings.project.cleanupScratchUnavailable")}</p> : <ProjectSettingsSection title={t(kind === "setup" ? "settings.project.scriptSetup" : "settings.project.scriptCleanup")} titleHidden grouped>
+					<div className="settings-content-row flex flex-col gap-4">
 					<div className="space-y-1 text-pretty text-xs leading-4 text-settings-muted">
 						<p>{t(kind === "setup" ? scratch ? "settings.project.setupHintScratch" : "settings.project.setupHintGit" : "settings.project.cleanupHint")}</p>
 						<p>{t(`settings.project.${kind}ShellHint`)}</p>
 						<p>{t("settings.project.setupPlatformHint")}</p>
 					</div>
-					{!scratch && <details className="rounded-md border border-border p-3 text-xs text-settings-muted">
+					{!scratch && <details className="text-xs text-settings-muted">
 						<summary className="cursor-pointer font-medium text-settings-label">{t(`settings.project.${kind}Paths`)}</summary>
 						<div className="mt-2 space-y-1">
 							<p><code>{"AO_SOURCE_TREE_PATH"}</code> — {t(`settings.project.${kind}SourcePath`)}</p>
@@ -115,21 +117,22 @@ function ScriptsEditor({ project, onSaveState, onSaved }: { project: Project; on
 							</div>
 							<textarea className="settings-field-control min-h-24 w-full px-4 py-3 font-mono text-xs" disabled={mutation.isPending || retry.isPending} id={`${kind}-step-${index}`} spellCheck={false} value={step} onChange={(event) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? event.target.value : item))} />
 						</div>)}
-						<Button className="gap-1.5" disabled={mutation.isPending || retry.isPending} onClick={() => updateSteps(kind, [...drafts[kind], ""])} size="sm" type="button" variant="outline"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
+						<Button className="gap-1.5 self-start text-settings-muted hover:text-settings-label" disabled={mutation.isPending || retry.isPending} onClick={() => updateSteps(kind, [...drafts[kind], ""])} size="sm" type="button" variant="ghost"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
 					</div>
-					{kind === "cleanup" && <div className="space-y-2 border-t border-border pt-4">
+					</div>
+					{kind === "cleanup" && <div className="settings-content-row space-y-2">
 						<p className="text-xs text-settings-muted">{t("settings.project.cleanupRetryHint")}</p>
-						<Button disabled={dirty || mutation.isPending || retry.isPending} onClick={() => retry.mutate()} type="button" variant="outline">{t("settings.project.retryCleanup")}</Button>
+						<Button disabled={dirty || mutation.isPending || retry.isPending} onClick={() => retry.mutate()} type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label">{t("settings.project.retryCleanup")}</Button>
 						{retry.isError && <p role="alert" className="text-sm text-error">{retry.error instanceof Error ? retry.error.message : t("settings.project.cleanupRetryFailed")}</p>}
 						{retry.data && <div role="status" className="space-y-1 text-sm text-settings-muted">
 							<p>{t("settings.project.cleanupRetryResult", { cleaned: retry.data.cleaned.length, skipped: retry.data.skipped.length })}</p>
 							{retry.data.skipped.map((item) => <p key={item.sessionId}>{item.sessionId}: {item.reason}</p>)}
 						</div>}
 					</div>}
-				</>}
+				</ProjectSettingsSection>}
 			</TabsContent>)}
 		</Tabs>
-		{mutation.isError && <p role="alert" className="text-sm text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
+		{mutation.isError && <p role="alert" className="px-3 text-xs text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
 		<div className="sticky bottom-0 z-chrome mt-auto flex items-center justify-between gap-3 border-t border-border bg-card py-3">
 			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{dirty ? t("settings.project.unsavedChanges") : savedAt ? t("settings.project.saved") : ""}</span>
 			<Button disabled={!dirty || mutation.isPending || retry.isPending} type="submit">{t("settings.project.saveChanges")}</Button>
