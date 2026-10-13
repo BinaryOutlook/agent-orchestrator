@@ -680,6 +680,12 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		m.store.CompleteSideHostCleanup(cleanupCtx, side.ID)
 		m.deleteRegisteredFork(cleanupCtx, side, providerID)
 	}()
+	failOpen := func(err error) {
+		if providerID != "" && !errors.Is(err, ErrSidePolicyRecreate) {
+			err = fmt.Errorf("%w: %w", ErrSidePolicyRecreate, err)
+		}
+		m.failOpen(side, err)
+	}
 	recordFork := func(recordCtx context.Context, id string) error {
 		providerID = id
 		side.ProviderForkID = id
@@ -728,12 +734,12 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		}
 	}
 	if err != nil {
-		m.failOpen(side, err)
+		failOpen(err)
 		return
 	}
 	if providerID != "" {
 		if err := recordFork(ctx, providerID); err != nil {
-			m.failOpen(side, err)
+			failOpen(err)
 			return
 		}
 	}
@@ -760,12 +766,12 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		}
 	}
 	if err != nil {
-		m.failOpen(side, err)
+		failOpen(err)
 		return
 	}
 	side.ProviderForkID = providerID
 	if err := m.writeForkRecord(ctx, side, providerID, true); err != nil {
-		m.failOpen(side, err)
+		failOpen(err)
 		return
 	}
 	attached = m.attach(side, conv)
@@ -774,7 +780,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 
 func (m *sideManager) failOpen(side domain.SideConversation, err error) {
 	m.service.log.Warn("side chat opening failed", "side", side.ID, "error", err)
-	if side.ProviderForkID != "" || errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+	if side.ProviderForkID == "" && errors.Is(err, ports.ErrChatRecoveryInconclusive) && !errors.Is(err, ErrSidePolicyRecreate) {
 		err = fmt.Errorf("%w: %w", ErrSidePolicyRecreate, err)
 	}
 	_ = m.store.SetSideFailed(context.Background(), side.ID, side.Generation, err.Error(), m.service.now())
