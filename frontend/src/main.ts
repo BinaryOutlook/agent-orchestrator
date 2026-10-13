@@ -205,9 +205,9 @@ const ignoreStdStreamError = (err: NodeJS.ErrnoException): void => {
 process.stdout.on("error", ignoreStdStreamError);
 process.stderr.on("error", ignoreStdStreamError);
 
-// macOS shows this name in the menu bar, dock, and About panel. The packaged
-// bundle keeps its "Agent Orchestrator.app" filename; only the displayed name changes.
-const APP_DISPLAY_NAME = process.platform === "darwin" ? "Orchestrator.inc" : "Agent Orchestrator";
+// The name shown in window titles, the menu bar, the dock, and the About panel.
+// Packaged bundle and installer filenames are unchanged.
+const APP_DISPLAY_NAME = "Orchestrator.inc";
 
 // Must run before app ready so the About panel and default-menu role labels use it.
 // Unpackaged runs get a distinct name so the dev window, dock menu, and About
