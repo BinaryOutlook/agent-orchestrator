@@ -721,6 +721,9 @@ const api = {
 			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
 		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>
 			ipcRenderer.invoke("remotes:resolvePreviewUrl", hostId, sessionId, viewedUrl) as Promise<string>,
+		// The host's agent browser for the session's agent tab ("" when none).
+		agentBrowserUrl: (hostId: string, sessionId: string) =>
+			ipcRenderer.invoke("remotes:agentBrowserUrl", hostId, sessionId) as Promise<string>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,

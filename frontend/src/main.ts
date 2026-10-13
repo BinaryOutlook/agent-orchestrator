@@ -949,6 +949,9 @@ async function createWindowInternal(): Promise<void> {
 	);
 
 	browserViewHost = createBrowserViewHost({
+		// Agent tabs: only a connected host's own agent-browser viewer may
+		// report the remote page a Browser tab shows.
+		isAgentBrowserUrl: (url) => remoteRegistry.isAgentBrowserUrl(url),
 		mainWindow,
 		shellWebContents,
 		ipcMain,

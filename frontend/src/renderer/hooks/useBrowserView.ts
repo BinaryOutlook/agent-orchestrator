@@ -53,6 +53,14 @@ function sameBrowserURL(left: string, right: string): boolean {
 	}
 }
 
+function sameBrowserOrigin(left: string, right: string): boolean {
+	try {
+		return new URL(left).origin === new URL(right).origin;
+	} catch {
+		return false;
+	}
+}
+
 type UseBrowserViewOptions = {
 	sessionId: string;
 	/** Source daemon for preview URLs; omitted for the local daemon. */
@@ -1007,6 +1015,37 @@ export function useBrowserView({
 		[hasNativeBrowser, withView],
 	);
 
+	// A preview never lands in an agent tab: it goes to the person's preview
+	// tab (one on its origin or another preview's), else to a new tab.
+	const showPreview = useCallback(
+		async (url: string) => {
+			const id = viewIdRef.current;
+			const tabs = hasNativeBrowser && id ? (await window.ao!.browser.getTabs(id).catch(() => null))?.tabs : undefined;
+			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
+			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
+			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
+			if (!own) return openTab(url);
+			await selectTab(own.id);
+			return navigate(url);
+		},
+		[hasNativeBrowser, navigate, openTab, selectTab],
+	);
+
+	// A remote session's agent browser (the host's Chromium its agent drives,
+	// streamed) is part of the session's surface: main shows it as one tab per
+	// agent page. It is derived from the host whenever the view is built or
+	// the host reconnects, not remembered: a reopened window brings it back.
+	useEffect(() => {
+		if (!hasNativeBrowser || !origin || !viewId || viewIdRef.current !== viewId || terminated) return;
+		let cancelled = false;
+		void aoBridge.remotes.agentBrowserUrl(origin.hostId, origin.sessionId).then(async (url) => {
+			if (cancelled || !url || viewIdRef.current !== viewId) return;
+			const state = await window.ao!.browser.openTab({ viewId, url });
+			if (viewIdRef.current === viewId) setTabsState(state);
+		}).catch((error) => console.warn("Unable to open the agent browser", error));
+		return () => { cancelled = true; };
+	}, [hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, terminated, viewId]);
+
 	const clear = useCallback(() => {
 		if (!hasNativeBrowser) {
 			setNavState((current) => ({
@@ -1081,14 +1120,14 @@ export function useBrowserView({
 				? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target)
 				: Promise.resolve(target);
 			void resolved.then((url) => {
-				return cancelled ? undefined : navigate(url);
+				return cancelled ? undefined : showPreview(url);
 			}).catch((error) => console.warn("Unable to open browser preview", error));
 			return () => { cancelled = true; };
 		} else if ((revision !== null && revision > 0) || previous?.target) {
 			void clear();
 		}
 		return undefined;
-	}, [clear, hasNativeBrowser, navigate, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionId, terminated, viewId]);
+	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionId, showPreview, terminated, viewId]);
 
 	const destroy = useCallback(() => {
 		const id = viewIdRef.current;

@@ -1,9 +1,27 @@
-import { createServer, request as httpRequest, type Server } from "node:http";
+import {
+	createServer,
+	request as httpRequest,
+	type IncomingHttpHeaders,
+	type IncomingMessage,
+	type OutgoingHttpHeaders,
+	type Server,
+} from "node:http";
+import {
+	connect as http2Connect,
+	constants as http2Constants,
+	createSecureServer,
+	type ClientHttp2Session,
+	type Http2ServerRequest,
+} from "node:http2";
 import { request as httpsRequest } from "node:https";
 import { connect as netConnect, isIP, type AddressInfo, type Socket } from "node:net";
-import { connect as tlsConnect } from "node:tls";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import type { Readable, Writable } from "node:stream";
+import { connect as tlsConnect, type TLSSocket } from "node:tls";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
+import type { Duplex } from "node:stream";
+import { WebSocket, createWebSocketStream } from "ws";
+import { previewCertificate } from "./preview-certificate";
 import { IncompatibleRemoteVersionError, readRemoteIdentity } from "./remote-request";
 import type { RemoteEntry } from "./remotes-store";
 
@@ -22,10 +40,36 @@ export type ActiveProxy = {
 	listeningAddress?: string;
 	previewUrl: (sessionId: string, sourceUrl: string) => string;
 	resolvePreviewUrl: (sessionId: string, viewedUrl: string) => string;
+	/** The host's agent browser for a session's agent tab; "" when the host has none. */
+	agentBrowserUrl: (sessionId: string) => Promise<string>;
+	/** Whether a URL is one of this host's agent-browser viewers (see agentBrowserUrl). */
+	isAgentBrowserUrl: (url: string) => boolean;
 	close: () => Promise<void>;
 };
 
-type PreviewTarget = { sessionId: string; kind: "static" | "app" | "artifact"; entry: string };
+// "agent" is the host's agent browser (the Chromium the session's agent drives),
+// streamed through the daemon's agent-browser route.
+type PreviewTarget = { sessionId: string; kind: "static" | "app" | "artifact" | "agent"; entry: string };
+
+// What both loopback servers hand the shared handler: HTTP/1.1 requests from
+// the plain server, and HTTP/1.1 or HTTP/2 ones from the TLS server.
+type ProxyRequest = Readable & { headers: IncomingHttpHeaders; url?: string; method?: string };
+type ProxyResponse = Writable & {
+	headersSent: boolean;
+	writableFinished: boolean;
+	writeHead(status: number, headers?: OutgoingHttpHeaders): unknown;
+	flushHeaders?: () => void;
+};
+
+// The HTTP/2 session could not carry this host's requests (no HTTP/2 on the
+// host or an intermediary, or the session failed); HTTP/1.1 takes over.
+class UpstreamHttp2Unavailable extends Error {}
+
+// Cloudflare quick tunnels answer 429 past 200 requests in flight.
+const MAX_PENDING_UPSTREAM_STREAMS = 100;
+const HTTP2_RETRY_MS = 60_000;
+const UPSTREAM_STREAM_WINDOW = 4 << 20;
+const UPSTREAM_SESSION_WINDOW = 32 << 20;
 
 function previewHostForSession(id: string, label = "ao-preview"): string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
@@ -66,7 +110,13 @@ const STRIP_REQUEST_HEADERS = [
 	"x-ao-preview-app-authorization",
 	"x-ao-preview-app-origin",
 	"x-ao-expected-host-id",
+	"te",
+	"proxy-connection",
+	"http2-settings",
 ];
+// Connection-specific headers: meaningless past one hop, and an HTTP/2
+// response refuses them outright.
+const HOP_BY_HOP_RESPONSE_HEADERS = ["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"];
 
 // Nothing in this file may log a secret. Not the connection password, not the
 // proxy token, and not `req.url` (its first segment IS the token) — only the
@@ -104,6 +154,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	if (!["http:", "https:"].includes(upstream.protocol) || upstream.username || upstream.password)
 		throw new Error("remote host must use an HTTP(S) URL without embedded credentials");
 	const secure = upstream.protocol === "https:";
+	// A preview's origin is stable per host, session and kind, and unguessable
+	// without the host's password: a dev-server restart or a reconnect keeps
+	// the app's cookies and storage (a random origin per start logged you out).
+	const originKey = entry.password || randomBytes(32).toString("hex");
+	const originMac = (subject: string) => createHmac("sha256", originKey).update(`${upstream.host}\n${subject}`).digest();
 	const upstreamPort = Number(upstream.port || (secure ? 443 : 80));
 	const hostname = upstream.hostname.replace(/^\[|\]$/g, "");
 	// An https host must be spoken to over TLS. Forwarding it as cleartext puts
@@ -140,9 +195,12 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		if (!rawHost || !rawUrl?.startsWith("/")) return null;
 		const target = previewHosts.get(rawHost.toLowerCase());
 		if (!target) return null;
-		if (target.kind !== "app" && method !== "GET" && method !== "HEAD") return null;
+		if (target.kind !== "app" && target.kind !== "agent" && method !== "GET" && method !== "HEAD") return null;
 		const parsed = new URL(rawUrl, "http://localhost");
 		const asset = target.kind === "static" ? previewAssetPath(target.entry, parsed.pathname) : parsed.pathname.replace(/^\/+/, "");
+		if (target.kind === "agent") {
+			return { path: `${prefix}/api/v1/sessions/${encodeURIComponent(target.sessionId)}/agent-browser/${asset}${parsed.search}`, kind: target.kind };
+		}
 		if (target.kind === "artifact") {
 			const query = new URLSearchParams(parsed.search);
 			query.set("source", "artifact");
@@ -152,10 +210,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		return { path: `${prefix}/api/v1/sessions/${encodeURIComponent(target.sessionId)}/preview/${route}/${asset}${parsed.search}`, kind: target.kind };
 	};
 
-	const forwardHeaders = (incoming: NodeJS.Dict<string | string[]>, previewKind?: PreviewTarget["kind"]): NodeJS.Dict<string | string[]> => {
-		const out: NodeJS.Dict<string | string[]> = {};
+	const forwardHeaders = (incoming: IncomingHttpHeaders, previewKind?: PreviewTarget["kind"]): OutgoingHttpHeaders => {
+		const out: OutgoingHttpHeaders = {};
 		for (const [name, value] of Object.entries(incoming)) {
-			if (!STRIP_REQUEST_HEADERS.includes(name.toLowerCase())) out[name] = value;
+			// HTTP/2 pseudo-headers (":authority", ":path") are not forwardable headers.
+			if (!name.startsWith(":") && !STRIP_REQUEST_HEADERS.includes(name.toLowerCase())) out[name] = value;
 		}
 		// The outer Authorization authenticates to AO. Keep app credentials and
 		// same-origin intent in separate headers for the managed-app proxy only.
@@ -169,19 +228,291 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		return out;
 	};
 
-	const validPreviewOrigin = (host: string | undefined, origin: string | undefined, kind?: PreviewTarget["kind"]): boolean =>
-		kind !== "app" || !origin || origin === `http://${host}`;
+	const validPreviewOrigin = (scheme: "http" | "https", host: string | undefined, origin: string | undefined, kind?: PreviewTarget["kind"]): boolean =>
+		(kind !== "app" && kind !== "agent") || !origin || origin === `${scheme}://${host}`;
 
-	// Addresses can be reassigned while the desktop stays open. Check on every
-	// new HTTP or WebSocket connection, not only when the proxy is first created.
-	const verifyUpstream = async (): Promise<void> => {
-		if (!entry.hostId) return;
-		const actual = await readRemoteIdentity(entry);
-		if (actual !== entry.hostId) throw new Error("remote host identity changed");
+	// Addresses can be reassigned while the desktop stays open. Check before
+	// HTTP/1.1 requests and WebSockets carry the credential, not only when the
+	// proxy is first created. Requests that arrive together share one probe.
+	let identityProbe: Promise<void> | null = null;
+	const verifyUpstream = (): Promise<void> => {
+		if (!entry.hostId) return Promise.resolve();
+		identityProbe ??= readRemoteIdentity(entry)
+			.then((actual) => {
+				if (actual !== entry.hostId) throw new Error("remote host identity changed");
+			})
+			.finally(() => {
+				identityProbe = null;
+			});
+		return identityProbe;
 	};
 
-	server.on("request", async (req, res) => {
-		const preview = previewPath(req.headers.host, req.url, req.method);
+	// Requests go to the host over one multiplexed HTTP/2 session when it can
+	// carry them. A preview's hundreds of module requests then share one
+	// connection instead of each paying a round trip for its own identity probe.
+	// The session proves the host's identity on itself before it carries the
+	// credential, so the proof covers every request it carries. A host or
+	// intermediary without HTTP/2 gets HTTP/1.1 for a minute, then a retry.
+	let upstreamSession: Promise<ClientHttp2Session> | null = null;
+	let http2RetryAt = 0;
+	// Over HTTPS the session rides inside one WebSocket to the host's tunnel
+	// (backend lan_tunnel.go): a Cloudflare quick tunnel answers 429 past 200
+	// plain requests in flight and holds back small streamed writes, but
+	// carries a WebSocket unchanged. A host without the tunnel gets plain
+	// HTTP/2. On a LAN address plain HTTP/2 is already direct.
+	let tunnelRetryAt = secure ? 0 : Number.POSITIVE_INFINITY;
+	const openTunnel = async (): Promise<Duplex> => {
+		// The upgrade itself carries the credential: prove the host first, as
+		// HTTP/1.1 requests do.
+		await verifyUpstream();
+		const socket = new WebSocket(`wss://${upstream.host}${prefix}/api/v1/tunnel`, {
+			headers: { authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "x-ao-expected-host-id": entry.hostId } : {}) },
+			perMessageDeflate: false,
+			...(isIP(hostname) ? {} : { servername: hostname }),
+		});
+		// Wrap before "open": the host's first HTTP/2 frame can arrive with it.
+		const stream = createWebSocketStream(socket);
+		// The stream re-emits socket errors. Before "open" they are the upgrade's,
+		// reported below; after, the session sees the close and is replaced.
+		// Unheard, either would crash the main process.
+		stream.on("error", () => undefined);
+		try {
+			await new Promise<void>((resolve, reject) => {
+				socket.once("open", () => resolve());
+				socket.once("error", (error: Error) => reject(new UpstreamHttp2Unavailable(`tunnel: ${error.message}`)));
+			});
+		} catch (error) {
+			stream.destroy();
+			throw error;
+		}
+		return stream;
+	};
+	const getOverSession = (session: ClientHttp2Session, href: string): Promise<Response> =>
+		new Promise((resolve, reject) => {
+			const url = new URL(href);
+			const stream = session.request({ ":method": "GET", ":path": `${url.pathname}${url.search}`, ":authority": upstream.host }, { endStream: true });
+			stream.setTimeout(5_000, () => stream.close(http2Constants.NGHTTP2_CANCEL));
+			const chunks: Buffer[] = [];
+			let status = 0;
+			stream.on("response", (headers) => {
+				status = Number(headers[":status"]);
+			});
+			stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+			stream.on("end", () => {
+				try {
+					resolve(new Response(Buffer.concat(chunks), { status }));
+				} catch (error) {
+					// No status, or one that can't carry a body (204, 304).
+					reject(new UpstreamHttp2Unavailable((error as Error).message));
+				}
+			});
+			stream.on("error", (error: Error) => reject(new UpstreamHttp2Unavailable(error.message)));
+			stream.on("close", () => reject(new UpstreamHttp2Unavailable("session closed")));
+		});
+	const openUpstreamSession = (tunnel?: Duplex): Promise<ClientHttp2Session> => {
+		// Node's default 64 KiB receive window would cap a preview at 64 KiB per
+		// round trip; a few hundred modules need megabytes in flight.
+		const session = http2Connect(`${upstream.protocol}//${upstream.host}`, {
+			settings: { initialWindowSize: UPSTREAM_STREAM_WINDOW },
+			...(tunnel ? { createConnection: () => tunnel } : {}),
+			...(secure && !isIP(hostname) ? { servername: hostname } : {}),
+		});
+		const opened = new Promise<ClientHttp2Session>((resolve, reject) => {
+			session.once("connect", () => {
+				session.setLocalWindowSize(UPSTREAM_SESSION_WINDOW);
+				resolve(session);
+			});
+			session.on("error", (error: Error) => reject(new UpstreamHttp2Unavailable(error.message)));
+			session.once("close", () => reject(new UpstreamHttp2Unavailable("session closed")));
+		}).then(async (connected) => {
+			// Always one unauthenticated probe: it also proves the session works.
+			const identityPath = `${upstream.origin}${prefix}/api/v1/identity`;
+			if (!entry.hostId) {
+				await getOverSession(connected, identityPath);
+				return connected;
+			}
+			const actual = await readRemoteIdentity({ url: `${upstream.origin}${prefix}` }, (url) => getOverSession(connected, String(url)));
+			if (actual !== entry.hostId) throw new Error("remote host identity changed");
+			return connected;
+		});
+		opened.catch(() => session.destroy());
+		return opened;
+	};
+	// The verified session for the next request, or null to use HTTP/1.1.
+	const openPreferredSession = async (): Promise<ClientHttp2Session> => {
+		if (Date.now() >= tunnelRetryAt) {
+			try {
+				return await openUpstreamSession(await openTunnel());
+			} catch (error) {
+				if (!(error instanceof UpstreamHttp2Unavailable)) throw error;
+				tunnelRetryAt = Date.now() + HTTP2_RETRY_MS;
+			}
+		}
+		return openUpstreamSession();
+	};
+	const sessionForRequest = async (): Promise<ClientHttp2Session | null> => {
+		// A session that closed or received GOAWAY since it was cached is
+		// replaced once; a second failure in a row falls back to HTTP/1.1.
+		for (let attempt = 0; attempt < 2 && Date.now() >= http2RetryAt; attempt++) {
+			const pending = (upstreamSession ??= openPreferredSession());
+			try {
+				const session = await pending;
+				if (!session.closed && !session.destroyed) return session;
+			} catch (error) {
+				if (upstreamSession === pending) upstreamSession = null;
+				if (!(error instanceof UpstreamHttp2Unavailable)) throw error;
+				http2RetryAt = Date.now() + HTTP2_RETRY_MS;
+				return null;
+			}
+			if (upstreamSession === pending) upstreamSession = null;
+		}
+		return null;
+	};
+	// Bounds requests waiting for their response headers, not open streams, so
+	// long-lived event streams never starve new requests.
+	let pendingStreams = 0;
+	const streamWaiters: Array<() => void> = [];
+	const acquireStream = async (): Promise<void> => {
+		if (pendingStreams < MAX_PENDING_UPSTREAM_STREAMS) {
+			pendingStreams++;
+			return;
+		}
+		await new Promise<void>((resolve) => streamWaiters.push(resolve));
+	};
+	const releaseStream = (): void => {
+		const next = streamWaiters.shift();
+		if (next) next();
+		else pendingStreams--;
+	};
+
+	const answerIdentityFailure = (res: ProxyResponse, error: unknown, method: string | undefined, path: string, kind?: PreviewTarget["kind"]): void => {
+		warn(`upstream ${upstream.host} identity check failed on ${method} ${safeLogPath(path, kind)} (${(error as Error).message})`);
+		const incompatible = error instanceof IncompatibleRemoteVersionError;
+		res.writeHead(incompatible ? 426 : 502, { "content-type": "application/json", ...corsHeaders });
+		res.end(incompatible
+			? JSON.stringify({ error: "incompatible", code: "HOST_API_INCOMPATIBLE", message: (error as Error).message })
+			: '{"error":"remote host identity not verified","code":"HOST_IDENTITY_UNVERIFIED","message":"remote host identity not verified"}');
+	};
+
+	const answerUpstreamFailure = (res: ProxyResponse, error: Error, method: string | undefined, path: string, kind?: PreviewTarget["kind"]): void => {
+		warn(`upstream ${upstream.host} failed on ${method} ${safeLogPath(path, kind)} (${error.message}); answering 502`);
+		if (res.headersSent) {
+			res.destroy();
+			return;
+		}
+		res.writeHead(502, {
+			"content-type": "application/json",
+			...corsHeaders,
+		});
+		res.end('{"error":"remote daemon unreachable","code":"UPSTREAM_UNAVAILABLE","message":"remote daemon unreachable"}');
+	};
+
+	const relayResponse = (
+		res: ProxyResponse,
+		status: number,
+		upstreamHeaders: IncomingHttpHeaders,
+		body: Readable,
+		method: string | undefined,
+		path: string,
+		kind?: PreviewTarget["kind"],
+	): void => {
+		if (kind === "app" && status === 409 && upstreamHeaders["x-ao-preview-managed-required"] === "1") {
+			body.resume();
+			res.writeHead(409, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+			res.end("<main style='font:16px system-ui;padding:24px'><h1>Remote preview needs a managed server</h1><p>Run <code>ao preview start</code> in this session on the host.</p></main>");
+			return;
+		}
+		let dropped = false;
+		const closeDroppedStream = () => {
+			if (dropped) return;
+			dropped = true;
+			warn(`upstream ${upstream.host} stream ended on ${method} ${safeLogPath(path, kind)}`);
+			res.destroy();
+		};
+		body.on("aborted", closeDroppedStream);
+		body.on("error", closeDroppedStream);
+		const headers: OutgoingHttpHeaders = {};
+		for (const [name, value] of Object.entries(upstreamHeaders)) {
+			if (!name.startsWith(":") && !HOP_BY_HOP_RESPONSE_HEADERS.includes(name)) headers[name] = value;
+		}
+		Object.assign(headers, corsHeaders);
+		if (kind !== undefined && kind !== "app") delete headers["set-cookie"];
+		res.writeHead(status, headers);
+		// Node holds the header block until the first body byte or an explicit
+		// flush. An SSE upstream (GET /api/v1/events) can go arbitrarily long
+		// before its first byte, so without this the client's EventSource sits
+		// in CONNECTING forever — flush headers on their own, then pipe.
+		// (An HTTP/2 response sends its headers in writeHead.)
+		res.flushHeaders?.();
+		// pipe streams SSE chunk-by-chunk once headers are already on the wire.
+		body.pipe(res);
+	};
+
+	const forwardOverHttp1 = (req: ProxyRequest, res: ProxyResponse, path: string, kind?: PreviewTarget["kind"]): void => {
+		const proxied = upstreamRequest(
+			{
+				host: hostname,
+				port: upstreamPort,
+				method: req.method,
+				path,
+				headers: forwardHeaders(req.headers, kind),
+			},
+			(upstreamRes) => relayResponse(res, upstreamRes.statusCode ?? 502, upstreamRes.headers, upstreamRes, req.method, path, kind),
+		);
+		proxied.setTimeout(0);
+		proxied.on("error", (error: Error) => answerUpstreamFailure(res, error, req.method, path, kind));
+		// Closing an EventSource or tab must also close its upstream stream.
+		// Otherwise the remote daemon keeps the SSE request alive after the
+		// renderer is gone, and proxy shutdown can leave orphaned connections.
+		res.once("close", () => {
+			if (!res.writableFinished) proxied.destroy();
+		});
+		req.pipe(proxied);
+	};
+
+	const forwardOverSession = async (session: ClientHttp2Session, req: ProxyRequest, res: ProxyResponse, path: string, kind?: PreviewTarget["kind"]): Promise<void> => {
+		// Closing an EventSource or tab must also close its upstream stream,
+		// including a request still queued for a slot.
+		let stream: ReturnType<ClientHttp2Session["request"]> | undefined;
+		let clientGone = false;
+		res.once("close", () => {
+			clientGone = !res.writableFinished;
+			if (clientGone) stream?.close(http2Constants.NGHTTP2_CANCEL);
+		});
+		await acquireStream();
+		let pending = true;
+		const settle = () => {
+			if (!pending) return;
+			pending = false;
+			releaseStream();
+		};
+		if (clientGone) {
+			settle();
+			return;
+		}
+		const headers = forwardHeaders(req.headers, kind);
+		delete headers.host; // HTTP/2 names the host in :authority
+		try {
+			stream = session.request({ ...headers, ":method": req.method ?? "GET", ":path": path, ":authority": upstream.host });
+		} catch (error) {
+			settle();
+			answerUpstreamFailure(res, error as Error, req.method, path, kind);
+			return;
+		}
+		const upstreamStream = stream;
+		upstreamStream.once("close", settle);
+		upstreamStream.once("response", (responseHeaders) => {
+			settle();
+			relayResponse(res, Number(responseHeaders[":status"]), responseHeaders as IncomingHttpHeaders, upstreamStream, req.method, path, kind);
+		});
+		upstreamStream.on("error", (error: Error) => answerUpstreamFailure(res, error, req.method, path, kind));
+		req.pipe(upstreamStream);
+	};
+
+	const handleRequest = async (req: ProxyRequest, res: ProxyResponse, scheme: "http" | "https"): Promise<void> => {
+		// HTTP/2 carries the host in :authority rather than a Host header.
+		const host = req.headers.host ?? (req as Http2ServerRequest).authority;
+		const preview = previewPath(host, req.url, req.method);
 		const path = preview?.path ?? stripToken(req.url);
 		if (path === null) {
 			res.writeHead(404, {
@@ -191,7 +522,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			res.end('{"error":"unknown path"}');
 			return;
 		}
-		if (!validPreviewOrigin(req.headers.host, req.headers.origin, preview?.kind)) {
+		if (!validPreviewOrigin(scheme, host, req.headers.origin, preview?.kind)) {
 			res.writeHead(403, { "content-type": "application/json" });
 			res.end('{"error":"preview origin mismatch"}');
 			return;
@@ -208,89 +539,27 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			res.end();
 			return;
 		}
+		let session: ClientHttp2Session | null;
 		try {
-			await verifyUpstream();
+			session = await sessionForRequest();
+			if (!session) await verifyUpstream();
 		} catch (error) {
-			warn(`upstream ${upstream.host} identity check failed on ${req.method} ${safeLogPath(path, preview?.kind)} (${(error as Error).message})`);
-			const incompatible = error instanceof IncompatibleRemoteVersionError;
-			res.writeHead(incompatible ? 426 : 502, { "content-type": "application/json", ...corsHeaders });
-			res.end(incompatible
-				? JSON.stringify({ error: "incompatible", code: "HOST_API_INCOMPATIBLE", message: error.message })
-				: '{"error":"remote host identity not verified","code":"HOST_IDENTITY_UNVERIFIED","message":"remote host identity not verified"}');
+			answerIdentityFailure(res, error, req.method, path, preview?.kind);
 			return;
 		}
-		if (res.destroyed) return;
-		const proxied = upstreamRequest(
-			{
-				host: hostname,
-				port: upstreamPort,
-				method: req.method,
-				path,
-				headers: forwardHeaders(req.headers, preview?.kind),
-			},
-			(upstreamRes) => {
-				if (preview?.kind === "app" && upstreamRes.statusCode === 409 && upstreamRes.headers["x-ao-preview-managed-required"] === "1") {
-					upstreamRes.resume();
-					res.writeHead(409, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-					res.end("<main style='font:16px system-ui;padding:24px'><h1>Remote preview needs a managed server</h1><p>Run <code>ao preview start</code> in this session on the host.</p></main>");
-					return;
-				}
-				let dropped = false;
-				const closeDroppedStream = () => {
-					if (dropped) return;
-					dropped = true;
-					warn(`upstream ${upstream.host} stream ended on ${req.method} ${safeLogPath(path, preview?.kind)}`);
-					res.destroy();
-				};
-				upstreamRes.on("aborted", closeDroppedStream);
-				upstreamRes.on("error", closeDroppedStream);
-				const headers: NodeJS.Dict<string | string[] | number> = {
-					...upstreamRes.headers,
-					...corsHeaders,
-				};
-				delete headers.connection;
-				delete headers["keep-alive"];
-				if (preview && preview.kind !== "app") delete headers["set-cookie"];
-				res.writeHead(upstreamRes.statusCode ?? 502, headers);
-				// Node holds the header block until the first body byte or an explicit
-				// flush. An SSE upstream (GET /api/v1/events) can go arbitrarily long
-				// before its first byte, so without this the client's EventSource sits
-				// in CONNECTING forever — flush headers on their own, then pipe.
-				res.flushHeaders();
-				// pipe streams SSE chunk-by-chunk once headers are already on the wire.
-				upstreamRes.pipe(res);
-			},
-		);
-		proxied.setTimeout(0);
-		proxied.on("error", (error: Error) => {
-			warn(`upstream ${upstream.host} failed on ${req.method} ${safeLogPath(path, preview?.kind)} (${error.message}); answering 502`);
-			if (res.headersSent) {
-				res.destroy();
-				return;
-			}
-			res.writeHead(502, {
-				"content-type": "application/json",
-				...corsHeaders,
-			});
-			res.end('{"error":"remote daemon unreachable","code":"UPSTREAM_UNAVAILABLE","message":"remote daemon unreachable"}');
-		});
-		// Closing an EventSource or tab must also close its upstream stream.
-		// Otherwise the remote daemon keeps the SSE request alive after the
-		// renderer is gone, and proxy shutdown can leave orphaned connections.
-		res.once("close", () => {
-			if (!res.writableFinished) proxied.destroy();
-		});
-		req.pipe(proxied);
-	});
+		if (res.destroyed || res.writableEnded) return;
+		if (session) await forwardOverSession(session, req, res, path, preview?.kind);
+		else forwardOverHttp1(req, res, path, preview?.kind);
+	};
 
-	server.on("upgrade", (req, socket: Socket, head: Buffer) => {
+	const handleUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer, scheme: "http" | "https"): void => {
 		const preview = previewPath(req.headers.host, req.url, req.method);
-		const path = preview?.kind === "app" ? preview.path : stripToken(req.url);
+		const path = preview?.kind === "app" || preview?.kind === "agent" ? preview.path : stripToken(req.url);
 		if (path === null) {
 			socket.destroy();
 			return;
 		}
-		if (!validPreviewOrigin(req.headers.host, req.headers.origin, preview?.kind)) {
+		if (!validPreviewOrigin(scheme, req.headers.host, req.headers.origin, preview?.kind)) {
 			socket.destroy();
 			return;
 		}
@@ -339,11 +608,34 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			warn(`upstream ${upstream.host} identity check failed on ${safeLogPath(path, preview?.kind)} (${error.message})`);
 			stopPending();
 		});
+	};
+
+	server.on("request", (req, res) => void handleRequest(req, res, "http"));
+	server.on("upgrade", (req, socket: Socket, head: Buffer) => handleUpgrade(req, socket, head, "http"));
+
+	// Previews are served over HTTPS too, so the browser panel speaks HTTP/2 to
+	// them (see preview-certificate.ts). HTTP/1.1 stays on for WebSockets.
+	const { cert, key } = previewCertificate();
+	const secureServer = createSecureServer({ cert, key, allowHTTP1: true });
+	const secureSockets = new Set<TLSSocket>();
+	secureServer.on("secureConnection", (socket: TLSSocket) => {
+		secureSockets.add(socket);
+		socket.once("close", () => secureSockets.delete(socket));
 	});
+	secureServer.on("request", (req, res) => void handleRequest(req, res, "https"));
+	secureServer.on("upgrade", (req: IncomingMessage, socket: Socket, head: Buffer) => handleUpgrade(req, socket, head, "https"));
+	// The port is part of the origin too: reuse this host's port while it is free.
+	const listened = (port: number) => new Promise<boolean>((resolve) => {
+		const busy = () => resolve(false);
+		secureServer.once("error", busy);
+		secureServer.listen(port, "127.0.0.1", () => { secureServer.off("error", busy); resolve(true); });
+	});
+	if (!(await listened(41000 + (originMac("port").readUInt16BE(0) % 8000)))) await listened(0);
+	const securePort = (secureServer.address() as AddressInfo).port;
 
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const { address: listeningAddress, port } = server.address() as AddressInfo;
-	log(`started on 127.0.0.1:${port} for ${upstream.host}`);
+	log(`started on 127.0.0.1:${port} (previews on ${securePort}) for ${upstream.host}`);
 	return {
 		base: `http://127.0.0.1:${port}/${token}`,
 		listeningAddress,
@@ -384,9 +676,10 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			else if (loopback) throw new Error("unsupported local preview protocol");
 			else if (previewHost.endsWith(".localhost")) throw new Error("preview does not belong to this session");
 			else return sourceUrl;
-			const host = `ao-preview-${randomBytes(16).toString("hex")}.localhost:${port}`;
+			// Per kind too: a static preview (HTML an agent wrote) must not share the app's storage.
+			const host = `ao-preview-${originMac(`${kind}\n${sessionId}`).toString("hex", 0, 16)}.localhost:${securePort}`;
 			previewHosts.set(host, { sessionId, kind, entry: parsed.pathname });
-			const url = `http://${host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+			const url = `https://${host}${parsed.pathname}${parsed.search}${parsed.hash}`;
 			previewSessions.set(sessionId, { host, sourceUrl, sourceHref: parsed.href, url });
 			return url;
 		},
@@ -410,16 +703,45 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			source.hash = viewed.hash;
 			return source.href;
 		},
+		agentBrowserUrl: async (sessionId) => {
+			if (!sessionId || sessionId.length > 256) throw new Error("invalid preview session");
+			// A daemon without an agent browser (or too old to have the route)
+			// answers 404: no agent tab. Anything else, a browser that is down
+			// included, gets the tab; its viewer reconnects on its own.
+			const probe = await fetch(`http://127.0.0.1:${port}/${token}/api/v1/sessions/${encodeURIComponent(sessionId)}/agent-browser/stats`, { signal: AbortSignal.timeout(8_000) })
+				.catch(() => null);
+			await probe?.body?.cancel().catch(() => undefined);
+			if (!probe || probe.status === 404) return "";
+			// Its own origin per session: never the app's, so the two keep apart.
+			const host = `ao-preview-${originMac(`agent\n${sessionId}`).toString("hex", 0, 16)}.localhost:${securePort}`;
+			previewHosts.set(host, { sessionId, kind: "agent", entry: "" });
+			// embed: the Browser panel's own toolbar drives it (remote-tab.ts).
+			return `https://${host}/v/cdp?embed=1&sq=70&ss=1`;
+		},
+		isAgentBrowserUrl: (url) => {
+			try {
+				const parsed = new URL(url);
+				return parsed.protocol === "https:" && parsed.pathname === "/v/cdp" && previewHosts.get(parsed.host.toLowerCase())?.kind === "agent";
+			} catch {
+				return false;
+			}
+		},
 		close: () =>
 			new Promise((resolve) => {
 				// close() alone waits on keep-alive and tunnelled sockets forever;
 				// a deactivated proxy must actually stop serving.
 				for (const drop of tunnels) drop();
 				server.closeAllConnections();
-				server.close(() => {
+				for (const socket of secureSockets) socket.destroy();
+				void upstreamSession?.then((session) => session.destroy(), () => undefined);
+				let open = 2;
+				const closed = () => {
+					if (--open > 0) return;
 					log(`stopped on 127.0.0.1:${port} for ${upstream.host}`);
 					resolve();
-				});
+				};
+				server.close(closed);
+				secureServer.close(closed);
 			}),
 	};
 }

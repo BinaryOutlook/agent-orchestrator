@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -91,6 +92,7 @@ type SessionService interface {
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error)
 	SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error)
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
+	GetRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error)
 	Restore(ctx context.Context, id domain.SessionID) (sessionsvc.RestoreOutcome, error)
 	ExitAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ExitAgentOutcome, error)
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
@@ -195,6 +197,10 @@ type SessionsController struct {
 	PreviewServer            ManagedPreviewServer
 	Capabilities             SessionCapabilityValidator
 	ShellPreviewCapabilities ShellPreviewCapabilityValidator
+	// AgentBrowser is the host's agent browser and its credential
+	// (config.AgentBrowserURL); nil when the host has none.
+	AgentBrowser      *url.URL
+	AgentBrowserToken string
 }
 
 // Register mounts the session routes on the supplied router.
@@ -213,6 +219,9 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/artifact-files/*", c.artifactFile)
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		r.Method(method, "/sessions/{sessionId}/preview/app/*", http.HandlerFunc(c.previewApp))
+	}
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
+		r.Method(method, "/sessions/{sessionId}/agent-browser/*", http.HandlerFunc(c.agentBrowser))
 	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
 	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
@@ -510,7 +519,11 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		envelope.WriteError(w, r, err)
 		return
 	}
-	assetPath := chi.URLParam(r, "*")
+	assetPath, _, err := wildcardPath(r)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
+		return
+	}
 	if r.URL.Query().Get("source") == "artifact" {
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
@@ -537,6 +550,53 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 	c.serveRootedPreviewFile(w, r, sess.Metadata.WorkspacePath, assetPath)
 }
 
+// compressPreviewResponse gzips a dev server's uncompressed code and text
+// before it crosses the network to the desktop. Dev servers rarely compress,
+// and their unminified modules shrink several times. Event streams are left
+// alone (compression would hold their small writes back), as are bodies too
+// small to gain from it.
+func compressPreviewResponse(res *http.Response) {
+	contentType := strings.ToLower(res.Header.Get("Content-Type"))
+	compressible := strings.HasPrefix(contentType, "text/") || strings.Contains(contentType, "javascript") ||
+		strings.Contains(contentType, "json") || strings.Contains(contentType, "svg") || strings.Contains(contentType, "wasm")
+	if !compressible || strings.Contains(contentType, "event-stream") || res.Header.Get("Content-Encoding") != "" ||
+		res.Request == nil || res.Request.Method == http.MethodHead || !acceptsGzip(res.Request.Header.Get("Accept-Encoding")) ||
+		res.StatusCode == http.StatusNoContent || res.StatusCode == http.StatusNotModified ||
+		(res.ContentLength >= 0 && res.ContentLength < 1024) {
+		return
+	}
+	body := res.Body
+	pr, pw := io.Pipe()
+	go func() {
+		gz, _ := gzip.NewWriterLevel(pw, gzip.BestSpeed)
+		_, err := io.Copy(gz, body)
+		if closeErr := gz.Close(); err == nil {
+			err = closeErr
+		}
+		_ = body.Close()
+		_ = pw.CloseWithError(err)
+	}()
+	res.Body = pr
+	res.ContentLength = -1
+	res.Header.Del("Content-Length")
+	res.Header.Set("Content-Encoding", "gzip")
+	res.Header.Add("Vary", "Accept-Encoding")
+	// The bytes differ now, so a strong validator would be a lie.
+	if etag := res.Header.Get("ETag"); strings.HasPrefix(etag, `"`) {
+		res.Header.Set("ETag", "W/"+etag)
+	}
+}
+
+func acceptsGzip(acceptEncoding string) bool {
+	for _, part := range strings.Split(acceptEncoding, ",") {
+		coding, params, _ := strings.Cut(strings.TrimSpace(part), ";")
+		if strings.EqualFold(strings.TrimSpace(coding), "gzip") {
+			return strings.ReplaceAll(strings.TrimSpace(params), " ", "") != "q=0"
+		}
+	}
+	return false
+}
+
 // previewApp reaches only the running, session-owned managed preview process.
 // The selected URL comes from the manager, never from a caller-supplied port.
 func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) {
@@ -544,7 +604,9 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
 		return
 	}
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	// Every module a dev server serves passes through here: read the stored
+	// row only, not the full session read model.
+	sess, err := c.Svc.GetRecord(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -559,14 +621,23 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PREVIEW_MANAGED_REQUIRED", "Run ao preview start in this session to open a remote live preview", nil)
 		return
 	}
+	tail, escaped, err := wildcardPath(r)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
+		return
+	}
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(req *httputil.ProxyRequest) {
 			appAuthorization := req.Out.Header.Get("X-AO-Preview-App-Authorization")
 			hadPreviewOrigin := req.Out.Header.Get("X-AO-Preview-App-Origin") != ""
 			req.SetURL(target)
 			req.Out.Host = target.Host
-			req.Out.URL.Path = "/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+			// Forward the client's escapes once: "%40" stays "%40", not "%2540".
+			req.Out.URL.Path = "/" + strings.TrimPrefix(tail, "/")
 			req.Out.URL.RawPath = ""
+			if escaped != "" {
+				req.Out.URL.RawPath = "/" + strings.TrimPrefix(escaped, "/")
+			}
 			req.Out.URL.RawQuery = req.In.URL.RawQuery
 			// AO credentials authenticate the tunnel, not the agent-run web app.
 			req.Out.Header.Del("Authorization")
@@ -598,6 +669,7 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 					res.Header.Set("Location", redirect.RequestURI())
 				}
 			}
+			compressPreviewResponse(res)
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {

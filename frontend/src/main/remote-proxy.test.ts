@@ -1,7 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
+import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { connect as netConnect, type AddressInfo } from "node:net";
+import { connect as tlsConnect, type ConnectionOptions } from "node:tls";
+import { connect as http2Connect, createSecureServer, createServer as createHttp2Server, type Http2SecureServer, type Http2Server, type ServerHttp2Session } from "node:http2";
+import { WebSocketServer, createWebSocketStream } from "ws";
+import { previewCertificate } from "./preview-certificate";
 import { startRemoteProxy, type ActiveProxy } from "./remote-proxy";
+
+// App previews are HTTPS. Trust exactly the proxy's preview certificate; its
+// "*.localhost" name is a TLD wildcard Node won't match, which Electron's
+// verify proc accepts by certificate instead (preview-certificate.ts).
+const trustPreview = (preview: URL): ConnectionOptions => ({
+	servername: preview.hostname,
+	ca: previewCertificate().cert,
+	checkServerIdentity: () => undefined,
+});
+
+function previewRequest(preview: URL, options: RequestOptions, onResponse: (res: IncomingMessage) => void): ClientRequest {
+	return httpsRequest({
+		hostname: "127.0.0.1",
+		port: Number(preview.port),
+		...trustPreview(preview),
+		...options,
+		headers: { Host: preview.host, ...options.headers },
+	}, onResponse);
+}
 
 type Seen = {
 	url: string;
@@ -109,6 +133,23 @@ describe("startRemoteProxy", () => {
 		expect(await request(raw)).toBe(200);
 	});
 
+	it("keeps an app preview's origin across dev-server and proxy restarts", async () => {
+		const { port } = await startUpstream(() => ({ status: 200, body: "{}" }));
+		const entry = { label: "box", url: `http://127.0.0.1:${port}/ao`, password: "pw" };
+		proxy = await startRemoteProxy(entry);
+		const first = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
+		// A restarted dev server comes back on another port: same origin, so cookies and storage survive.
+		expect(new URL(proxy.previewUrl("ao-1", "http://localhost:5174/")).origin).toBe(first.origin);
+		expect(new URL(proxy.previewUrl("ao-2", "http://localhost:5173/")).hostname).not.toBe(first.hostname);
+		await proxy.close();
+		proxy = await startRemoteProxy(entry);
+		expect(new URL(proxy.previewUrl("ao-1", "http://localhost:5173/")).origin).toBe(first.origin);
+		await proxy.close();
+		// Without the host's password the origin cannot be guessed.
+		proxy = await startRemoteProxy({ ...entry, password: "other" });
+		expect(new URL(proxy.previewUrl("ao-1", "http://localhost:5173/")).hostname).not.toBe(first.hostname);
+	});
+
 	it("scopes a stable static preview origin to one session and serves root assets", async () => {
 		const { port, seen } = await startUpstream((request) => ({
 			status: request.url === "/api/v1/projects" ? 200 : 200,
@@ -163,10 +204,10 @@ describe("startRemoteProxy", () => {
 		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "host-password" });
 		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
 		const post = (origin?: string, authorization?: string) => new Promise<number>((resolve, reject) => {
-			const req = httpRequest({
-				hostname: "127.0.0.1", port: Number(preview.port), path: "/submit", method: "POST",
+			const req = previewRequest(preview, {
+				path: "/submit", method: "POST",
 				headers: {
-					Host: preview.host, ...(origin ? { Origin: origin } : {}), ...(authorization ? { Authorization: authorization } : {}),
+					...(origin ? { Origin: origin } : {}), ...(authorization ? { Authorization: authorization } : {}),
 					"X-AO-Preview-App-Authorization": "forged", "X-AO-Preview-App-Origin": "forged",
 				},
 			}, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode ?? 0)); });
@@ -189,7 +230,7 @@ describe("startRemoteProxy", () => {
 		proxy = await startRemoteProxy({ hostId: "expected", label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
 		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/reset/path-secret?code=query-secret"));
 		const status = await new Promise<number>((resolve, reject) => {
-			const req = httpRequest({ hostname: "127.0.0.1", port: Number(preview.port), path: preview.pathname + preview.search, headers: { Host: preview.host } }, (res) => {
+			const req = previewRequest(preview, { path: preview.pathname + preview.search }, (res) => {
 				res.resume();
 				res.on("end", () => resolve(res.statusCode ?? 0));
 			});
@@ -210,7 +251,7 @@ describe("startRemoteProxy", () => {
 		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
 		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
 		const request = () => new Promise<string>((resolve, reject) => {
-			const req = httpRequest({ hostname: "127.0.0.1", port: Number(preview.port), path: "/", headers: { Host: preview.host } }, (res) => {
+			const req = previewRequest(preview, { path: "/" }, (res) => {
 				let body = "";
 				res.on("data", (chunk) => { body += chunk.toString(); });
 				res.on("end", () => resolve(body));
@@ -241,7 +282,7 @@ describe("startRemoteProxy", () => {
 		const port = (upstream.address() as AddressInfo).port;
 		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
 		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
-		const socket = netConnect(Number(preview.port), "127.0.0.1");
+		const socket = tlsConnect({ host: "127.0.0.1", port: Number(preview.port), ...trustPreview(preview) });
 		const reply = await new Promise<string>((resolve, reject) => {
 			let data = "";
 			socket.on("error", reject);
@@ -249,7 +290,7 @@ describe("startRemoteProxy", () => {
 				data += chunk.toString();
 				if (data.includes("\r\n\r\n")) resolve(data);
 			});
-			socket.on("connect", () => socket.write(`GET /socket HTTP/1.1\r\nHost: ${preview.host}\r\nOrigin: ${preview.origin}\r\nAuthorization: Basic app-token\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`));
+			socket.on("secureConnect", () => socket.write(`GET /socket HTTP/1.1\r\nHost: ${preview.host}\r\nOrigin: ${preview.origin}\r\nAuthorization: Basic app-token\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`));
 		});
 		socket.destroy();
 		expect(reply).toContain("101 Switching Protocols");
@@ -258,6 +299,67 @@ describe("startRemoteProxy", () => {
 		expect(upgradeAppAuth).toBe("Basic app-token");
 		expect(upgradeAppOrigin).toBe(preview.origin);
 	});
+	it("serves a session's agent browser on its own origin through the daemon's agent-browser route", async () => {
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "ok" }));
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "host-password" });
+		const agent = new URL(await proxy.agentBrowserUrl("ao-1"));
+		expect(agent.hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
+		expect(`${agent.pathname}${agent.search}`).toBe("/v/cdp?embed=1&sq=70&ss=1");
+		expect(proxy.isAgentBrowserUrl(agent.href)).toBe(true);
+		expect(proxy.isAgentBrowserUrl(proxy.previewUrl("ao-1", "http://localhost:5173/v/cdp"))).toBe(false);
+		expect(seen.at(-1)).toMatchObject({ url: "/api/v1/sessions/ao-1/agent-browser/stats", auth: "Bearer host-password" });
+		// Never the app's origin, and the same one again for the same session.
+		expect(agent.origin).not.toBe(new URL(proxy.previewUrl("ao-1", "http://localhost:5173/")).origin);
+		expect(new URL(await proxy.agentBrowserUrl("ao-1")).origin).toBe(agent.origin);
+		const send = (method: string, path: string, origin?: string) => new Promise<number>((resolve, reject) => {
+			const req = previewRequest(agent, { path, method, headers: origin ? { Origin: origin } : {} }, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode ?? 0)); });
+			req.on("error", reject);
+			req.end(method === "POST" ? "file-bytes" : undefined);
+		});
+		expect(await send("GET", "/v/cdp?sq=70")).toBe(200);
+		expect(seen.at(-1)).toMatchObject({ url: "/api/v1/sessions/ao-1/agent-browser/v/cdp?sq=70", auth: "Bearer host-password" });
+		expect(await send("POST", "/upload?dir=abc&name=a.txt", agent.origin)).toBe(200);
+		expect(seen.at(-1)).toMatchObject({ url: "/api/v1/sessions/ao-1/agent-browser/upload?dir=abc&name=a.txt", body: "file-bytes" });
+		const count = seen.length;
+		expect(await send("POST", "/upload", "http://evil.example")).toBe(403);
+		expect(seen).toHaveLength(count);
+	});
+
+	it("gives no agent browser when the host has none", async () => {
+		const { port } = await startUpstream(() => ({ status: 404, body: '{"error":"not found"}' }));
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		expect(await proxy.agentBrowserUrl("ao-1")).toBe("");
+	});
+
+	it("forwards the agent browser's stream socket", async () => {
+		upstream = createServer((_request, response) => response.end("ok"));
+		let upgradePath = "";
+		let upgradeAuth = "";
+		upstream.on("upgrade", (request, socket) => {
+			upgradePath = request.url ?? "";
+			upgradeAuth = String(request.headers.authorization ?? "");
+			socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
+			socket.end();
+		});
+		await new Promise<void>((resolve) => upstream?.listen(0, "127.0.0.1", resolve));
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, password: "pw" });
+		const agent = new URL(await proxy.agentBrowserUrl("ao-1"));
+		const socket = tlsConnect({ host: "127.0.0.1", port: Number(agent.port), ...trustPreview(agent) });
+		const reply = await new Promise<string>((resolve, reject) => {
+			let data = "";
+			socket.on("error", reject);
+			socket.on("data", (chunk) => {
+				data += chunk.toString();
+				if (data.includes("\r\n\r\n")) resolve(data);
+			});
+			socket.on("secureConnect", () => socket.write(`GET /ws/cdp?token=null HTTP/1.1\r\nHost: ${agent.host}\r\nOrigin: ${agent.origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`));
+		});
+		socket.destroy();
+		expect(reply).toContain("101 Switching Protocols");
+		expect(upgradePath).toBe("/api/v1/sessions/ao-1/agent-browser/ws/cdp?token=null");
+		expect(upgradeAuth).toBe("Bearer pw");
+	});
+
 	it("proxies an IPv6 host instead of dialing its URL brackets", async (context) => {
 		upstream = createServer((_request, response) => response.end("ok"));
 		try {
@@ -813,5 +915,151 @@ describe("startRemoteProxy streams", () => {
 		);
 		await closed;
 		expect(sawUpgrade).toEqual([]);
+	});
+});
+
+describe("startRemoteProxy over HTTP/2", () => {
+	let h2upstream: Http2Server | undefined;
+
+	afterEach(async () => {
+		await new Promise<void>((resolve) => (h2upstream ? h2upstream.close(() => resolve()) : resolve()));
+		h2upstream = undefined;
+	});
+
+	// A daemon whose listener speaks HTTP/2 without TLS, as AO's remote listener does.
+	async function startHttp2Upstream(hostId: string): Promise<{ port: number; seen: Seen[]; sessions: ServerHttp2Session[] }> {
+		const seen: Seen[] = [];
+		const sessions: ServerHttp2Session[] = [];
+		h2upstream = createHttp2Server();
+		h2upstream.on("session", (session) => sessions.push(session));
+		h2upstream.on("request", (req, res) => {
+			seen.push({
+				url: req.url,
+				auth: req.headers.authorization,
+				expectedHost: req.headers["x-ao-expected-host-id"] as string | undefined,
+				origin: req.headers.origin,
+				appAuth: req.headers["x-ao-preview-app-authorization"] as string | undefined,
+				appOrigin: req.headers["x-ao-preview-app-origin"] as string | undefined,
+				body: "",
+			});
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(req.url === "/api/v1/identity" ? JSON.stringify({ hostId, apiVersion: 1 }) : JSON.stringify({ url: req.url, proto: req.httpVersion }));
+		});
+		await new Promise<void>((resolve) => h2upstream?.listen(0, "127.0.0.1", resolve));
+		return { port: (h2upstream.address() as AddressInfo).port, seen, sessions };
+	}
+
+	it("serves an app preview to the browser over HTTP/2", async () => {
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "module" }));
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/src/main.ts"));
+		expect(preview.protocol).toBe("https:");
+		const client = http2Connect(`https://127.0.0.1:${preview.port}`, trustPreview(preview));
+		const get = (path: string) => new Promise<string>((resolve, reject) => {
+			const stream = client.request({ ":path": path, ":authority": preview.host });
+			let body = "";
+			stream.on("data", (chunk) => (body += chunk));
+			stream.on("end", () => resolve(body));
+			stream.on("error", reject);
+		});
+		// Many module requests at once, on one connection.
+		const bodies = await Promise.all(Array.from({ length: 20 }, (_, i) => get(`/src/m${i}.ts`)));
+		client.close();
+		expect(client.alpnProtocol).toBe("h2");
+		expect(bodies.every((body) => body === "module")).toBe(true);
+		expect(seen).toHaveLength(20);
+		expect(seen.every((entry) => entry.auth === "Bearer pw" && entry.url.startsWith("/api/v1/sessions/ao-1/preview/app/src/m"))).toBe(true);
+	});
+
+	it("verifies the host once per upstream session, before the credential", async () => {
+		const { port, seen, sessions } = await startHttp2Upstream("h_workbox");
+		proxy = await startRemoteProxy({ hostId: "h_workbox", label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const responses = await Promise.all(Array.from({ length: 20 }, (_, i) => fetch(`${proxy!.base}/api/v1/projects?i=${i}`).then((res) => res.json())));
+		expect(responses.every((body) => body.proto === "2.0")).toBe(true);
+		expect(sessions).toHaveLength(1);
+		expect(seen[0]).toMatchObject({ url: "/api/v1/identity", auth: undefined });
+		expect(seen.filter((entry) => entry.url === "/api/v1/identity")).toHaveLength(1);
+		expect(seen.slice(1).every((entry) => entry.auth === "Bearer pw" && entry.expectedHost === "h_workbox")).toBe(true);
+		expect(seen).toHaveLength(21);
+	});
+
+	it("never sends the credential over a session that reached another host", async () => {
+		const { port, seen } = await startHttp2Upstream("h_replacement");
+		proxy = await startRemoteProxy({ hostId: "h_expected", label: "workbox", url: `http://127.0.0.1:${port}`, password: "secret" });
+		const response = await fetch(`${proxy.base}/api/v1/projects`);
+		expect(response.status).toBe(502);
+		expect(await response.json()).toMatchObject({ code: "HOST_IDENTITY_UNVERIFIED" });
+		expect(seen.map((entry) => entry.url)).toEqual(["/api/v1/identity"]);
+		expect(seen[0].auth).toBeUndefined();
+	});
+});
+
+describe("startRemoteProxy through an HTTPS host's tunnel", () => {
+	let secureUpstream: Http2SecureServer | undefined;
+	let rejectUnauthorized: string | undefined;
+
+	beforeEach(() => {
+		// The test host's certificate is self-signed.
+		rejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+		process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+	});
+
+	afterEach(async () => {
+		if (rejectUnauthorized === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+		else process.env.NODE_TLS_REJECT_UNAUTHORIZED = rejectUnauthorized;
+		await proxy?.close();
+		proxy = undefined;
+		await new Promise<void>((resolve) => (secureUpstream ? secureUpstream.close(() => resolve()) : resolve()));
+		secureUpstream = undefined;
+	});
+
+	// An HTTPS daemon (as behind a Cloudflare tunnel). With tunnel=true it serves
+	// HTTP/2 inside a WebSocket at /api/v1/tunnel, as the AO daemon does.
+	async function startSecureUpstream(tunnel: boolean): Promise<{ port: number; direct: string[]; tunneled: Seen[]; tunnels: number }> {
+		const state = { port: 0, direct: [] as string[], tunneled: [] as Seen[], tunnels: 0 };
+		const identity = JSON.stringify({ hostId: "h_workbox", apiVersion: 1 });
+		const inner = createHttp2Server((req, res) => {
+			state.tunneled.push({ url: req.url, auth: req.headers.authorization, expectedHost: undefined, origin: undefined, appAuth: undefined, appOrigin: undefined, body: req.httpVersion });
+			res.end(req.url === "/api/v1/identity" ? identity : JSON.stringify({ proto: req.httpVersion }));
+		});
+		const sockets = new WebSocketServer({ noServer: true });
+		const { cert, key } = previewCertificate();
+		secureUpstream = createSecureServer({ cert, key, allowHTTP1: true }, (req, res) => {
+			state.direct.push(`${req.httpVersion} ${req.url}`);
+			res.end(req.url === "/api/v1/identity" ? identity : JSON.stringify({ proto: req.httpVersion }));
+		});
+		secureUpstream.on("upgrade", (req: IncomingMessage, socket, head) => {
+			if (!tunnel || req.url !== "/api/v1/tunnel" || req.headers.authorization !== "Bearer pw") {
+				socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+				return;
+			}
+			state.tunnels++;
+			sockets.handleUpgrade(req, socket, head, (ws) => inner.emit("connection", createWebSocketStream(ws)));
+		});
+		await new Promise<void>((resolve) => secureUpstream?.listen(0, "127.0.0.1", resolve));
+		state.port = (secureUpstream.address() as AddressInfo).port;
+		return state;
+	}
+
+	it("carries requests inside one WebSocket, proving the host before the credential", async () => {
+		const host = await startSecureUpstream(true);
+		proxy = await startRemoteProxy({ hostId: "h_workbox", label: "workbox", url: `https://127.0.0.1:${host.port}`, password: "pw" });
+		const responses = await Promise.all(Array.from({ length: 20 }, (_, i) => fetch(`${proxy!.base}/api/v1/projects?i=${i}`).then((res) => res.json())));
+		expect(responses.every((body) => body.proto === "2.0")).toBe(true);
+		expect(host.tunnels).toBe(1);
+		// The only direct request is the unauthenticated identity probe that precedes the upgrade.
+		expect(host.direct.map((line) => line.split(" ")[1])).toEqual(["/api/v1/identity"]);
+		expect(host.tunneled[0]).toMatchObject({ url: "/api/v1/identity", auth: undefined });
+		expect(host.tunneled.slice(1).every((entry) => entry.auth === "Bearer pw")).toBe(true);
+		expect(host.tunneled).toHaveLength(21);
+	});
+
+	it("falls back to plain HTTP/2 when the host has no tunnel", async () => {
+		const host = await startSecureUpstream(false);
+		proxy = await startRemoteProxy({ hostId: "h_workbox", label: "workbox", url: `https://127.0.0.1:${host.port}`, password: "pw" });
+		const body = await (await fetch(`${proxy.base}/api/v1/projects`)).json();
+		expect(body.proto).toBe("2.0");
+		expect(host.tunnels).toBe(0);
+		expect(host.direct.at(-1)).toBe("2.0 /api/v1/projects");
 	});
 });

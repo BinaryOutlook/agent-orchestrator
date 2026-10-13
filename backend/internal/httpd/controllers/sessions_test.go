@@ -3,6 +3,7 @@ package controllers_test
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -290,6 +291,11 @@ func (f *fakeSessionService) Get(_ context.Context, id domain.SessionID) (domain
 		return domain.Session{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	return s, nil
+}
+
+func (f *fakeSessionService) GetRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+	s, err := f.Get(ctx, id)
+	return s.SessionRecord, err
 }
 
 func (f *fakeSessionService) SetPreview(_ context.Context, id domain.SessionID, previewURL string) (domain.Session, error) {
@@ -3086,6 +3092,82 @@ func TestSessionsAPI_ManagedPreviewReceivesProjectEnv(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_ManagedPreviewCompressesUncompressedText(t *testing.T) {
+	module := strings.Repeat("export const value = 'remote preview module';\n", 100)
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mod.js":
+			w.Header().Set("Content-Type", "text/javascript")
+			w.Header().Set("ETag", `"v1"`)
+			_, _ = io.WriteString(w, module)
+		case "/tiny.js":
+			w.Header().Set("Content-Type", "text/javascript")
+			w.Header().Set("Content-Length", "11")
+			_, _ = io.WriteString(w, "export {};\n")
+		case "/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: "+module+"\n\n")
+		case "/encoded.js":
+			w.Header().Set("Content-Type", "text/javascript")
+			w.Header().Set("Content-Encoding", "br")
+			_, _ = io.WriteString(w, module)
+		case "/image.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = io.WriteString(w, module)
+		}
+	}))
+	t.Cleanup(app.Close)
+	parsed, _ := url.Parse(app.URL)
+	port, _ := strconv.Atoi(parsed.Port())
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.Metadata.PreviewURL = app.URL + "/"
+	svc.sessions["ao-1"] = session
+	managed := &fakeManagedPreviewServer{status: previewserver.Status{State: previewserver.StateReady, TargetKind: previewserver.TargetApp, URL: session.Metadata.PreviewURL, Port: port}}
+	srv := newSessionTestServerWithPreview(t, svc, managed)
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	get := func(path, acceptEncoding string) (*http.Response, []byte) {
+		t.Helper()
+		request, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/preview/app"+path, nil)
+		request.Header.Set("Authorization", "Bearer host-password")
+		if acceptEncoding != "" {
+			request.Header.Set("Accept-Encoding", acceptEncoding)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = response.Body.Close() }()
+		body, _ := io.ReadAll(response.Body)
+		return response, body
+	}
+
+	response, body := get("/mod.js", "gzip, deflate, br, zstd")
+	if response.Header.Get("Content-Encoding") != "gzip" || response.Header.Get("ETag") != `W/"v1"` {
+		t.Fatalf("module headers = %v, want gzip with a weak ETag", response.Header)
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, _ := io.ReadAll(reader)
+	if string(decoded) != module || len(body) >= len(module)/4 {
+		t.Fatalf("decoded %d of %d bytes from %d compressed", len(decoded), len(module), len(body))
+	}
+	for _, tc := range []struct{ path, acceptEncoding, encoding string }{
+		{"/mod.js", "", ""},
+		{"/mod.js", "gzip;q=0, br", ""},
+		{"/tiny.js", "gzip", ""},
+		{"/events", "gzip", ""},
+		{"/encoded.js", "gzip", "br"},
+		{"/image.png", "gzip", ""},
+	} {
+		if response, _ := get(tc.path, tc.acceptEncoding); response.Header.Get("Content-Encoding") != tc.encoding {
+			t.Errorf("%s with Accept-Encoding %q: Content-Encoding %q, want %q", tc.path, tc.acceptEncoding, response.Header.Get("Content-Encoding"), tc.encoding)
+		}
+	}
+}
+
 func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
 	type observed struct{ path, host, authorization, origin, cookie, relay string }
 	var seenMu sync.Mutex
@@ -3156,6 +3238,10 @@ func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
 	first := readSeen()
 	if response.StatusCode != http.StatusOK || first.path != "/app/?q=1" || first.host != parsed.Host || first.authorization != "" || first.origin != "" || first.cookie != "app_session=ok" || first.relay != "" {
 		t.Fatalf("app proxy: status=%d observed=%+v", response.StatusCode, first)
+	}
+	// Turbopack names chunks after scoped packages; "%40swc" must reach the app as sent, not as "%2540swc".
+	if _, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/app/_next/static/chunks/0i4a_%40swc_helpers.js", ""); status != http.StatusOK || readSeen().path != "/_next/static/chunks/0i4a_%40swc_helpers.js" {
+		t.Fatalf("escaped app path: status=%d observed=%+v", status, readSeen())
 	}
 	request, err = http.NewRequest(http.MethodPost, srv.URL+"/api/v1/sessions/ao-1/preview/app/submit", strings.NewReader("data"))
 	if err != nil {

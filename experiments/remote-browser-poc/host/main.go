@@ -1,0 +1,794 @@
+// Command host is the agent's browser on a remote host. It runs next to the
+// agent: it owns one headless Chromium, lets the agent drive it through
+// agent-browser on loopback CDP (POST /agent), and streams it to the desktop
+// (/v/cdp and /ws/cdp, a CDP screencast), which shows its pages as tabs.
+package main
+
+import (
+	"context"
+	"crypto/subtle"
+	_ "embed"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+)
+
+//go:embed viewer.html
+var viewerHTML []byte
+
+type tab struct {
+	ID    string `json:"id"`
+	URL   string `json:"url"`
+	Title string `json:"title"`
+}
+
+type host struct {
+	dialogMu sync.Mutex
+	dialogs  map[string]string // tab -> the JavaScript dialog open in it
+	cdp      *cdpClient
+	token    string
+	abPath   string
+	cdpPort  int
+	ctl      control
+	tabsMu   sync.Mutex
+	tabs     map[string]*tab
+	order    []string          // creation order, newest last
+	openers  map[string]string // tab -> the tab that opened it (popups)
+	viewMu   sync.Mutex
+	sizer    map[string]*viewer // per tab: the view whose size the page has; other views letterbox it
+	viewers  map[*viewer]struct{}
+	bytesOut atomic.Int64
+	frames   atomic.Int64
+	agentMu  sync.Mutex
+	dl       *downloads // the remote browser's downloads, served to viewers
+}
+
+// control reports who is acting. People and the agent share the page: human
+// input never blocks the agent, the viewer just shows when the agent drives.
+type control struct {
+	mu        sync.Mutex
+	human     string
+	lastInput time.Time
+	lastPress time.Time // the person's last click: they may have moved the caret
+	lastEdit  time.Time // the person's last input that can change the page (not scrolling)
+	agentBusy bool
+	snapshot  time.Time // the agent's last snapshot: its element refs date from then
+}
+
+// releaseIfHolder frees control when the human holding it disconnects.
+func (c *control) releaseIfHolder(id string) {
+	c.mu.Lock()
+	if c.human == id {
+		c.human = ""
+	}
+	c.mu.Unlock()
+}
+
+func (c *control) humanInput(id string) (changed bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	changed = c.human != id
+	c.human, c.lastInput = id, time.Now()
+	return changed
+}
+
+// typing reports a person's input within d: their caret is in use.
+func (c *control) typing(d time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Since(c.lastInput) < d
+}
+
+func (h *host) setDialog(target, d string) {
+	h.dialogMu.Lock()
+	defer h.dialogMu.Unlock()
+	if h.dialogs == nil {
+		h.dialogs = map[string]string{}
+	}
+	if d == "" {
+		delete(h.dialogs, target)
+	} else {
+		h.dialogs[target] = d
+	}
+}
+
+func (h *host) openDialog() string {
+	h.dialogMu.Lock()
+	defer h.dialogMu.Unlock()
+	for _, d := range h.dialogs {
+		return d
+	}
+	return ""
+}
+
+// editSince reports a person's input after t that may have changed the page.
+func (c *control) editSince(t time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastEdit.After(t)
+}
+
+func (c *control) pressSince(t time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastPress.After(t)
+}
+
+func (c *control) snapshotAt() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.snapshot
+}
+
+// usesRef reports an agent command aimed at a snapshot ref (@e12).
+func usesRef(args []string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(a, "@e") {
+			return true
+		}
+	}
+	return false
+}
+
+func agentRefused(w http.ResponseWriter, why string) {
+	_ = json.NewEncoder(w).Encode(map[string]any{"output": why, "error": "refused", "ms": 0, "files": map[string][]byte{}})
+}
+
+func (c *control) agentRunning() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.agentBusy
+}
+
+// An agent command focuses its own targets; while the person is typing, their
+// field and caret come back afterwards so their next keys land where they were.
+const saveFocus = `(() => { const a = document.activeElement; window.__rbFocus = a && a !== document.body ? a : null; window.__rbCaret = a && typeof a.selectionStart === 'number' ? [a.selectionStart, a.selectionEnd] : null; })()`
+const restoreFocus = `(() => { const a = window.__rbFocus, c = window.__rbCaret; if (!a || !document.contains(a) || document.activeElement === a) return; a.focus({ preventScroll: true }); if (c) try { a.setSelectionRange(c[0], c[1]); } catch {} })()`
+
+func (c *control) release() {
+	c.mu.Lock()
+	c.human = ""
+	c.mu.Unlock()
+}
+
+func (c *control) owner() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.agentBusy {
+		return "agent"
+	}
+	return "none"
+}
+
+func main() {
+	addr := flag.String("addr", ":8080", "listen address for viewers")
+	token := flag.String("token", os.Getenv("RB_TOKEN"), "shared secret for every route")
+	chrome := flag.String("chrome", "/usr/bin/chromium", "Chromium binary")
+	ab := flag.String("ab", "/usr/local/bin/agent-browser", "agent-browser binary")
+	cdpPort := flag.Int("cdp-port", 9222, "loopback CDP port")
+	dsf := flag.Float64("dsf", 2, "Chromium device scale factor; headless screencast ignores emulated DPR, so 2 is needed for Retina-sharp frames (1x viewers get frames scaled down)")
+	flag.Parse()
+	if len(*token) < 16 {
+		log.Fatal("-token (or RB_TOKEN) must be at least 16 characters")
+	}
+	// A restarted container keeps /tmp: stale profile locks would stop Chromium.
+	// The profile itself stays, so logins survive a restart.
+	for _, p := range []string{"/tmp/rb-profile/SingletonLock", "/tmp/rb-profile/SingletonSocket", "/tmp/rb-profile/SingletonCookie"} {
+		_ = os.RemoveAll(p)
+	}
+	ctx := context.Background()
+	h := &host{token: *token, abPath: *ab, cdpPort: *cdpPort,
+		tabs: map[string]*tab{}, openers: map[string]string{}, viewers: map[*viewer]struct{}{}, sizer: map[string]*viewer{}}
+	wsURL, err := launchChrome(ctx, *chrome, *cdpPort, *dsf)
+	if err != nil {
+		log.Fatalf("chrome: %v", err)
+	}
+	cdp, err := dialCDP(ctx, wsURL)
+	if err != nil {
+		log.Fatalf("cdp: %v", err)
+	}
+	h.cdp = cdp
+	saved := loadTabs() // before tracking: the blank start tab rewrites the file
+	if err := h.trackTargets(ctx); err != nil {
+		log.Fatalf("targets: %v", err)
+	}
+	// Copy buttons may write the clipboard, and the viewer's paste goes through it.
+	// setPermission, not grantPermissions: that one denies every permission it
+	// doesn't list, so pages could no longer ask for notifications or location.
+	if _, err := h.cdp.Call(ctx, "", "Browser.setPermission", map[string]any{"permission": map[string]any{"name": "clipboard-write"}, "setting": "granted"}); err != nil {
+		log.Printf("clipboard permission: %v", err)
+	}
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+		<-sig
+		// Close Chromium properly: a killed one loses its last cookie writes,
+		// such as a login made seconds before.
+		stopping.Store(true)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = h.cdp.Call(ctx, "", "Browser.close", nil)
+		<-ctx.Done()
+		os.Exit(0)
+	}()
+	// Attach the agent-browser daemon to the same Chromium.
+	h.restoreTabs(ctx, saved)
+	warmUp := []string{"get", "url"}
+	// A daemon left from before a restart holds a dead connection, and waits
+	// it out for 15 s on its next command.
+	_ = exec.Command("pkill", "-x", "agent-browser").Run()
+	go func() {
+		if out, err := h.runAgent(ctx, warmUp); err != nil {
+			log.Printf("agent-browser warm-up failed: %v\n%s", err, out)
+		}
+	}()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v/cdp", h.auth(serveHTML(viewerHTML)))
+	mux.HandleFunc("GET /ws/cdp", h.auth(h.handleViewer))
+	h.startDownloads(ctx)
+	mux.HandleFunc("GET /download/{guid}", h.auth(h.handleDownload))
+	mux.HandleFunc("POST /upload", h.auth(h.handleUpload))
+	mux.HandleFunc("POST /agent", h.auth(h.handleAgent))
+	mux.HandleFunc("POST /control/release", h.auth(func(w http.ResponseWriter, r *http.Request) {
+		h.ctl.release()
+		h.broadcastControl()
+	}))
+	mux.HandleFunc("GET /stats", h.auth(func(w http.ResponseWriter, r *http.Request) {
+		var vs []map[string]any
+		h.eachViewer(func(v *viewer) {
+			v.mu.Lock()
+			vs = append(vs, map[string]any{"target": v.targetID, "framesIn": v.framesIn, "seq": v.seq, "ackSeq": v.ackSeq, "pending": v.latest != nil, "scrolling": v.scrolling, "window": v.maxFlight, "minRTTms": v.minRTT.Milliseconds(), "srttMs": v.srtt.Milliseconds(), "quality": v.quality, "pace": paceStats(v.pace)})
+			v.mu.Unlock()
+		})
+		_ = json.NewEncoder(w).Encode(map[string]any{"bytesOut": h.bytesOut.Load(), "frames": h.frames.Load(), "owner": h.ctl.owner(), "viewers": vs, "tabs": h.tabList()})
+	}))
+	log.Printf("listening on %s", *addr)
+	log.Fatal(http.ListenAndServe(*addr, mux))
+}
+
+func serveHTML(b []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(b)
+	}
+}
+
+func (h *host) auth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		got := r.URL.Query().Get("token")
+		if got == "" {
+			got = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		}
+		if subtle.ConstantTimeCompare([]byte(got), []byte(h.token)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func launchChrome(ctx context.Context, bin string, port int, dsf float64) (string, error) {
+	// Scrollbars stay visible for the person watching. Sites treat a
+	// "HeadlessChrome" user agent as a bot (Google serves a degraded page), so
+	// the browser reports the Chrome it is.
+	args := []string{
+		"--headless=new", "--user-data-dir=/tmp/rb-profile", "--no-sandbox", "--disable-dev-shm-usage", "--no-first-run",
+		"--no-default-browser-check", "--mute-audio", "--window-size=1280,800", "--user-agent=" + chromeUserAgent(bin), "about:blank",
+		// Fullscreen resizes the window to the screen, 800x600 by default in
+		// headless: the stream then showed a shrunken page. A screen the
+		// window's size keeps the window, and the page's emulated size, as is.
+	}
+	args = append(args, fmt.Sprintf("--screen-info={0,0 %dx%d}", int(1280*dsf), int(800*dsf))) // device pixels
+	if dsf != 1 {
+		args = append(args, fmt.Sprintf("--force-device-scale-factor=%g", dsf))
+	}
+	// The person's language and light or dark mode (RB_TZ is the time zone, in
+	// chromeEnv): pages format dates and pick themes for them, not for a server.
+	if l := os.Getenv("RB_LANG"); l != "" {
+		args = append(args, "--lang="+l, "--accept-lang="+l)
+	}
+	if os.Getenv("RB_SCHEME") == "dark" {
+		args = append(args, "--force-dark-mode")
+	}
+	return launchChromeArgs(ctx, bin, port, args)
+}
+
+// chromeEnv is Chromium's environment. Without a UTF-8 locale it cannot name
+// files outside ASCII: uploads and downloads called "résumé.pdf" fail.
+func chromeEnv() []string {
+	env := os.Environ()
+	if os.Getenv("LANG") == "" {
+		env = append(env, "LANG=C.UTF-8")
+	}
+	if tz := os.Getenv("RB_TZ"); tz != "" {
+		env = append(env, "TZ="+tz)
+	}
+	return env
+}
+
+// chromeUserAgent is Chrome's own reduced Linux user agent for this build's major version.
+func chromeUserAgent(bin string) string {
+	major := "141"
+	if out, err := exec.Command(bin, "--version").Output(); err == nil {
+		if m := regexp.MustCompile(`(\d+)\.\d+\.\d+`).FindSubmatch(out); m != nil {
+			major = string(m[1])
+		}
+	}
+	return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36"
+}
+
+// launchChromeArgs starts Chromium with loopback-only CDP and waits for it.
+func launchChromeArgs(ctx context.Context, bin string, port int, args []string) (string, error) {
+	args = append([]string{"--remote-debugging-address=127.0.0.1", fmt.Sprintf("--remote-debugging-port=%d", port)}, args...)
+	if os.Getenv("RB_CHROME_LOG") != "" {
+		args = append([]string{"--enable-logging=stderr", "--v=0", "--vmodule=*desktop*=1,*screen*=1,*capture*=1,*x11*=1"}, args...)
+	}
+	cmd := exec.Command(bin, args...)
+	cmd.Env = chromeEnv()
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if os.Getenv("RB_CHROME_LOG") != "" {
+		if f, err := os.Create(fmt.Sprintf("/tmp/chrome-%d.log", port)); err == nil {
+			cmd.Stdout, cmd.Stderr = f, f
+		}
+	}
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	go func() {
+		_ = cmd.Wait()
+		if stopping.Load() {
+			os.Exit(0)
+		}
+		// Chromium crashed or was killed (OOM). Start over with the same
+		// profile; the new process reopens the saved tabs and viewers reconnect.
+		// ponytail: restarts the whole host; inside AO's daemon, restart only the browser.
+		log.Print("chromium exited; restarting")
+		time.Sleep(2 * time.Second) // no tight loop if it dies at launch
+		self, err := os.Executable()
+		if err == nil {
+			err = syscall.Exec(self, os.Args, os.Environ())
+		}
+		log.Fatalf("restart: %v", err)
+	}()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/json/version", port))
+		if err == nil {
+			var v struct {
+				URL string `json:"webSocketDebuggerUrl"`
+			}
+			err = json.NewDecoder(resp.Body).Decode(&v)
+			resp.Body.Close()
+			if err == nil && v.URL != "" {
+				return v.URL, nil
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return "", fmt.Errorf("no CDP endpoint on port %d", port)
+}
+
+// trackTargets keeps the page-tab list current for every viewer.
+func (h *host) trackTargets(ctx context.Context) error {
+	h.cdp.On(func(m cdpMsg) {
+		if m.SessionID != "" {
+			return
+		}
+		switch m.Method {
+		case "Target.targetCreated", "Target.targetInfoChanged":
+			var p struct {
+				TargetInfo struct {
+					TargetID, Type, URL, Title string
+					OpenerID                   string `json:"openerId"`
+				} `json:"targetInfo"`
+			}
+			if json.Unmarshal(m.Params, &p) != nil || p.TargetInfo.Type != "page" {
+				return
+			}
+			ti := p.TargetInfo
+			h.tabsMu.Lock()
+			created := h.tabs[ti.TargetID] == nil
+			if created {
+				h.tabs[ti.TargetID] = &tab{ID: ti.TargetID}
+				h.order = append(h.order, ti.TargetID)
+				if ti.OpenerID != "" {
+					h.openers[ti.TargetID] = ti.OpenerID
+				}
+				go h.holdLocale(ti.TargetID)
+			}
+			h.tabs[ti.TargetID].URL, h.tabs[ti.TargetID].Title = ti.URL, ti.Title
+			h.tabsMu.Unlock()
+			h.broadcastTabs(createdID(created, ti.TargetID))
+		case "Target.targetDestroyed":
+			var p struct{ TargetID string }
+			if json.Unmarshal(m.Params, &p) != nil {
+				return
+			}
+			h.tabsMu.Lock()
+			delete(h.tabs, p.TargetID)
+			for id := range h.openers { // keep the closed tab's: its viewers go back to its opener
+				if id != p.TargetID && h.tabs[id] == nil {
+					delete(h.openers, id)
+				}
+			}
+			for i, id := range h.order {
+				if id == p.TargetID {
+					h.order = append(h.order[:i:i], h.order[i+1:]...)
+					break
+				}
+			}
+			h.tabsMu.Unlock()
+			h.broadcastTabs("")
+		}
+	})
+	_, err := h.cdp.Call(ctx, "", "Target.setDiscoverTargets", map[string]any{"discover": true})
+	go h.pollTitles(ctx)
+	return err
+}
+
+// pollTitles keeps tab titles current: Chrome sends no event when a page sets
+// document.title, so the tab picker showed URLs.
+// ponytail: a 2 s poll; a title shim in every page if picker lag matters.
+func (h *host) pollTitles(ctx context.Context) {
+	for range time.Tick(2 * time.Second) {
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		res, err := h.cdp.Call(cctx, "", "Target.getTargets", nil)
+		cancel()
+		var got struct {
+			TargetInfos []struct{ TargetID, Type, Title string } `json:"targetInfos"`
+		}
+		if err != nil || json.Unmarshal(res, &got) != nil {
+			continue
+		}
+		changed := false
+		h.tabsMu.Lock()
+		for _, ti := range got.TargetInfos {
+			if t := h.tabs[ti.TargetID]; t != nil && ti.Type == "page" && t.Title != ti.Title {
+				t.Title, changed = ti.Title, true
+			}
+		}
+		h.tabsMu.Unlock()
+		if changed {
+			h.broadcastTabs("")
+		}
+	}
+}
+
+func createdID(created bool, id string) string {
+	if created {
+		return id
+	}
+	return ""
+}
+
+func (h *host) tabList() []tab {
+	h.tabsMu.Lock()
+	defer h.tabsMu.Unlock()
+	out := make([]tab, 0, len(h.order))
+	for _, id := range h.order {
+		out = append(out, *h.tabs[id])
+	}
+	return out
+}
+
+func (h *host) newestTab() string {
+	h.tabsMu.Lock()
+	defer h.tabsMu.Unlock()
+	if len(h.order) == 0 {
+		return ""
+	}
+	return h.order[len(h.order)-1]
+}
+
+func (h *host) hasTab(id string) bool {
+	h.tabsMu.Lock()
+	defer h.tabsMu.Unlock()
+	return h.tabs[id] != nil
+}
+
+// openerOf is the open tab that opened target (a popup's opener), if any.
+func (h *host) openerOf(target string) string {
+	h.tabsMu.Lock()
+	defer h.tabsMu.Unlock()
+	if o := h.openers[target]; h.tabs[o] != nil {
+		return o
+	}
+	return ""
+}
+
+// holdLocale gives a tab the person's locale (RB_LANG): this Chromium ships
+// only en-US, so pages formatted dates and numbers US-style (10/13/2026,
+// 1,234,567). An override lasts while the session that set it is attached,
+// so this one stays attached until the tab closes.
+// ponytail: cross-site iframes keep en-US; hold their sessions too if it matters.
+func (h *host) holdLocale(target string) {
+	loc := os.Getenv("RB_LANG")
+	if loc == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := h.cdp.Call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": target, "flatten": true})
+	var a struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err != nil || json.Unmarshal(res, &a) != nil {
+		return
+	}
+	if _, err := h.cdp.Call(ctx, a.SessionID, "Emulation.setLocaleOverride", map[string]any{"locale": loc}); err != nil {
+		log.Printf("locale %s: %v", loc, err)
+	}
+}
+
+// agentTab is the tab the agent last worked in, else the newest: a person
+// opening the view wants to see what the agent is doing.
+// ponytail: reads agent-browser's own state file; rbhost could track the target per command instead.
+// waitTab reports whether tab id exists, waiting up to d for it to appear.
+func (h *host) waitTab(id string, d time.Duration) bool {
+	for end := time.Now().Add(d); !h.hasTab(id); time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(end) {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *host) agentTab() string {
+	home, _ := os.UserHomeDir()
+	var st struct {
+		TargetID string `json:"targetId"`
+	}
+	if b, err := os.ReadFile(filepath.Join(home, ".agent-browser", "poc.target")); err == nil && json.Unmarshal(b, &st) == nil {
+		h.tabsMu.Lock()
+		alive := h.tabs[st.TargetID] != nil
+		h.tabsMu.Unlock()
+		if alive {
+			return st.TargetID
+		}
+	}
+	return h.newestTab()
+}
+
+const uploadRoot = "/tmp/rb-upload"
+
+var uploadDir = regexp.MustCompile(`^[a-z0-9]{8,40}$`)
+
+// uploadPath is where an uploaded file lives: name may be a folder-relative
+// path (a picked folder keeps its tree), never one that leaves the folder.
+func uploadPath(dir, name string) (string, bool) {
+	if !uploadDir.MatchString(dir) || !filepath.IsLocal(name) {
+		return "", false
+	}
+	return filepath.Join(uploadRoot, dir, name), true
+}
+
+// handleUpload stores one file the person picked or dropped. Files stream
+// over HTTP, not inline on the viewer socket: no base64, no size cap (a 50 MB
+// file used to overrun the socket's read limit and drop the connection).
+// ponytail: uploads stay in /tmp until the sandbox goes; delete after setFileInputFiles if disk matters.
+func (h *host) handleUpload(w http.ResponseWriter, r *http.Request) {
+	p, ok := uploadPath(r.URL.Query().Get("dir"), r.URL.Query().Get("name"))
+	if !ok {
+		http.Error(w, "bad upload name", http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	f, err := os.Create(p)
+	if err == nil {
+		_, err = io.Copy(f, r.Body)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		_ = os.Remove(p)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (h *host) viewersOf(target string) []*viewer {
+	var vs []*viewer
+	h.eachViewer(func(v *viewer) {
+		if v.target() == target {
+			vs = append(vs, v)
+		}
+	})
+	return vs
+}
+
+func (h *host) eachViewer(fn func(*viewer)) {
+	h.viewMu.Lock()
+	vs := make([]*viewer, 0, len(h.viewers))
+	for v := range h.viewers {
+		vs = append(vs, v)
+	}
+	h.viewMu.Unlock()
+	for _, v := range vs {
+		fn(v)
+	}
+}
+
+func (h *host) broadcastTabs(newTab string) {
+	tabs := h.tabList()
+	h.eachViewer(func(v *viewer) { v.onTabs(tabs, newTab) })
+	saveTabs(tabs)
+}
+
+// tabsFile lists the open tabs' URLs, so a restarted Chromium can reopen them.
+const tabsFile = "/tmp/rb-profile/rb-tabs.json"
+
+// stopping is set on shutdown: Chromium exiting is then expected, and the
+// tabs it closes on the way out stay saved.
+var stopping atomic.Bool
+
+func saveTabs(tabs []tab) {
+	if stopping.Load() {
+		return
+	}
+	urls := []string{}
+	for _, t := range tabs {
+		if strings.HasPrefix(t.URL, "http:") || strings.HasPrefix(t.URL, "https:") || strings.HasPrefix(t.URL, "file:") {
+			urls = append(urls, t.URL)
+		}
+	}
+	b, _ := json.Marshal(urls)
+	if os.WriteFile(tabsFile+".tmp", b, 0o600) == nil {
+		_ = os.Rename(tabsFile+".tmp", tabsFile)
+	}
+}
+
+func loadTabs() []string {
+	var urls []string
+	if b, err := os.ReadFile(tabsFile); err == nil {
+		_ = json.Unmarshal(b, &urls)
+	}
+	return urls
+}
+
+// restoreTabs reopens the tabs saved before Chromium last went away, in
+// place of the blank tab it starts with. It reports whether there were any.
+func (h *host) restoreTabs(ctx context.Context, urls []string) bool {
+	if len(urls) == 0 {
+		return false
+	}
+	res, err := h.cdp.Call(ctx, "", "Target.getTargets", nil)
+	var got struct {
+		TargetInfos []struct{ TargetID, Type, URL string } `json:"targetInfos"`
+	}
+	if err != nil || json.Unmarshal(res, &got) != nil {
+		return false
+	}
+	for _, u := range urls {
+		_, _ = h.cdp.Call(ctx, "", "Target.createTarget", map[string]any{"url": u})
+	}
+	for _, t := range got.TargetInfos {
+		if t.Type == "page" && t.URL == "about:blank" {
+			_, _ = h.cdp.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": t.TargetID})
+		}
+	}
+	log.Printf("reopened %d tabs", len(urls))
+	return true
+}
+
+func (h *host) broadcastControl() {
+	owner := h.ctl.owner()
+	h.eachViewer(func(v *viewer) { v.sendControl(owner) })
+}
+
+// runAgent runs one agent-browser command against the shared Chromium.
+func (h *host) runAgent(ctx context.Context, args []string) ([]byte, error) {
+	h.agentMu.Lock()
+	defer h.agentMu.Unlock()
+	full := append([]string{"--cdp", fmt.Sprint(h.cdpPort), "--session", "poc", "--no-auto-dialog"}, args...)
+	return exec.CommandContext(ctx, h.abPath, full...).CombinedOutput()
+}
+
+func (h *host) handleAgent(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Args  []string          `json:"args"`
+		Files map[string][]byte `json:"files"` // the caller's files named in Args (upload)
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Args) == 0 {
+		http.Error(w, `{"error":"args required"}`, http.StatusBadRequest)
+		return
+	}
+	// Refuse at once what would only block or misfire: an open dialog stops
+	// every other command for up to a minute, and refs from before the person
+	// used the page may now point at something else (a different page's button).
+	if d := h.openDialog(); d != "" && req.Args[0] != "dialog" {
+		agentRefused(w, "A dialog is open in the page ("+d+"). Answer it with `dialog accept` or `dialog dismiss`, or wait for the person to answer it.")
+		return
+	}
+	if usesRef(req.Args) && h.ctl.editSince(h.ctl.snapshotAt()) {
+		agentRefused(w, "The person used the page after your last snapshot, so its element refs may point at something else now. Run `snapshot` again and use the new refs.")
+		return
+	}
+	h.ctl.mu.Lock()
+	h.ctl.agentBusy = true
+	h.ctl.mu.Unlock()
+	h.broadcastControl()
+	start := time.Now()
+	// The agent may run on another machine: put its files where agent-browser
+	// looks for them, at the same paths.
+	for p, b := range req.Files {
+		if filepath.IsAbs(p) && os.MkdirAll(filepath.Dir(p), 0o755) == nil {
+			_ = os.WriteFile(p, b, 0o644)
+		}
+	}
+	ran := time.Now()
+	keepFocus := h.ctl.typing(3 * time.Second)
+	if keepFocus {
+		h.eachViewer(func(v *viewer) { _, _ = v.call("Runtime.evaluate", map[string]any{"expression": saveFocus}) })
+	}
+	out, err := h.runAgent(r.Context(), req.Args)
+	if err == nil && req.Args[0] == "snapshot" {
+		h.ctl.mu.Lock()
+		h.ctl.snapshot = ran
+		h.ctl.mu.Unlock()
+	}
+	if keepFocus && !h.ctl.pressSince(ran) { // a click meanwhile put the caret where the person wants it
+		h.eachViewer(func(v *viewer) { _, _ = v.call("Runtime.evaluate", map[string]any{"expression": restoreFocus}) })
+	}
+	// agent-browser can emulate its own viewport on the shared page; the
+	// stream owns it, so each tab gets back the size of the view that set it.
+	h.viewMu.Lock()
+	for _, v := range h.sizer {
+		go v.reassert()
+	}
+	h.viewMu.Unlock()
+	h.ctl.mu.Lock()
+	h.ctl.agentBusy = false
+	h.ctl.mu.Unlock()
+	h.broadcastControl()
+	resp := map[string]any{"output": string(out), "ms": time.Since(start).Milliseconds(), "files": written(append(req.Args, absPath.FindAllString(string(out), -1)...), ran)}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+var absPath = regexp.MustCompile(`/[^\s'"]+`)
+
+// written returns the files among paths that changed since start (a
+// screenshot, pdf or download), for an agent on another machine.
+func written(paths []string, start time.Time) map[string][]byte {
+	files := map[string][]byte{}
+	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			continue
+		}
+		st, err := os.Stat(p)
+		if err != nil || !st.Mode().IsRegular() || st.ModTime().Before(start) || st.Size() > 64<<20 {
+			continue
+		}
+		if b, err := os.ReadFile(p); err == nil {
+			files[p] = b
+		}
+	}
+	return files
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}

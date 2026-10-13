@@ -1547,6 +1547,55 @@ describe("useBrowserView", () => {
 		expect(browser.navigate).not.toHaveBeenCalledWith(expect.objectContaining({ url: "http://localhost:5173/" }));
 	});
 
+	describe("agent browser tab", () => {
+		const viewId = "42:remote:box-a:ao-1";
+		const agentUrl = "https://ao-preview-11112222333344445555666677778888.localhost:47663/v/cdp?embed=1&sq=70&ss=1";
+		const appPreview = "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:47663/";
+		const remote = { sessionId: "remote:box-a:ao-1", origin: { hostId: "box-a", sessionId: "ao-1", proxyBase: "http://127.0.0.1:4000/token" }, active: true, poppedOut: false };
+
+		it("asks main to show a remote session's agent browser", async () => {
+			const browser = setupBridge();
+			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue(agentUrl);
+			renderHook(() => useBrowserView(remote));
+			await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: agentUrl }));
+			expect(browser.navigate).not.toHaveBeenCalled();
+		});
+
+		it("opens a preview beside the agent tab, never over it", async () => {
+			const browser = setupBridge();
+			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+			vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(appPreview);
+			// Before its viewer reports, an agent tab is still empty.
+			const agentTab = { id: "t1", url: "", title: "", active: true, remote: { tabId: "" } };
+			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "t1", tabs: [agentTab] });
+			renderHook(() => useBrowserView({ ...remote, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
+			await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: appPreview }));
+			expect(browser.navigate).not.toHaveBeenCalled();
+		});
+
+		it("updates the preview tab rather than the agent tab the person is on", async () => {
+			const browser = setupBridge();
+			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+			vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(appPreview);
+			const agentTab = { id: "a1", url: "https://en.wikipedia.org/wiki/Starfish", title: "Starfish", active: true, remote: { tabId: "R1" } };
+			const previewTab = { id: "t1", url: "https://ao-preview-ffffffffffffffffffffffffffffffff.localhost:47663/", title: "Daybook", active: false };
+			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "a1", tabs: [previewTab, agentTab] });
+			renderHook(() => useBrowserView({ ...remote, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
+			await waitFor(() => expect(browser.navigate).toHaveBeenCalledWith({ viewId, url: appPreview }));
+			expect(browser.selectTab).toHaveBeenCalledWith({ viewId, tabId: "t1" });
+			expect(browser.openTab).not.toHaveBeenCalled();
+		});
+
+		it("leaves the panel alone when the host has no agent browser", async () => {
+			const browser = setupBridge();
+			const lookup = vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+			renderHook(() => useBrowserView(remote));
+			await waitFor(() => expect(lookup).toHaveBeenCalledWith("box-a", "ao-1"));
+			expect(browser.navigate).not.toHaveBeenCalled();
+			expect(browser.openTab).not.toHaveBeenCalled();
+		});
+	});
+
 	it("keeps the user's manual navigation on session switch-back and only re-navigates on a new preview", async () => {
 		// Regression for #3536: the native view survives a session switch in the
 		// main process with the user's last URL (e.g. google.com), but the preview

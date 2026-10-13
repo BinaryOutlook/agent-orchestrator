@@ -930,6 +930,8 @@ describe("browser scrollbar styling", () => {
 	});
 });
 
+const AGENT_VIEWER = "https://ao-preview-agent.localhost:47663/v/cdp";
+
 function setupTabHost(
 	browserProfileStore?: BrowserProfileStore,
 	failViewConstruction = false,
@@ -952,6 +954,7 @@ function setupTabHost(
 			openWindow: (url: string) => void;
 			close: ReturnType<typeof vi.fn>;
 			emitConsoleMessage: (level: number, message: string, line?: number, sourceId?: string) => void;
+			executeJavaScript: ReturnType<typeof vi.fn>;
 				session: {
 					fetch: ReturnType<typeof vi.fn>;
 					setPermissionCheckHandler: ReturnType<typeof vi.fn>;
@@ -1029,6 +1032,7 @@ function setupTabHost(
 				await loadURLHook?.(viewIndex, url);
 			}),
 			on: (event: string, listener: (...args: never[]) => void) => listeners.set(event, listener),
+			executeJavaScript: vi.fn(async (_script: string) => undefined),
 			reload: () => undefined,
 			send: vi.fn(),
 			setWindowOpenHandler: (
@@ -1125,6 +1129,7 @@ function setupTabHost(
 		annotatePreloadPath: "/preload.js",
 		rendererOrigin: "http://localhost:5173",
 		agentBrowserRuntime: runtime,
+		isAgentBrowserUrl: (url: string) => /^https:\/\/ao-preview-agent\.localhost:\d+\/v\/cdp/.test(url),
 		browserProfileStore,
 		browserHistoryStore,
 		clearBrowserProfileData,
@@ -3522,6 +3527,146 @@ describe("agent browser runtime", () => {
 
 		const after = (await invoke("browser:getTabs", viewId)) as { tabs: { id: string }[] };
 		expect(after.tabs.map((tab) => tab.id)).toEqual(["t1", "t2"]);
+	});
+
+	describe("agent browser tabs", () => {
+		const report = (over: Record<string, unknown> = {}) => "__ao_remote_tab__" + JSON.stringify({
+			tabId: "R1", url: "https://en.wikipedia.org/wiki/Starfish", title: "Starfish - Wikipedia", favicon: "", loading: false, back: true, fwd: false,
+			tabs: [{ id: "R1", title: "Starfish - Wikipedia", url: "https://en.wikipedia.org/wiki/Starfish" }],
+			...over,
+		});
+		const both = [{ id: "R1", title: "Starfish", url: "" }, { id: "R2", title: "GitHub", url: "https://github.com/" }];
+		const viewer = `${AGENT_VIEWER}?embed=1&sq=70&ss=1`;
+		// The sync runs off the reporting tab's own event.
+		const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+		type Tab = { id: string; url: string; title: string; active: boolean; remote?: { tabId: string } };
+		// A remote session's view: its first tab (t1) and the agent browser (a1, views[1]).
+		const openAgent = async () => {
+			const host = setupTabHost();
+			const { viewId } = (await host.invoke("browser:ensure", "sess-1")) as { viewId: string };
+			await host.invoke("browser:openTab", { viewId, url: viewer });
+			await settle();
+			const tabs = async () => ((await host.invoke("browser:getTabs", viewId)) as { tabs: Tab[] }).tabs;
+			return { ...host, viewId, tabs, agent: host.views[1].webContents };
+		};
+
+		it("shows and drives the agent browser page its viewer reports, like any tab", async () => {
+			const { invoke, agent, viewId, tabs } = await openAgent();
+			agent.emitConsoleMessage(0, report());
+			expect(agent.executeJavaScript).not.toHaveBeenCalledWith("window.__rbHost && window.__rbHost.show(true)");
+			// Only the tab in front streams: Chrome paints only the agent's front page.
+			await invoke("browser:selectTab", { viewId, tabId: "a1" });
+			expect(agent.executeJavaScript).toHaveBeenCalledWith("window.__rbHost && window.__rbHost.show(true)");
+			agent.emitConsoleMessage(0, report({ shown: true }));
+			expect((await tabs())[1]).toMatchObject({ id: "a1", url: "https://en.wikipedia.org/wiki/Starfish", title: "Starfish - Wikipedia", remote: { tabId: "R1" } });
+			expect(await invoke("browser:goBack", viewId)).toMatchObject({ url: "https://en.wikipedia.org/wiki/Starfish", canGoBack: true, canGoForward: false });
+			expect(agent.executeJavaScript).toHaveBeenCalledWith("window.__rbHost && window.__rbHost.back()");
+			await invoke("browser:navigate", { viewId, url: "https://example.com/" });
+			expect(agent.executeJavaScript).toHaveBeenCalledWith('window.__rbHost && window.__rbHost.navigate("https://example.com/")');
+			expect(agent.loadURL).not.toHaveBeenCalledWith("https://example.com/");
+			await invoke("browser:selectTab", { viewId, tabId: "t1" });
+			expect(agent.executeJavaScript).toHaveBeenCalledWith("window.__rbHost && window.__rbHost.show(false)");
+		});
+
+		it("believes reports only from AO's agent-browser viewer", async () => {
+			const { invoke, views } = setupTabHost();
+			const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+			await invoke("browser:navigate", { viewId, url: "https://evil.example/v/cdp" });
+			views[0].webContents.emitConsoleMessage(0, report({ url: "https://bank.example/", title: "Your bank", tabs: both }));
+			await settle();
+			const { tabs } = (await invoke("browser:getTabs", viewId)) as { tabs: Tab[] };
+			expect(tabs).toHaveLength(1);
+			expect(tabs[0]).toMatchObject({ url: "https://evil.example/v/cdp" });
+			expect(tabs[0].remote).toBeUndefined();
+		});
+
+		it("opens the agent browser once, behind the page in use", async () => {
+			const { invoke, views, viewId, tabs } = await openAgent();
+			await invoke("browser:openTab", { viewId, url: viewer });
+			await settle();
+			expect(await tabs()).toMatchObject([{ id: "t1", active: true }, { id: "a1", active: false, remote: { tabId: "" } }]);
+			expect(views).toHaveLength(2);
+			expect(views[1].webContents.loadURL).toHaveBeenCalledWith(viewer);
+		});
+
+		it("gives each agent page exactly one tab, however many viewers report", async () => {
+			const { agent, views, tabs } = await openAgent();
+			agent.emitConsoleMessage(0, report({ tabs: both }));
+			agent.emitConsoleMessage(0, report({ tabs: both, loading: true }));
+			await settle();
+			views[2].webContents.emitConsoleMessage(0, report({ tabId: "R2", tabs: both }));
+			await settle();
+			expect(await tabs()).toMatchObject([{ id: "t1", active: true }, { id: "a1", remote: { tabId: "R1" } }, { id: "a2", active: false, remote: { tabId: "R2" } }]);
+			expect(views[2].webContents.loadURL).toHaveBeenCalledWith(`${viewer}&tab=R2`);
+			expect(views).toHaveLength(3);
+		});
+
+		it("switches to a tab the agent opened from the tab in use", async () => {
+			const { invoke, agent, viewId, tabs } = await openAgent();
+			await invoke("browser:selectTab", { viewId, tabId: "a1" });
+			agent.emitConsoleMessage(0, report({ tabs: both, follow: "R2" }));
+			await settle();
+			expect(await tabs()).toMatchObject([{ id: "t1" }, { id: "a1", active: false }, { id: "a2", active: true }]);
+		});
+
+		it("closes a tab whose page closed, back to its opener, but keeps the last one", async () => {
+			const { invoke, agent, views, viewId, tabs } = await openAgent();
+			agent.emitConsoleMessage(0, report({ tabs: both }));
+			await settle();
+			await invoke("browser:selectTab", { viewId, tabId: "a2" });
+			views[2].webContents.emitConsoleMessage(0, report({ tabId: "R2", closed: { next: "R1" }, tabs: both.slice(0, 1) }));
+			await settle();
+			expect(await tabs()).toMatchObject([{ id: "t1" }, { id: "a1", active: true }]);
+			agent.emitConsoleMessage(0, report({ closed: { next: "" }, tabs: [] }));
+			await settle();
+			expect(await tabs()).toMatchObject([{ id: "t1" }, { id: "a1", remote: { tabId: "R1" } }]);
+		});
+
+		it("closes the page in the agent browser when the person closes its tab, and keeps it closed", async () => {
+			const { invoke, agent, views, viewId, tabs } = await openAgent();
+			agent.emitConsoleMessage(0, report({ tabs: both }));
+			await settle();
+			views[2].webContents.emitConsoleMessage(0, report({ tabId: "R2", tabs: both }));
+			await invoke("browser:closeTab", { viewId, tabId: "a1" });
+			expect(agent.executeJavaScript).toHaveBeenCalledWith("window.__rbHost && window.__rbHost.close()");
+			// The other viewer has not heard yet that R1 closed.
+			views[2].webContents.emitConsoleMessage(0, report({ tabId: "R2", tabs: both }));
+			await settle();
+			expect(await tabs()).toMatchObject([{ id: "t1" }, { id: "a2", remote: { tabId: "R2" } }]);
+		});
+
+		it("keeps agent tabs apart from local browser automation", async () => {
+			const { invoke, runtime, agent, viewId, tabs } = await openAgent();
+			agent.emitConsoleMessage(0, report({ tabs: both }));
+			await settle();
+			// agent-browser numbers the tabs it sees t1, t2, ...: AO's must match.
+			await invoke("browser:openTab", { viewId, url: "https://example.com/" });
+			expect((await tabs()).map((tab) => tab.id)).toEqual(["t1", "a1", "a2", "t2"]);
+			await invoke("browser:selectTab", { viewId, tabId: "a1" });
+			expect(runtime.runAction).not.toHaveBeenCalledWith(expect.anything(), "tab-select", { tabId: "a1" }, expect.anything());
+			const [, , , targets] = vi.mocked(runtime.runAction).mock.calls.at(-1)!;
+			expect((targets as { listTargets: () => Array<{ id: string }> }).listTargets().map((target) => target.id)).toEqual(["t1", "t2"]);
+		});
+
+		it("moves agent tabs to a reconnected host's new origin", async () => {
+			const { invoke, agent, viewId } = await openAgent();
+			agent.emitConsoleMessage(0, report());
+			await settle();
+			const moved = "https://ao-preview-agent.localhost:51000/v/cdp?embed=1&sq=70&ss=1";
+			await invoke("browser:openTab", { viewId, url: moved });
+			await settle();
+			expect(agent.loadURL).toHaveBeenLastCalledWith(`${moved}&tab=R1`);
+		});
+
+		it("never loads another page in an agent tab", async () => {
+			const { invoke, agent, viewId, tabs } = await openAgent();
+			await invoke("browser:selectTab", { viewId, tabId: "a1" });
+			// An address typed before its viewer runs has no page to go to yet.
+			await invoke("browser:navigate", { viewId, url: "https://example.com/" });
+			await invoke("browser:clear", viewId);
+			expect(agent.getURL()).toBe(viewer);
+			expect(await tabs()).toHaveLength(2);
+		});
 	});
 
 	it("registers a session-scoped webRequest watcher for failed requests exactly once, not per tab", async () => {

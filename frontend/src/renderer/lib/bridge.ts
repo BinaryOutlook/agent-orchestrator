@@ -310,6 +310,7 @@ export const aoBridge: AoBridge =
 			disconnect: async () => undefined,
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+			agentBrowserUrl: async () => "",
 		},
 		cloud: {
 			getSession: async () => null,
