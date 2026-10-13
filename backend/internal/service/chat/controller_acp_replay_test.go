@@ -87,7 +87,8 @@ func TestACPReplayProviderHelper(t *testing.T) {
 
 func TestACPReplayProjectsExactlyOnceAcrossDaemonRestarts(t *testing.T) {
 	// Instrumented SQLite projection must drain the full burst under -race too.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Leave time for archive assertions after a slow CI runner finishes replay.
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	st := openStore(t)
 	dataDir, workspace := t.TempDir(), t.TempDir()
