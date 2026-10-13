@@ -31,12 +31,12 @@ func TestPromptSuggestionUsesIsolatedBoundedContextWithoutChangingHistory(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.svc.SetPromptSuggestionRunner(func(ctx context.Context, id domain.SessionID, systemPrompt, prompt string) (string, error) {
+	h.svc.SetPromptSuggestionRunner(func(ctx context.Context, id domain.SessionID, sourceTurnID, systemPrompt, prompt string) (string, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok || time.Until(deadline) > 30*time.Second {
 			t.Fatal("suggestion runner has no 30-second deadline")
 		}
-		if id != testSession || !strings.Contains(systemPrompt, "Do not answer the prompt, use tools") ||
+		if id != testSession || sourceTurnID != turnID || !strings.Contains(systemPrompt, "Do not answer the prompt, use tools") ||
 			prompt != systemPrompt+"\n\nRecent transcript:\nuser: Fix the error\n\nassistant: reply to Fix the error\n\n" {
 			t.Fatalf("runner context: id=%s system=%q prompt=%q", id, systemPrompt, prompt)
 		}
@@ -58,7 +58,7 @@ func TestPromptSuggestionRejectsUnavailableOrStaleContext(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			h := newHarnessWithConversation(t, newHistoryRecorder())
 			turnID := settledSuggestionTurn(t, h)
-			h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) {
+			h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) {
 				t.Fatal("provider was called for an unavailable suggestion")
 				return "", nil
 			})
@@ -114,7 +114,7 @@ func TestPromptSuggestionDiscardsResultWhenConversationChanges(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			h := newHarnessWithConversation(t, newHistoryRecorder())
 			turnID := settledSuggestionTurn(t, h)
-			h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _ string) (string, error) {
+			h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _, _ string) (string, error) {
 				switch scenario {
 				case "send":
 					_, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "I already chose", Origin: domain.MessageOriginHuman})
@@ -167,7 +167,7 @@ func TestPromptSuggestionDiscardsResultWhenConversationChanges(t *testing.T) {
 func TestPromptSuggestionSurvivesActivityOnlyUpdates(t *testing.T) {
 	h := newHarness(t)
 	turnID := settledSuggestionTurn(t, h)
-	h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _ string) (string, error) {
+	h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _, _ string) (string, error) {
 		if err := h.st.UpsertActivity(ctx, h.ctrl.ConversationID(), "provider-turn-1", domain.ConversationActivity{
 			ID: "late-activity", ProviderItemID: "late-item", Kind: domain.ActivityKindUsage,
 			Status: domain.ActivityStatusCompleted, Summary: "Updated usage",
@@ -193,7 +193,7 @@ func TestPromptSuggestionReturnsEmptyForNoUsefulMalformedOrOversizedAnswer(t *te
 		"```json\n{\"prompt\":\"Run the tests.\"}\n```\nProvider failed.",
 		`{"prompt":"Run the tests."} trailing prose`,
 	} {
-		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) { return raw, nil })
+		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) { return raw, nil })
 		if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); err != nil || prompt != "" {
 			t.Fatalf("answer %q: prompt=%q err=%v", raw, prompt, err)
 		}
@@ -210,12 +210,12 @@ func TestPromptSuggestionAcceptsStructuredJSONAndSingleFences(t *testing.T) {
 		"```JSON\n{\"prompt\":\"Run the tests.\"}\n```",
 		"```\n{\"prompt\":\"Run the tests.\"}\n```",
 	} {
-		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) { return raw, nil })
+		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) { return raw, nil })
 		if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); err != nil || prompt != "Run the tests." {
 			t.Fatalf("answer %q: prompt=%q err=%v", raw, prompt, err)
 		}
 	}
-	h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) {
+	h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) {
 		return `{"prompt":"NONE"}`, nil
 	})
 	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); err != nil || prompt != "NONE" {
@@ -230,7 +230,7 @@ func TestPromptSuggestionOmitsExpectedOptionalRunnerFailures(t *testing.T) {
 		errors.New("provider unavailable"), errors.New("background task requested user interaction"),
 		errors.New("background task returned no text"), errors.New("session: harness install active"), context.DeadlineExceeded,
 	} {
-		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) { return "", runErr })
+		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) { return "", runErr })
 		if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); prompt != "" || err != nil {
 			t.Fatalf("optional error %v: prompt=%q err=%v", runErr, prompt, err)
 		}
@@ -242,7 +242,7 @@ func TestPromptSuggestionLimitsConcurrentProviderCallsAndHonorsCancellation(t *t
 	turnID := settledSuggestionTurn(t, h)
 	started := make(chan struct{}, 2)
 	var calls atomic.Int32
-	h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _ string) (string, error) {
+	h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _, _ string) (string, error) {
 		calls.Add(1)
 		started <- struct{}{}
 		<-ctx.Done()
@@ -273,7 +273,7 @@ func TestPromptSuggestionLimitsConcurrentProviderCallsAndHonorsCancellation(t *t
 			t.Fatalf("cancel error = %v", err)
 		}
 	}
-	h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string) (string, error) {
+	h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) {
 		return `{"prompt":"Run the tests."}`, nil
 	})
 	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); err != nil || prompt != "Run the tests." {
@@ -341,7 +341,7 @@ func TestPromptSuggestionReadsBoundedPagesAcrossActivityHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h.svc.SetPromptSuggestionRunner(func(_ context.Context, _ domain.SessionID, _, prompt string) (string, error) {
+	h.svc.SetPromptSuggestionRunner(func(_ context.Context, _ domain.SessionID, _, _, prompt string) (string, error) {
 		if strings.Count(prompt, "\nuser: ") != 4 || strings.Count(prompt, "\nassistant: ") != 4 || !strings.Contains(prompt, "user: Message 0") {
 			t.Fatalf("activity pages lost the last eight text messages: %q", prompt)
 		}
@@ -370,7 +370,7 @@ func TestPromptSuggestionRevalidatesWithCallerContextAndPreservesReadErrors(t *t
 				return suggestionPage(rows), err
 			})
 			turnID := settledSuggestionTurn(t, h)
-			h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _ string) (string, error) {
+			h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _, _ string) (string, error) {
 				runCalls++
 				if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 					t.Fatal("provider has no deadline")

@@ -83,3 +83,23 @@ func TestSideForkRecordsReturnedChildBeforeStarting(t *testing.T) {
 		t.Fatal("failed journal accepted child work")
 	}
 }
+
+func TestBackgroundForkIsEphemeralAndReadOnly(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("thread/fork", `{"thread":{"id":"suggestion-child"},"model":"test-model"}`)
+	conv, err := d.ForkIntoHost(t.Context(), "parent", "native-turn", ports.ChatStartConfig{WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto, Ephemeral: true, ReadOnly: true, DisableNetwork: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	var params map[string]any
+	if err := json.Unmarshal(srv.awaitFrame(func(f frame) bool { return f.Method == "thread/fork" }).Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params["ephemeral"] != true || params["sandbox"] != "read-only" || params["approvalPolicy"] != "never" {
+		t.Fatalf("fork policies=%+v", params)
+	}
+	if conv.(ports.ChatSandboxNetwork).SandboxAllowsNetwork("") {
+		t.Fatal("background inherited network access")
+	}
+}

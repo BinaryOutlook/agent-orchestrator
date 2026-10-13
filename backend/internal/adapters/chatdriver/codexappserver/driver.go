@@ -768,6 +768,9 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 		"sandbox":           sandbox,
 	}
 	params["lastTurnId"] = conv.nativeID(lastProviderTurnID)
+	if cfg.Ephemeral {
+		params["ephemeral"] = true
+	}
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}

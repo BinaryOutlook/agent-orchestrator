@@ -87,7 +87,7 @@ type Service struct {
 	wakeRuns           map[domain.SessionID]*wakeRun
 	backgroundWakes    map[domain.SessionID]bool
 
-	runPromptSuggestion   func(context.Context, domain.SessionID, string, string) (string, error)
+	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
 
 	mu               sync.RWMutex

@@ -607,14 +607,14 @@ func Run() error {
 	})
 	sessMgr = wiredSessMgr
 	if runner, ok := sessMgr.(interface {
-		RunBackgroundTask(context.Context, domain.SessionID, string, string) (string, error)
+		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
 	}); ok {
-		chatSvc.SetPromptSuggestionRunner(func(requestCtx context.Context, id domain.SessionID, systemPrompt, prompt string) (string, error) {
+		chatSvc.SetPromptSuggestionRunner(func(requestCtx context.Context, id domain.SessionID, turnID, systemPrompt, prompt string) (string, error) {
 			taskCtx, cancel := context.WithCancel(requestCtx)
 			stopOnShutdown := context.AfterFunc(ctx, cancel)
 			defer stopOnShutdown()
 			defer cancel()
-			return runner.RunBackgroundTask(taskCtx, id, systemPrompt, prompt)
+			return runner.RunPromptSuggestionTask(taskCtx, id, turnID, systemPrompt, prompt)
 		})
 	}
 	if fenced, ok := sessMgr.(interface{ SetPersistentHostReconcileDone(<-chan struct{}) }); ok {

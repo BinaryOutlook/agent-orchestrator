@@ -42,6 +42,10 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 		}
 	}()
 
+	return runBackgroundTurn(ctx, harness, conversation, prompt)
+}
+
+func runBackgroundTurn(ctx context.Context, harness domain.AgentHarness, conversation ports.ChatConversation, prompt string) (string, error) {
 	settings, err := backgroundTaskSettings(ctx, conversation)
 	if err != nil {
 		return "", fmt.Errorf("configure background %s task: %w", harness, err)
