@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
@@ -122,4 +124,40 @@ func TestUnrealIsolatedForkRemovesOnlyChildAfterHostFailure(t *testing.T) {
 	if err != nil || len(sessions) != 1 || sessions[0].ID != "parent" {
 		t.Fatalf("sessions after failure: %v %v", sessions, err)
 	}
+}
+
+func BenchmarkNativeForkBoundary(b *testing.B) {
+	dataDir := b.TempDir()
+	store, err := localfile.New(nativeSessionDirectory(dataDir))
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := store.Create(b.Context(), "parent"); err != nil {
+		b.Fatal(err)
+	}
+	if err := store.AppendInput(b.Context(), "parent", inbox.Input{ID: "request", Kind: inbox.InputExternal}); err != nil {
+		b.Fatal(err)
+	}
+	if err := store.AppendTurn(b.Context(), "parent", session.Turn{ID: "native", Type: session.TurnRegular}); err != nil {
+		b.Fatal(err)
+	}
+	if err := store.AppendModelResponse(b.Context(), "parent", sessionstore.ModelResponse{TurnID: "native", Response: llm.Response{ID: "large", Output: []llm.Item{{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleAssistant, Text: strings.Repeat("x", 2*1024*1024)}}}}}); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("identifiers", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := nativeForkTurn(b.Context(), dataDir, "parent", "request"); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("full_SDK_history", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := store.Items(b.Context(), "parent", 0, math.MaxInt); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

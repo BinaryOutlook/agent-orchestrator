@@ -390,6 +390,14 @@ func (m *memorySideStore) SetSideReady(_ context.Context, id, generation, provid
 		s.UpdatedAt = now
 	})
 }
+func (m *memorySideStore) SetSideReconstructed(_ context.Context, id, generation string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.updateSide(id, generation, func(side *domain.SideConversation) {
+		side.ContextMode = "reconstructed"
+		side.UpdatedAt = now
+	})
+}
 func (m *memorySideStore) RegisterSideFork(_ context.Context, id, generation, providerID string, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -408,7 +416,7 @@ func (m *memorySideStore) SetSideFailed(_ context.Context, id, generation, messa
 		}
 		s.State = "failed"
 		s.ErrorMessage = message
-		s.RecreateRequired = message == ErrSidePolicyRecreate.Error()
+		s.RecreateRequired = strings.HasPrefix(message, ErrSidePolicyRecreate.Error())
 		s.UpdatedAt = now
 	})
 }

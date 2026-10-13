@@ -3,16 +3,18 @@
 package unrealagent
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore/localfile"
@@ -33,7 +35,18 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 	if err := d.validateLaunchAuth(ctx, cfg.Env); err != nil {
 		return nil, err
 	}
+	var release func()
+	if cfg.AcquireForkSource != nil {
+		var err error
+		release, err = cfg.AcquireForkSource(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 	id, err := forkNativeSession(ctx, cfg.DataDir, sourceID, lastTurnID)
+	if release != nil {
+		release()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -83,46 +96,76 @@ func forkNativeSession(ctx context.Context, dataDir, sourceID, anchor string) (s
 	if err != nil {
 		return "", err
 	}
-	page, err := store.Items(ctx, session.ID(sourceID), 0, math.MaxInt)
+	nativeTurn, err := nativeForkTurn(ctx, dataDir, sourceID, anchor)
 	if err != nil {
 		return "", fmt.Errorf("read Unreal Agent fork source: %w", err)
-	}
-	// AO identifies a request by its external input ID. One request can span
-	// several native turns (tools or compaction); copy through its final turn.
-	var nativeTurn session.TurnID
-	found := anchor == ""
-	for _, item := range page.Items {
-		switch item.Kind {
-		case sessionstore.ItemInput:
-			input, ok := item.Data.(inbox.Input)
-			if !ok {
-				return "", fmt.Errorf("invalid Unreal Agent fork input")
-			}
-			if input.Kind == inbox.InputExternal && anchor != "" {
-				if found && string(input.ID) != anchor {
-					goto fork
-				}
-				found = string(input.ID) == anchor
-			}
-		case sessionstore.ItemTurn:
-			if found {
-				turn, ok := item.Data.(session.Turn)
-				if !ok {
-					return "", fmt.Errorf("invalid Unreal Agent fork turn")
-				}
-				nativeTurn = turn.ID
-			}
-		}
-	}
-fork:
-	if !found || nativeTurn == "" {
-		return "", fmt.Errorf("%w: Unreal Agent fork anchor is unavailable", ports.ErrChatCapabilityUnavailable)
 	}
 	id := uuid.NewString()
 	if _, err := store.Fork(ctx, session.ID(id), session.ID(sourceID), nativeTurn); err != nil {
 		return "", fmt.Errorf("fork Unreal Agent session: %w", err)
 	}
 	return id, nil
+}
+
+// Read only input/turn identifiers; the SDK validates and decodes the full log
+// once when writing the fork, including compaction and tool history.
+func nativeForkTurn(ctx context.Context, dataDir, sourceID, anchor string) (session.TurnID, error) {
+	if sourceID == "." || sourceID == ".." || strings.ContainsAny(sourceID, "/\\") {
+		return "", errors.New("invalid source session id")
+	}
+	file, err := os.Open(filepath.Join(nativeSessionDirectory(dataDir), sourceID+".session.jsonl"))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+	reader := bufio.NewReader(file)
+	// AO identifies a request by its external input ID. One request can span
+	// several native turns (tools or compaction); copy through its final turn.
+	var nativeTurn session.TurnID
+	found := anchor == ""
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		line, err := reader.ReadBytes('\n')
+		if errors.Is(err, io.EOF) {
+			break
+		} // Ignore uncommitted trailing records, as the SDK does.
+		if err != nil {
+			return "", err
+		}
+		var record struct {
+			Type string
+			Data struct {
+				Item struct {
+					Kind sessionstore.ItemKind
+					Data struct {
+						ID   string
+						Kind string
+					}
+				}
+			}
+		}
+		if err := json.Unmarshal(line, &record); err != nil {
+			return "", err
+		}
+		item := record.Data.Item
+		if record.Type != "item" {
+			continue
+		}
+		if item.Kind == sessionstore.ItemInput && item.Data.Kind == "external" && anchor != "" {
+			if found && item.Data.ID != anchor {
+				break
+			}
+			found = item.Data.ID == anchor
+		} else if item.Kind == sessionstore.ItemTurn && found {
+			nativeTurn = session.TurnID(item.Data.ID)
+		}
+	}
+	if !found || nativeTurn == "" {
+		return "", fmt.Errorf("%w: Unreal Agent fork anchor is unavailable", ports.ErrChatCapabilityUnavailable)
+	}
+	return nativeTurn, nil
 }
 
 func deleteNativeFork(ctx context.Context, dataDir, parentID, id string) error {

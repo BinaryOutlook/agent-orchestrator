@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func TestSideNativeCurrentUsesCapabilitiesAndIndependentHost(t *testing.T) {
 			h.conv.setCapabilities(caps)
 			h.source(t)
 			side := h.side(t, "native", true)
-			if side.ContextMode != "native" || side.NativeAnchorID != "" || side.SeedHistory != "" {
+			if side.ContextMode != "native" || side.NativeAnchorID != "" || side.SeedHistory == "" {
 				t.Fatalf("context mode: %+v", side)
 			}
 			h.driver.mu.Lock()
@@ -160,4 +161,181 @@ func TestSideCreateWakesHibernatedParentBeforeNativeFork(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("native side did not open after parent wake")
+}
+
+func TestSideCreateRetryDuringCurrentForkReturnsSameSide(t *testing.T) {
+	h := newSideWorkflow(t, "", domain.HarnessKimi)
+	caps := productionCaps()
+	caps[ports.ChatCapabilityForkCurrent] = true
+	h.conv.setCapabilities(caps)
+	h.source(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	h.driver.onFork = func(ctx context.Context) error {
+		close(started)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "retry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer close(release)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fork did not start")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	retry, err := h.svc.CreateIndependentSideChat(ctx, testSession, chatsvc.SideCreateRequest{IdempotencyKey: "retry"})
+	if err != nil || retry.ID != side.ID {
+		t.Fatalf("idempotent retry while opening: %s %v", retry.ID, err)
+	}
+}
+
+func TestSideCurrentForkRetryAfterParentMovesUsesFrozenHistory(t *testing.T) {
+	h := newSideWorkflow(t, "", domain.HarnessKimi)
+	caps := productionCaps()
+	caps[ports.ChatCapabilityForkCurrent] = true
+	h.conv.setCapabilities(caps)
+	h.source(t)
+	h.driver.onFork = func(context.Context) error { return errors.New("fork unavailable") }
+	side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "retry-failed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return s.Side.State == "failed" })
+	if _, err := h.svc.Send(t.Context(), testSession, ports.ChatUserMessage{Text: "later parent request", ClientMessageID: "later"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.RetrySideConnection(t.Context(), testSession, side.ID); err != nil {
+		t.Fatal(err)
+	}
+	retried := h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return s.Side.State == "ready" })
+	if retried.Side.ContextMode != "reconstructed" || retried.Side.SeedHistory == "" || strings.Contains(retried.Side.SeedHistory, "later parent request") {
+		t.Fatalf("retry lost the frozen cutoff: %+v", retried.Side)
+	}
+}
+
+func TestSideUnknownForkCannotBeBlindlyRetried(t *testing.T) {
+	h := newSideWorkflow(t, "", domain.HarnessKimi)
+	caps := productionCaps()
+	caps[ports.ChatCapabilityForkCurrent] = true
+	h.conv.setCapabilities(caps)
+	h.source(t)
+	h.driver.onFork = func(context.Context) error { return ports.ErrChatRecoveryInconclusive }
+	side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "unknown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return s.Side.State == "failed" })
+	if !failed.Side.RecreateRequired {
+		t.Fatal("unknown fork offered an unsafe retry")
+	}
+	if err := h.svc.RetrySideConnection(t.Context(), testSession, side.ID); !errors.Is(err, chatsvc.ErrSidePolicyRecreate) {
+		t.Fatalf("unknown fork retry: %v", err)
+	}
+}
+
+func TestSideCurrentForkDoesNotBlockParentDuringChildSetup(t *testing.T) {
+	for _, stage := range []string{"before", "after"} {
+		t.Run(stage, func(t *testing.T) {
+			h := newSideWorkflow(t, "", domain.HarnessKimi)
+			caps := productionCaps()
+			caps[ports.ChatCapabilityForkCurrent] = true
+			h.conv.setCapabilities(caps)
+			h.source(t)
+			started, release := make(chan struct{}), make(chan struct{})
+			block := func(ctx context.Context) error {
+				close(started)
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			if stage == "before" {
+				h.driver.beforeFork = block
+			} else {
+				h.driver.afterFork = block
+			}
+			side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: stage})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				close(release)
+				t.Fatal("fork setup did not start")
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "parent continues", ClientMessageID: "during-setup"})
+			cancel()
+			close(release)
+			if err != nil {
+				t.Fatalf("child setup blocked parent: %v", err)
+			}
+			opened := h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return s.Side.State == "ready" })
+			want := "native"
+			if stage == "before" {
+				want = "reconstructed"
+			}
+			if opened.Side.ContextMode != want {
+				t.Fatalf("mode = %s, want %s", opened.Side.ContextMode, want)
+			}
+		})
+	}
+}
+
+func TestSideCurrentForkWaitsParentSendUntilCopyCompletes(t *testing.T) {
+	h := newSideWorkflow(t, "", domain.HarnessKimi)
+	caps := productionCaps()
+	caps[ports.ChatCapabilityForkCurrent] = true
+	h.conv.setCapabilities(caps)
+	h.source(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	h.driver.onFork = func(ctx context.Context) error {
+		close(started)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	_, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "wait"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("fork did not start")
+	}
+	sent := make(chan error, 1)
+	go func() {
+		_, err := h.svc.Send(t.Context(), testSession, ports.ChatUserMessage{Text: "wait then send", ClientMessageID: "wait-send"})
+		sent <- err
+	}()
+	select {
+	case err := <-sent:
+		t.Fatalf("send returned before copy completed: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-sent:
+		if err != nil {
+			t.Fatalf("send was rejected: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("send did not resume")
+	}
 }

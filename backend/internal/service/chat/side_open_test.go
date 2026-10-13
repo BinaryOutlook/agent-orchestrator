@@ -30,11 +30,37 @@ type connectedSideForkDriver struct {
 	// rather than mutate it.
 	mainConfig ports.ChatStartConfig
 	onFork     func(context.Context) error
+	beforeFork func(context.Context) error
+	afterFork  func(context.Context) error
 }
 
 func (d *connectedSideForkDriver) ForkIntoHost(ctx context.Context, source, anchor string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if d.beforeFork != nil {
+		if err := d.beforeFork(ctx); err != nil {
+			return nil, err
+		}
+	}
+	var release func()
+	if cfg.AcquireForkSource != nil {
+		var err error
+		release, err = cfg.AcquireForkSource(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if d.onFork != nil {
 		if err := d.onFork(ctx); err != nil {
+			if release != nil {
+				release()
+			}
+			return nil, err
+		}
+	}
+	if release != nil {
+		release()
+	}
+	if d.afterFork != nil {
+		if err := d.afterFork(ctx); err != nil {
 			return nil, err
 		}
 	}

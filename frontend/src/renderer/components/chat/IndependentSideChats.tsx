@@ -365,6 +365,7 @@ export function useIndependentSideChats(
 	enabled = true,
 	onNavigate?: (annotation: ChatAnnotationSummaryItem) => void,
 	_onHide?: () => void,
+	canCreate = true,
 ) {
 	const { t } = useTranslation();
 	const [sides, setSides] = useState<Side[]>([]);
@@ -581,6 +582,7 @@ export function useIndependentSideChats(
 	const create = useCallback(
 		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID()) => {
 			if (!enabled) throw new Error("Side chats are currently available only for local AO sessions.");
+			if (!canCreate) throw new Error("The current provider does not support resumable side chats.");
 			setPending(true);
 			setError(undefined);
 			try {
@@ -624,7 +626,7 @@ export function useIndependentSideChats(
 				setPending(false);
 			}
 		},
-		[sessionId, enabled],
+		[sessionId, enabled, canCreate],
 	);
 
 	const updateDraft = useCallback((sideId: string, text: string) => {
@@ -1222,7 +1224,7 @@ export function useIndependentSideChats(
 				variant="ghost"
 				size="icon-sm"
 				className="browser-panel__tab-new"
-				disabled={pending}
+				disabled={!canCreate || pending}
 				aria-label={t("sideChat.newSideChat")}
 				onClick={() => void create(undefined, true).catch(() => undefined)}
 			>
@@ -1362,6 +1364,7 @@ export function useIndependentSideChats(
 								variant="outline"
 								size="sm"
 								onClick={() => void create(undefined, true).catch(() => undefined)}
+								disabled={!canCreate || pending}
 							>
 								{t("sideChat.newSideChat")}
 							</Button>
@@ -1427,7 +1430,7 @@ export function useIndependentSideChats(
 							deliveryPending={Boolean(drafts[activeId]?.pendingDelivery)}
 							skills={skills}
 							focusKey={focusKey}
-							onFocusSide={() => void create(undefined, true).catch(() => undefined)}
+							onFocusSide={canCreate ? () => void create(undefined, true).catch(() => undefined) : undefined}
 							onRemoveReference={(id) =>
 								setDrafts((current) => ({
 									...current,

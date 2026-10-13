@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -23,15 +24,11 @@ func (s *Service) sideReferenceContext(ctx context.Context, source *Controller, 
 	return b.String(), nil
 }
 
-// sideSeedHistory is used only when the provider cannot fork natively. It
-// supplies the visible completed transcript through the anchor as quoted data.
-func (s *Service) sideSeedHistory(ctx context.Context, source *Controller, anchor string) (string, error) {
+// sideSeedHistory freezes visible completed history for reconstructed sides,
+// including recovery when a current-context source advances before its fork.
+func sideSeedHistory(rows ConversationRows, anchor string) (string, error) {
 	if anchor == "" {
 		return "", nil
-	}
-	rows, err := s.reader.LoadConversationSnapshot(ctx, source.conversation.ID)
-	if err != nil {
-		return "", err
 	}
 	allowed := map[string]bool{}
 	found := false
@@ -97,12 +94,12 @@ func validateSideProvider(caps ports.ChatCapabilities) error {
 }
 
 // A current-context fork cannot exclude later failed, queued, or running turns.
-func (s *Service) sideCurrentAnchor(ctx context.Context, source *Controller, anchor string) bool {
-	if anchor == "" || source.busy() {
-		return false
-	}
-	rows, err := s.reader.LoadConversationSnapshot(ctx, source.conversation.ID)
-	if err != nil {
+func sideCurrentAnchor(rows ConversationRows, source *Controller, anchor string) bool {
+	source.mu.Lock()
+	idle := source.handoff == controllerHandoffNone && source.pendingTurnID == "" &&
+		source.dispatchingTurnID == "" && !source.compactionPending && source.state == ports.ChatControllerReady
+	source.mu.Unlock()
+	if anchor == "" || !idle {
 		return false
 	}
 	for i := len(rows.Turns) - 1; i >= 0; i-- {
@@ -114,26 +111,52 @@ func (s *Service) sideCurrentAnchor(ctx context.Context, source *Controller, anc
 	return false
 }
 
-func (s *Service) forkCurrentSide(ctx context.Context, side domain.SideConversation, source *Controller, forker ports.ChatIsolatedForker, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+func (s *Service) lockCurrentSide(ctx context.Context, side domain.SideConversation) (func(), error) {
+	source, release, err := s.workingController(ctx, side.SessionID)
+	if err != nil {
+		return nil, err
+	}
 	gate := s.controllerGate(domain.SessionConversationOwner(side.SessionID))
 	if err := gate.lock(ctx); err != nil {
+		release()
 		return nil, err
 	}
-	defer gate.unlock()
-	if _, _, err := s.branchLaunchConfig(source); err != nil {
-		return nil, err
-	}
-	if source.conv.ProviderConversationID() != side.SourceProviderID {
+	current, err := s.Controller(side.SessionID)
+	if err != nil || current != source || source.harness != side.Harness || source.conv.ProviderConversationID() != side.SourceProviderID {
+		gate.unlock()
+		release()
 		return nil, ErrSideAnchorUnavailable
 	}
-	if err := source.BeginIdleBranchHandoff(ctx); err != nil {
-		return nil, err
-	}
-	defer source.AbortHandoff()
-	if !s.sideCurrentAnchor(ctx, source, side.AnchorTurnID) {
+	// The service gate waits ordinary commands; sendMu also fences a command
+	// admitted before that gate and automatic queue dispatch.
+	if source.busy() {
+		gate.unlock()
+		release()
 		return nil, ErrSideAnchorUnavailable
 	}
-	return forker.ForkIntoHost(ctx, side.SourceProviderID, "", cfg)
+	source.sendMu.Lock()
+	unlock := func() { source.sendMu.Unlock(); gate.unlock(); release() }
+	if err := ctx.Err(); err != nil {
+		unlock()
+		return nil, err
+	}
+	rows, err := s.reader.LoadConversationSnapshot(ctx, source.conversation.ID)
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	if !sideCurrentAnchor(rows, source, side.AnchorTurnID) {
+		unlock()
+		return nil, ErrSideAnchorUnavailable
+	}
+	if _, err := source.store.NextQueuedTurn(ctx, source.conversation.ID); !errors.Is(err, domain.ErrNoQueuedTurn) {
+		unlock()
+		if err != nil {
+			return nil, err
+		}
+		return nil, ErrSideAnchorUnavailable
+	}
+	return unlock, nil
 }
 
 func (s *Service) sideSelfReferenceContext(ctx context.Context, side domain.SideConversation, ref ports.ChatExcerptReference) (string, string, error) {

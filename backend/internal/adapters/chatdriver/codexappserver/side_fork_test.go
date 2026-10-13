@@ -53,19 +53,9 @@ func TestSideForkRejectsMissingSourceAndProviderRefusal(t *testing.T) {
 	}
 }
 
-func TestSideForkSupportsCurrentContextWithoutHistoricalAnchor(t *testing.T) {
+func TestSideForkRequiresExactAnchor(t *testing.T) {
 	d, srv := newTestDriver(t)
-	srv.reply("thread/fork", `{"thread":{"id":"child"},"model":"test-model"}`)
-	child, err := d.ForkIntoHost(t.Context(), "parent", "", ports.ChatStartConfig{WorkspacePath: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = child.Close() }()
-	var params map[string]any
-	if err := json.Unmarshal(srv.awaitFrame(func(f frame) bool { return f.Method == "thread/fork" }).Params, &params); err != nil {
-		t.Fatal(err)
-	}
-	if _, present := params["lastTurnId"]; present || params["threadId"] != "parent" {
-		t.Fatalf("current fork request: %v", params)
+	if _, err := d.ForkIntoHost(t.Context(), "parent", "", ports.ChatStartConfig{WorkspacePath: t.TempDir()}); err == nil || srv.sentMethod("thread/fork") {
+		t.Fatal("missing anchor silently copied current context")
 	}
 }

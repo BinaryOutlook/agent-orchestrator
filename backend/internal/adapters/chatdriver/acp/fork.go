@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -77,14 +78,36 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 	if d.cfg.SessionMeta != nil {
 		meta = d.cfg.SessionMeta(launchCfg)
 	}
-	forkCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	var release func()
+	if cfg.AcquireForkSource != nil {
+		release, err = cfg.AcquireForkSource(ctx)
+		if err != nil {
+			conv.discard()
+			return nil, err
+		}
+	}
+	// Finish a sent copy even if the caller cancels, so its returned child ID
+	// can be deleted. ACP cannot reconcile a child whose reply never arrives.
+	forkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handshakeTimeout)
 	defer cancel()
 	resp, err := conv.conn.UnstableForkSession(forkCtx, acpsdk.UnstableForkSessionRequest{
 		SessionId: acpsdk.SessionId(sourceID), Cwd: cfg.WorkspacePath,
 		Meta: meta, AdditionalDirectories: additional, McpServers: forkMCP,
 	})
+	if release != nil {
+		release()
+	}
 	if err != nil {
+		disconnected := false
+		select {
+		case <-conv.conn.Done():
+			disconnected = true
+		default:
+		}
 		conv.discard()
+		if disconnected || errors.Is(err, context.DeadlineExceeded) || forkCtx.Err() != nil {
+			return nil, fmt.Errorf("%w: ACP fork outcome is unknown: %w", ports.ErrChatRecoveryInconclusive, err)
+		}
 		return nil, normalizeACPError("ACP session/fork", err)
 	}
 	childID := string(resp.SessionId)
@@ -93,6 +116,10 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		return nil, fmt.Errorf("ACP session/fork returned no independent session id")
 	}
 	conv.unadoptedForkID = childID
+	if err := ctx.Err(); err != nil {
+		conv.discard()
+		return nil, err
+	}
 	reportedID := childID
 	if d.cfg.EncodeProviderConversationID != nil {
 		reportedID = d.cfg.EncodeProviderConversationID(childID)

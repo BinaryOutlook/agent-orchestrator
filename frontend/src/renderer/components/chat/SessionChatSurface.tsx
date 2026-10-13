@@ -391,6 +391,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
+	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
 	const openSideInspector = () => {
 		const ui = useUiStore.getState();
 		ui.setInspectorView(uiSessionId, "sideChat");
@@ -403,6 +404,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			setAnnotationNavigationRequest({ ...annotation, id: crypto.randomUUID() });
 		},
 		() => useUiStore.getState().setInspectorOpen(uiSessionId, false),
+		sideCreationEnabled,
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
@@ -576,7 +578,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			{refreshError ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			<ChatWorkspace
-				onAddToSideChat={sideEnabled ? attachToSide : undefined}
+				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
 				annotationNavigationRequest={annotationNavigationRequest}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
@@ -626,7 +628,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// Only claim /btw and /side where side chats can open. Elsewhere the
 					// text goes to the agent as typed (it may be the harness's own skill),
 					// so a failed side launch can never strand the main draft.
-					const btw = sideEnabled ? /^\/(?:btw|side)(?:\s+|$)/i.exec(text) : null;
+					const btw = sideCreationEnabled ? /^\/(?:btw|side)(?:\s+|$)/i.exec(text) : null;
 					if (btw) {
 						openSideInspector();
 						const side = await sideChats.create(undefined, true, clientMessageId);
@@ -687,7 +689,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onActivateBranch={commands.activateBranch}
 				activateBranchPending={commands.activateBranchPending}
 				activateBranchError={commands.activateBranchError}
-				skills={sideEnabled ? [...(["btw", "side"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw" && skill.name !== "side")] : skills}
+				skills={sideCreationEnabled ? [...(["btw", "side"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw" && skill.name !== "side")] : skills}
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}

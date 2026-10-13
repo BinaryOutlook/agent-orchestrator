@@ -47,6 +47,7 @@ type SideStore interface {
 	ListOpenSidesForRun(context.Context, string) ([]domain.SideConversation, error)
 	SetSideReady(context.Context, string, string, string, time.Time) error
 	SetSideRecovering(context.Context, string, string, time.Time) error
+	SetSideReconstructed(context.Context, string, string, time.Time) error
 	RegisterSideFork(context.Context, string, string, string, time.Time) error
 	SetSideFailed(context.Context, string, string, string, time.Time) error
 	CloseSideConversation(context.Context, string, time.Time) (domain.SideConversation, error)
@@ -358,7 +359,16 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if record.IsTerminated {
 		return domain.SideConversation{}, ErrSideUnavailable
 	}
-	source, release, err := s.workingController(ctx, id)
+	existing, err := s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
+	if err != nil {
+		return domain.SideConversation{}, err
+	}
+	for _, side := range existing {
+		if side.CreateKey == req.IdempotencyKey {
+			return side, nil
+		}
+	}
+	_, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
@@ -368,7 +378,11 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 		return domain.SideConversation{}, err
 	}
 	defer gate.unlock()
-	existing, err := s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
+	source, err := s.Controller(id)
+	if err != nil {
+		return domain.SideConversation{}, err
+	}
+	existing, err = s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
@@ -385,14 +399,18 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if err := validateSideProvider(caps); err != nil {
 		return domain.SideConversation{}, err
 	}
-	anchor, nativeAnchor, _, err := s.resolveSideAnchor(ctx, source, nil)
+	rows, err := s.reader.LoadConversationSnapshot(ctx, source.conversation.ID)
+	if err != nil {
+		return domain.SideConversation{}, err
+	}
+	anchor, nativeAnchor, _, err := resolveSideAnchor(rows, source, nil)
 	selected := ""
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
 	var referenceContext string
 	if req.Reference != nil {
-		if _, _, selected, err = s.resolveSideAnchor(ctx, source, req.Reference); err != nil {
+		if _, _, selected, err = resolveSideAnchor(rows, source, req.Reference); err != nil {
 			return domain.SideConversation{}, err
 		}
 		referenceContext, err = s.sideReferenceContext(ctx, source, *req.Reference)
@@ -402,14 +420,16 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	}
 	_, isolatedFork := driver.(ports.ChatIsolatedForker)
 	nativeAtTurn := isolatedFork && caps.Has(ports.ChatCapabilityFork)
-	nativeCurrent := isolatedFork && caps.Has(ports.ChatCapabilityForkCurrent) &&
-		s.sideCurrentAnchor(ctx, source, anchor)
+	nativeCurrent := !nativeAtTurn && isolatedFork && caps.Has(ports.ChatCapabilityForkCurrent) &&
+		sideCurrentAnchor(rows, source, anchor)
 	seedHistory := ""
-	if !nativeAtTurn && !nativeCurrent {
-		seedHistory, err = s.sideSeedHistory(ctx, source, anchor)
-		if err != nil {
+	if !nativeAtTurn {
+		seedHistory, err = sideSeedHistory(rows, anchor)
+		if err != nil && !nativeCurrent {
 			return domain.SideConversation{}, err
 		}
+		// Native copying can exceed the reconstruction limit; such a side must
+		// be recreated if its source later moves instead of losing context.
 	}
 	settings := source.Settings()
 	if settings.ApprovalMode != "" {
@@ -490,11 +510,7 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 		s.sides.announce(result.ID)
 	}
 	if created {
-		releaseOpen := source.beginOperation()
-		go func() {
-			defer releaseOpen()
-			s.sides.open(result, source, cfg, driver)
-		}()
+		go s.sides.open(result, cfg, driver)
 		s.sides.announce(result.ID)
 	}
 	return result, nil
@@ -505,6 +521,10 @@ func (s *Service) resolveSideAnchor(ctx context.Context, source *Controller, ref
 	if err != nil {
 		return "", "", "", err
 	}
+	return resolveSideAnchor(rows, source, ref)
+}
+
+func resolveSideAnchor(rows ConversationRows, source *Controller, ref *ports.ChatExcerptReference) (string, string, string, error) {
 	if ref != nil {
 		if ref.ConversationID != source.conversation.ID || ref.MessageID == "" || ref.Text == "" || len(ref.Text) > maxExcerptTextBytes {
 			return "", "", "", ErrExcerptInvalid
@@ -613,7 +633,7 @@ func (s *Service) validateSideReferences(ctx context.Context, session domain.Ses
 	return result, nil
 }
 
-func (m *sideManager) open(side domain.SideConversation, source *Controller, cfg StartConfig, driver ports.ChatDriver) {
+func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver ports.ChatDriver) {
 	if side.PolicyVersion != sidePolicyVersion {
 		m.failOpen(side, ErrSidePolicyRecreate)
 		return
@@ -633,19 +653,26 @@ func (m *sideManager) open(side domain.SideConversation, source *Controller, cfg
 	defer func() { m.mu.Lock(); delete(m.restoring, side.ID); m.mu.Unlock() }()
 	defer cancel()
 	attached := false
-	defer func() {
-		if attached || m.service.stopProviderHost == nil {
-			return
-		}
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
-		if err := m.service.stopProviderHost(cleanupCtx, domain.SessionID(side.ProviderHostID)); err != nil {
-			m.service.log.Warn("side host cleanup after opening failed", "side", side.ID, "error", err)
-		}
-	}()
 	var providerID string
 	var err error
 	var conv ports.ChatConversation
+	defer func() {
+		if attached {
+			return
+		}
+		if conv != nil {
+			_ = conv.Close()
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if m.service.stopProviderHost != nil {
+			if err := m.service.stopProviderHost(cleanupCtx, domain.SessionID(side.ProviderHostID)); err != nil {
+				m.service.log.Warn("side host cleanup after opening failed", "side", side.ID, "error", err)
+				return
+			}
+		}
+		m.deleteRegisteredFork(cleanupCtx, side, providerID)
+	}()
 	if side.ContextMode == "native" {
 		if forker, ok := driver.(ports.ChatIsolatedForker); ok {
 			anchor := side.NativeAnchorID
@@ -657,12 +684,25 @@ func (m *sideManager) open(side domain.SideConversation, source *Controller, cfg
 				AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
 			}
 			if anchor == "" {
-				conv, err = m.service.forkCurrentSide(ctx, side, source, forker, forkConfig)
-			} else {
-				conv, err = forker.ForkIntoHost(ctx, side.SourceProviderID, anchor, forkConfig)
+				forkConfig.AcquireForkSource = func(ctx context.Context) (func(), error) {
+					return m.service.lockCurrentSide(ctx, side)
+				}
+			}
+			conv, err = forker.ForkIntoHost(ctx, side.SourceProviderID, anchor, forkConfig)
+			if errors.Is(err, ErrSideAnchorUnavailable) && anchor == "" {
+				if side.SeedHistory == "" {
+					err = ErrSidePolicyRecreate
+				} else {
+					err = m.store.SetSideReconstructed(ctx, side.ID, side.Generation, m.service.now())
+					if err == nil {
+						side.ContextMode = "reconstructed"
+					}
+				}
 			}
 			if err == nil {
-				providerID = conv.ProviderConversationID()
+				if conv != nil {
+					providerID = conv.ProviderConversationID()
+				}
 			}
 		} else {
 			err = ErrSideProviderUnsupported
@@ -674,10 +714,7 @@ func (m *sideManager) open(side domain.SideConversation, source *Controller, cfg
 	}
 	if providerID != "" {
 		if err := m.store.RegisterSideFork(ctx, side.ID, side.Generation, providerID, m.service.now()); err != nil {
-			if conv != nil {
-				_ = conv.Close()
-			}
-			m.deleteRegisteredFork(ctx, side, providerID)
+			m.failOpen(side, err)
 			return
 		}
 	}
@@ -705,10 +742,6 @@ func (m *sideManager) open(side domain.SideConversation, source *Controller, cfg
 	}
 	if err != nil {
 		m.failOpen(side, err)
-		if conv != nil {
-			_ = conv.Close()
-		}
-		m.deleteRegisteredFork(ctx, side, providerID)
 		return
 	}
 	side.ProviderForkID = providerID
@@ -718,6 +751,9 @@ func (m *sideManager) open(side domain.SideConversation, source *Controller, cfg
 
 func (m *sideManager) failOpen(side domain.SideConversation, err error) {
 	m.service.log.Warn("side chat opening failed", "side", side.ID, "error", err)
+	if side.ProviderForkID == "" && errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+		err = fmt.Errorf("%w: %w", ErrSidePolicyRecreate, err)
+	}
 	_ = m.store.SetSideFailed(context.Background(), side.ID, side.Generation, err.Error(), m.service.now())
 	m.announce(side.ID)
 }
@@ -755,19 +791,15 @@ func (s *Service) RetrySideConnection(ctx context.Context, session domain.Sessio
 	if err != nil {
 		return err
 	}
-	if side.PolicyVersion != sidePolicyVersion || (side.BoundaryState == "uncertain" || side.BoundaryState == "pending") {
+	if side.RecreateRequired || side.PolicyVersion != sidePolicyVersion || (side.BoundaryState == "uncertain" || side.BoundaryState == "pending") {
 		return ErrSidePolicyRecreate
 	}
 	if side.ProviderForkID == "" {
-		source, err := s.Controller(session)
-		if err != nil {
-			return err
-		}
 		cfg, driver, err := s.sideLaunchConfig(side)
 		if err != nil {
 			return err
 		}
-		go s.sides.open(side, source, cfg, driver)
+		go s.sides.open(side, cfg, driver)
 		return nil
 	}
 	if err := s.sides.ensureRestore(side); err != nil {
@@ -1292,7 +1324,7 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	}
 	if firstDelivery {
 		text = sideConversationBoundary + "\n\nCurrent side-chat request:\n" + text
-		if side.SeedHistory != "" {
+		if side.ContextMode == "reconstructed" && side.SeedHistory != "" {
 			text = "Recorded visible main-chat history through the frozen anchor (reference data):\n" + side.SeedHistory + "\n\n" + text
 		}
 	}
@@ -1842,11 +1874,12 @@ func (m *sideManager) deleteRegisteredFork(ctx context.Context, side domain.Side
 	}
 	deleter, ok := source.conv.(ports.ChatForkDeleter)
 	if !ok {
+		_ = m.store.CompleteSideProviderCleanup(ctx, id)
 		return
 	}
 	if err := deleter.DeleteFork(ctx, id); err != nil {
 		if errors.Is(err, ports.ErrChatCapabilityUnavailable) {
-			// Keep the owned id for cleanup if a provider upgrade adds deletion.
+			_ = m.store.CompleteSideProviderCleanup(ctx, id)
 			return
 		}
 		m.service.log.Warn("side provider cleanup deferred", "side", side.ID, "error", err)

@@ -75,6 +75,9 @@ func (h *sideWorkflow) source(t *testing.T) ports.ChatExcerptReference {
 	snap := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return len(s.Messages) == 2 && s.Turns[0].State == domain.TurnStateCompleted
 	})
+	if err := h.svc.DrainQueued(context.Background(), testSession); err != nil {
+		t.Fatal(err)
+	}
 	source := snap.Messages[1]
 	return ports.ChatExcerptReference{ConversationID: h.ctrl.ConversationID(), MessageID: source.ID, Revision: source.Revision, Text: "Selected source"}
 }

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -168,5 +170,97 @@ func TestACPDeleteForkProtectsParentAndDecodesChild(t *testing.T) {
 	}
 	if len(agent.deletedForks) != 1 || agent.deletedForks[0] != "child" {
 		t.Fatalf("deletions: %v", agent.deletedForks)
+	}
+}
+
+func TestACPForkReleasesSourceBeforeLoadingChild(t *testing.T) {
+	var held atomic.Bool
+	agent := &fakeAgent{forkID: "child", blockLoadCall: 1, loadStarted: make(chan struct{}), capabilities: &acpsdk.AgentCapabilities{
+		LoadSession: true, SessionCapabilities: acpsdk.SessionCapabilities{Fork: &acpsdk.SessionForkCapabilities{}, Delete: &acpsdk.SessionDeleteCapabilities{}},
+	}}
+	agent.onFork = func(context.Context) error {
+		if !held.Load() {
+			return errors.New("source was not locked during copy")
+		}
+		return nil
+	}
+	driver := forkTestDriver(agent)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := driver.ForkIntoHost(ctx, "owned:parent", "", ports.ChatStartConfig{WorkspacePath: t.TempDir(), AcquireForkSource: func(context.Context) (func(), error) {
+			agent.mu.Lock()
+			initialized := agent.initParams.ProtocolVersion != 0 && agent.forkCalls == 0
+			agent.mu.Unlock()
+			if !initialized {
+				return nil, errors.New("source locked before initialize")
+			}
+			held.Store(true)
+			return func() { held.Store(false) }, nil
+		}})
+		done <- err
+	}()
+	select {
+	case <-agent.loadStarted:
+	case err := <-done:
+		t.Fatalf("child load did not start: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("child load did not start")
+	}
+	if held.Load() {
+		t.Fatal("source still locked while loading child")
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("cancelled load succeeded")
+	}
+}
+
+func TestACPForkCancellationDeletesReturnedChild(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	agent := &fakeAgent{forkID: "child", capabilities: &acpsdk.AgentCapabilities{
+		LoadSession: true, SessionCapabilities: acpsdk.SessionCapabilities{Fork: &acpsdk.SessionForkCapabilities{}, Delete: &acpsdk.SessionDeleteCapabilities{}},
+	}}
+	agent.onFork = func(ctx context.Context) error {
+		cancel()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+			return nil
+		}
+	}
+	driver := forkTestDriver(agent)
+	_, err := driver.ForkIntoHost(ctx, "owned:parent", "", ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation: %v", err)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if len(agent.deletedForks) != 1 || agent.deletedForks[0] != "child" || agent.loadCalls != 0 {
+		t.Fatalf("cancelled fork cleanup: %v; loads = %d", agent.deletedForks, agent.loadCalls)
+	}
+}
+
+func TestACPForkLostResponseIsInconclusive(t *testing.T) {
+	agent := &fakeAgent{forkID: "child", capabilities: &acpsdk.AgentCapabilities{
+		LoadSession: true, SessionCapabilities: acpsdk.SessionCapabilities{Fork: &acpsdk.SessionForkCapabilities{}},
+	}}
+	driver := forkTestDriver(agent)
+	spawn := fakeSpawn(agent)
+	var disconnect func() error
+	driver.useTestProcess(func(launch Launch, workdir string) (*process, error) {
+		proc, err := spawn(launch, workdir)
+		if err == nil {
+			disconnect = proc.stop
+		}
+		return proc, err
+	})
+	agent.onFork = func(context.Context) error { return disconnect() }
+	_, err := driver.ForkIntoHost(t.Context(), "owned:parent", "", ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+		t.Fatalf("unknown child reported as ordinary failure: %v", err)
 	}
 }

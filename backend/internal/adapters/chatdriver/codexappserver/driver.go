@@ -142,11 +142,10 @@ func capabilities() ports.ChatCapabilities {
 		// is advertised despite thread/rollback carrying a DEPRECATED annotation:
 		// what the installed provider does is the only honest answer, and gating the
 		// feature off while the call still works would take undo away for no reason.
-		ports.ChatCapabilityRollback:    true,
-		ports.ChatCapabilityFork:        true,
-		ports.ChatCapabilityForkCurrent: true,
-		ports.ChatCapabilityRename:      true,
-		ports.ChatCapabilitySkills:      true,
+		ports.ChatCapabilityRollback: true,
+		ports.ChatCapabilityFork:     true,
+		ports.ChatCapabilityRename:   true,
+		ports.ChatCapabilitySkills:   true,
 		// config/mcpServer/reload plus the status inventory read after it, both
 		// exercised against a live app-server.
 		ports.ChatCapabilityMCPReload: true,
@@ -739,8 +738,8 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 
 // ForkIntoHost starts an inclusive native fork in an independent provider host.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
-	if sourceProviderConversationID == "" {
-		return nil, errors.New("source thread is required")
+	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
+		return nil, errors.New("source thread and exact turn anchor are required")
 	}
 	if !filepath.IsAbs(cfg.WorkspacePath) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
@@ -763,9 +762,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 		"approvalsReviewer": reviewer,
 		"sandbox":           sandbox,
 	}
-	if lastProviderTurnID != "" {
-		params["lastTurnId"] = conv.nativeID(lastProviderTurnID)
-	}
+	params["lastTurnId"] = conv.nativeID(lastProviderTurnID)
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}

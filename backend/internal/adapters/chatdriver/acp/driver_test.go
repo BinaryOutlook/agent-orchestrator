@@ -785,6 +785,7 @@ type fakeAgent struct {
 	forkID              string
 	forkErr             error
 	forkCalls           int
+	onFork              func(context.Context) error
 	deletedForks        []string
 	loadUpdates         []acpsdk.SessionUpdate
 	loadUpdateBatches   [][]acpsdk.SessionUpdate
@@ -1054,11 +1055,16 @@ func (a *fakeAgent) ResumeSession(_ context.Context, params acpsdk.ResumeSession
 	a.mu.Unlock()
 	return acpsdk.ResumeSessionResponse{}, nil
 }
-func (a *fakeAgent) UnstableForkSession(_ context.Context, params acpsdk.UnstableForkSessionRequest) (acpsdk.UnstableForkSessionResponse, error) {
+func (a *fakeAgent) UnstableForkSession(ctx context.Context, params acpsdk.UnstableForkSessionRequest) (acpsdk.UnstableForkSessionResponse, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.forkParams = params
 	a.forkCalls++
+	if a.onFork != nil {
+		if err := a.onFork(ctx); err != nil {
+			return acpsdk.UnstableForkSessionResponse{}, err
+		}
+	}
 	return acpsdk.UnstableForkSessionResponse{SessionId: acpsdk.SessionId(a.forkID)}, a.forkErr
 }
 func (a *fakeAgent) UnstableDeleteSession(_ context.Context, params acpsdk.UnstableDeleteSessionRequest) (acpsdk.UnstableDeleteSessionResponse, error) {

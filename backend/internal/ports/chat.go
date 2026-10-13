@@ -297,6 +297,9 @@ type ChatStartConfig struct {
 	// until they know a new provider process is required; live adoption must keep
 	// the verifier for the bearer already held by the surviving process.
 	PrepareEnv func(context.Context) (map[string]string, error)
+	// AcquireForkSource locks a current-context source immediately before the
+	// provider copies it. Fork drivers release it before loading the child.
+	AcquireForkSource func(context.Context) (release func(), err error)
 	// Model is optional; empty defers to the provider's configured default.
 	Model string
 	// Effort is an optional provider-advertised model tuning value; empty

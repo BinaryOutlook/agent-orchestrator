@@ -1196,6 +1196,7 @@ describe("project remembering waits for provider permissions", () => {
 describe("side command routing", () => {
 	beforeEach(() => {
 		useUiStore.setState({ developerMode: true, sideChats: true });
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: ["resume"] };
 	});
 	afterEach(() => {
 		useUiStore.setState({ developerMode: false, sideChats: false });
@@ -1264,4 +1265,15 @@ describe("side command routing", () => {
 			);
 		},
 	);
+	it.each(["btw", "side"])("preserves provider /%s when resume is unavailable", async (command) => {
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [] };
+		sideMocks.create.mockReset();
+		const mainSend = vi.fn().mockResolvedValue(undefined);
+		(conversationCommandState as { send?: unknown }).send = mainSend;
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => { await sideMocks.workspaceSend!(`/${command} question`, undefined, "provider-command"); });
+		expect(sideMocks.create).not.toHaveBeenCalled();
+		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: `/${command} question` }));
+		delete (conversationCommandState as { send?: unknown }).send;
+	});
 });

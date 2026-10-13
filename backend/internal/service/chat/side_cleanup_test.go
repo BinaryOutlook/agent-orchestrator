@@ -12,12 +12,67 @@ import (
 
 type sideCleanupTestConversation struct {
 	deferredSideTestConversation
-	deleted []string
+	deleted   []string
+	deleteErr error
+	onDelete  func()
 }
 
 func (c *sideCleanupTestConversation) DeleteFork(_ context.Context, id string) error {
+	if c.onDelete != nil {
+		c.onDelete()
+	}
 	c.deleted = append(c.deleted, id)
-	return nil
+	return c.deleteErr
+}
+
+func TestSideCleanupRetiresUnsupportedDeletion(t *testing.T) {
+	svc := New(Options{AppRunID: "run"})
+	conv := &sideCleanupTestConversation{deleteErr: ports.ErrChatCapabilityUnavailable}
+	svc.controllers["session"] = &Controller{conv: conv}
+	store := svc.sides.store.(*memorySideStore)
+	store.cleanup["fork"] = domain.SideProviderCleanup{ForkID: "fork", SessionID: "session"}
+	svc.sides.retryCleanup()
+	svc.sides.retryCleanup()
+	if len(conv.deleted) != 1 || len(store.cleanup) != 0 {
+		t.Fatalf("unsupported deletion repeated: %v %v", conv.deleted, store.cleanup)
+	}
+}
+
+type failedSideRegistration struct{ SideStore }
+
+func (*failedSideRegistration) RegisterSideFork(context.Context, string, string, string, time.Time) error {
+	return errors.New("registration failed")
+}
+
+type sideOpenFailureDriver struct {
+	ports.ChatDriver
+	conv ports.ChatConversation
+}
+
+func (d sideOpenFailureDriver) Start(context.Context, ports.ChatStartConfig) (ports.ChatConversation, error) {
+	return d.conv, nil
+}
+
+func TestSideOpenFailureStopsHostBeforeDeletingFork(t *testing.T) {
+	stopped := false
+	svc := New(Options{AppRunID: "run", StopProviderHost: func(context.Context, domain.SessionID) error { stopped = true; return nil }})
+	conv := &sideCleanupTestConversation{onDelete: func() {
+		if !stopped {
+			t.Error("deleted fork before terminating its host")
+		}
+	}}
+	svc.controllers["session"] = &Controller{conv: conv}
+	side := domain.SideConversation{PolicyVersion: sidePolicyVersion, ID: "side", SessionID: "session", AppRunID: "run", ProviderHostID: "host", Generation: "g", ContextMode: "fresh"}
+	_, _ = svc.sides.store.ClaimSideLaunch(t.Context(), "run", time.Now())
+	_, _, err := svc.sides.store.CreateSideConversation(t.Context(), side)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.sides.store = &failedSideRegistration{SideStore: svc.sides.store}
+	svc.sides.open(side, StartConfig{}, sideOpenFailureDriver{conv: &deferredSideTestConversation{}})
+	if !stopped || len(conv.deleted) != 1 {
+		t.Fatalf("failed-open cleanup: stopped=%v deleted=%v", stopped, conv.deleted)
+	}
 }
 
 func TestSideCleanupPreservesOpenForkUntilClosed(t *testing.T) {
