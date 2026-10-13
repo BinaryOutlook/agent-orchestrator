@@ -2,7 +2,6 @@ package httpd
 
 import (
 	"context"
-	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 )
