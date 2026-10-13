@@ -2032,7 +2032,29 @@ export interface components {
             type: "workspace.setup";
             payload: components["schemas"]["WorkerSetupPayload"];
         };
-        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"] | components["schemas"]["WorkerSetupEventInput"];
+        /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands). A failure becomes the session's startup error and stays until a later ready report clears it. */
+        WorkerWorkspaceStartupPayload: {
+            /** @enum {string} */
+            status: "failed" | "ready";
+            /**
+             * @description Required when status is failed.
+             * @enum {string}
+             */
+            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed";
+            /** @description User-facing explanation; required when status is failed. */
+            message?: string;
+            /** @description Redacted excerpt, for Setup the failed command's output tail. */
+            detail?: string;
+        };
+        WorkerWorkspaceStartupEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.startup";
+            payload: components["schemas"]["WorkerWorkspaceStartupPayload"];
+        };
+        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"] | components["schemas"]["WorkerSetupEventInput"] | components["schemas"]["WorkerWorkspaceStartupEventInput"];
         WorkerOKResponse: {
             /** @constant */
             ok: true;
@@ -2383,14 +2405,16 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. */
+        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable and project_setup_failed are the exception: the worker has checked in but could not prepare the workspace, so the agent does not start; they stay until the worker reports the workspace ready after the user reopens the session (a workspace checkout request). */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, or workspace_setup_not_ready (a Coder connection's workspace ready check never passed). Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), repository_checkout_failed, working_directory_unusable or project_setup_failed (reported by the worker). Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;
             /** Format: date-time */
             at: string;
+            /** @description Redacted detail behind the error: operator detail for an organization's own (bring-your-own) compute, and the failed command's output for project_setup_failed. */
+            detail?: string;
         };
         CreateSessionInput: {
             /** Format: uuid */

@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { CloudCpError } from "../lib/cloud-cp";
-import type { CloudStartupProblem } from "../lib/cloud-lifecycle";
+import { isWorkspaceStartupError, type CloudStartupProblem } from "../lib/cloud-lifecycle";
 import { CoderWorkspaceLinkButton } from "./CoderWorkspaceLinkButton";
 import { Button } from "./ui/button";
 
@@ -29,8 +29,15 @@ export function CloudSessionStartupError({
 	const { t } = useTranslation();
 	const { client } = useCloudCp();
 	const queryClient = useQueryClient();
+	// The worker could not prepare the workspace (checkout, working directory or
+	// the project's Setup). It is already running, so a retry asks it to prepare
+	// the workspace again instead of re-running the worker bootstrap.
+	const workspaceProblem = problem.phase === "failed" && isWorkspaceStartupError(problem.code);
 	const retry = useMutation({
-		mutationFn: () => client.retrySessionStartup(orgId, sessionId),
+		mutationFn: async (): Promise<void> => {
+			if (workspaceProblem) await client.requestWorkspaceCheckout(orgId, sessionId);
+			else await client.retrySessionStartup(orgId, sessionId);
+		},
 		onSuccess: async () => {
 			await Promise.allSettled([
 				queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey }),
@@ -43,10 +50,19 @@ export function CloudSessionStartupError({
 	// The workspace's ready check never passed: the server message names the
 	// check, and the details carry its last output.
 	const setupNotReady = problem.phase === "failed" && problem.code === "workspace_setup_not_ready";
+	const projectSetupFailed = problem.phase === "failed" && problem.code === "project_setup_failed";
 	const title = setupNotReady
 		? t("cloud.startupError.workspaceSetupNotReadyTitle")
-		: failed ? t("cloud.startupError.title") : t("cloud.startupError.unavailableTitle");
-	const [showDetail, setShowDetail] = useState(false);
+		: projectSetupFailed
+			? t("cloud.startupError.projectSetupFailedTitle")
+			: problem.phase === "failed" && problem.code === "repository_checkout_failed"
+				? t("cloud.startupError.repositoryCheckoutFailedTitle")
+				: problem.phase === "failed" && problem.code === "working_directory_unusable"
+					? t("cloud.startupError.workingDirectoryUnusableTitle")
+					: failed ? t("cloud.startupError.title") : t("cloud.startupError.unavailableTitle");
+	// A failed Setup step's output is what the user needs to fix the script, so
+	// it starts expanded.
+	const [showDetail, setShowDetail] = useState(projectSetupFailed);
 	const [copied, setCopied] = useState(false);
 	const copyDetail = () => {
 		if (problem.phase !== "failed") return;

@@ -69,18 +69,45 @@ type SetupEvent struct {
 	Output string `json:"output,omitempty"`
 }
 
-// Message is the startup error shown when Setup did not succeed, in the
-// local daemon's words ("setup step N failed").
-func (e SetupEvent) Message() string {
+// Summary names the failed step and why, in the local daemon's words
+// ("setup step N failed"), without the command's output.
+func (e SetupEvent) Summary() string {
 	cause := fmt.Sprintf("exit status %d", e.ExitCode)
 	if e.Status == SetupTimedOut {
 		cause = "timed out after " + ProjectScriptStepTimeout.String()
 	}
-	message := fmt.Sprintf("Setup step %d failed: %s", e.Step, cause)
+	return fmt.Sprintf("Setup step %d failed: %s", e.Step, cause)
+}
+
+// Message is the startup error shown when Setup did not succeed: the summary
+// followed by the command's output.
+func (e SetupEvent) Message() string {
+	message := e.Summary()
 	if output := strings.TrimSpace(e.Output); output != "" {
 		message += ": " + output
 	}
 	return message
+}
+
+// WorkspaceStartupEventType is the worker event that reports whether the
+// session's workspace (checkout, working directory and Setup) is ready for
+// its agent. A failure becomes the session's startup error, shown on the
+// desktop's startup screen; a later ready report clears it.
+const WorkspaceStartupEventType = "workspace.startup"
+
+const (
+	WorkspaceStartupFailed = "failed"
+	WorkspaceStartupReady  = "ready"
+)
+
+// WorkspaceStartupEvent is the payload of WorkspaceStartupEventType. Code is
+// one of domain.WorkspaceStartupErrorCodes on a failure. Detail is a bounded,
+// redacted excerpt (the failed Setup command's output).
+type WorkspaceStartupEvent struct {
+	Status  string `json:"status"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 // SessionScriptEnvironment is the AO_* environment a Setup or Cleanup command

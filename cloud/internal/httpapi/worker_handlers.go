@@ -88,6 +88,9 @@ var workerEventTypes = map[string]struct{}{
 	// workspace.setup reports the project's Setup commands' outcome so the
 	// session shows why its setup is missing.
 	worker.SetupEventType: {},
+	// workspace.startup reports whether the worker could prepare the
+	// session's workspace; a failure becomes the session's startup error.
+	worker.WorkspaceStartupEventType: {},
 }
 
 const (
@@ -1061,6 +1064,31 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := s.store.AppendSessionEvent(r.Context(), claims.OrgID, claims.SessionID, input.Type, payload); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
+	case worker.WorkspaceStartupEventType:
+		var startup worker.WorkspaceStartupEvent
+		if err := json.Unmarshal(input.Payload, &startup); err != nil ||
+			len(input.Payload) > maxWorkerOutput+maxWorkerControlBody ||
+			(startup.Status == worker.WorkspaceStartupFailed &&
+				(!domain.IsWorkspaceStartupErrorCode(startup.Code) || strings.TrimSpace(startup.Message) == "")) ||
+			(startup.Status != worker.WorkspaceStartupFailed && startup.Status != worker.WorkspaceStartupReady) {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The workspace startup payload is invalid.")
+			return
+		}
+		var err error
+		if startup.Status == worker.WorkspaceStartupReady {
+			err = s.store.ClearWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
+		} else {
+			message := activitylog.Truncate(activitylog.Redact(strings.TrimSpace(startup.Message)), 1024)
+			detail := activitylog.Excerpt(startup.Detail, 4096)
+			s.logger.Warn("workspace startup failed in the worker",
+				"org_id", claims.OrgID, "session_id", claims.SessionID, "code", startup.Code, "message", message)
+			err = s.store.RecordWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID,
+				claims.WorkerID, claims.Epoch, startup.Code, message, detail)
+		}
+		if err != nil {
 			s.writeWorkerStoreError(w, r, err)
 			return
 		}

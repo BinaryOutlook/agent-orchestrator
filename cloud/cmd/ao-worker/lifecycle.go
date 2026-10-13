@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
@@ -60,7 +62,7 @@ func resolveConfiguredWorkspace(
 // Scripts) once per session, after the checkout and before the coding agent
 // starts, and reports the outcome on the session's event stream. Like a
 // local project, a failed step stops the session from starting its agent: it
-// returns the startup error to show, and the next session open retries.
+// returns the failed outcome, and the next session open retries.
 func runProjectSetup(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -69,15 +71,15 @@ func runProjectSetup(
 	commands []string,
 	workspace string,
 	environment worker.SessionScriptEnvironment,
-) (failure string) {
+) (failed *worker.SetupEvent) {
 	if len(commands) == 0 {
-		return ""
+		return nil
 	}
 	logger.Info("project setup: running", "workspace", workspace, "steps", len(commands))
 	event, ran := worker.SetupRunner{DataDir: dataDir}.Run(ctx, commands, workspace, environment)
 	if !ran {
 		logger.Info("project setup: already ran for this session")
-		return ""
+		return nil
 	}
 	attrs := []any{
 		"status", event.Status, "step", event.Step, "exit_code", event.ExitCode,
@@ -88,10 +90,52 @@ func runProjectSetup(
 		logger.Info("project setup: finished", attrs...)
 	} else {
 		logger.Warn("project setup: a step did not succeed; the agent will not start", attrs...)
-		failure = event.Message()
+		failed = &event
 	}
 	if err := client.publishEvent(ctx, worker.SetupEventType, event); err != nil {
 		logger.Warn("publish project setup outcome", "error", err)
 	}
-	return failure
+	return failed
+}
+
+// setupStartupFailure is the session startup error for a failed Setup run:
+// the step and its exit status, with the command's output as the detail.
+func setupStartupFailure(event worker.SetupEvent) worker.WorkspaceStartupEvent {
+	return worker.WorkspaceStartupEvent{
+		Status:  worker.WorkspaceStartupFailed,
+		Code:    domain.WorkspaceStartupErrorProjectSetup,
+		Message: event.Summary() + ". Fix the project's Setup script (Project settings > Scripts), then reopen this session to retry.",
+		Detail:  event.Output,
+	}
+}
+
+// checkoutStartupFailure is the session startup error for a checkout that
+// could not be prepared: the Coder connection's working directory, or the
+// repository checkout itself.
+func checkoutStartupFailure(err error) worker.WorkspaceStartupEvent {
+	if errors.Is(err, worker.ErrWorkingDirectoryUnusable) {
+		return worker.WorkspaceStartupEvent{
+			Status: worker.WorkspaceStartupFailed,
+			Code:   domain.WorkspaceStartupErrorWorkingDirectory,
+			Message: "AO couldn't use the working directory set on your Coder connection: " +
+				strings.TrimPrefix(err.Error(), worker.ErrWorkingDirectoryUnusable.Error()+": ") +
+				". Fix the directory or the connection's working directory, then reopen this session.",
+		}
+	}
+	return worker.WorkspaceStartupEvent{
+		Status:  worker.WorkspaceStartupFailed,
+		Code:    domain.WorkspaceStartupErrorCheckout,
+		Message: "Repository checkout failed. Check this project's GitHub access, then reopen this session to retry.",
+		Detail:  activity.Excerpt(err.Error(), setupMessageOutputLimit),
+	}
+}
+
+// reportWorkspaceStartup tells the control plane whether the workspace is
+// ready for the agent, so a failure is shown on the session's startup screen
+// (and cleared once a retry succeeds). A control plane that predates the event
+// refuses it; the worker then behaves as before.
+func reportWorkspaceStartup(ctx context.Context, logger *slog.Logger, client *client, event worker.WorkspaceStartupEvent) {
+	if err := client.publishEvent(ctx, worker.WorkspaceStartupEventType, event); err != nil {
+		logger.Warn("publish workspace startup outcome", "status", event.Status, "error", err)
+	}
 }

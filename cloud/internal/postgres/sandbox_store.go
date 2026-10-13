@@ -1117,9 +1117,13 @@ func (s *Store) MarkWorkerSeen(
 			SET worker_last_seen_at = now(),
 				startup_started_at = NULL,
 				startup_attempts = 0,
-				startup_error_code = '',
-				startup_error_message = '',
-				startup_error_at = NULL,
+				-- A checked-in worker clears the reconciler's startup error, but
+				-- not one it reported itself because it could not prepare the
+				-- workspace (domain.WorkspaceStartupErrorCodes): that one stays
+				-- until the worker reports the workspace ready.
+				startup_error_code = CASE WHEN startup_error_code = ANY($3) THEN startup_error_code ELSE '' END,
+				startup_error_message = CASE WHEN startup_error_code = ANY($3) THEN startup_error_message ELSE '' END,
+				startup_error_at = CASE WHEN startup_error_code = ANY($3) THEN startup_error_at ELSE NULL END,
 				observed_state = CASE
 					WHEN observed_state IN ('requested', 'provisioning', 'restoring', 'bootstrapping', 'disconnected')
 						THEN 'running'
@@ -1139,6 +1143,7 @@ func (s *Store) MarkWorkerSeen(
 			WHERE session_id = $1 AND org_id = $2`,
 			sessionID,
 			orgID,
+			domain.WorkspaceStartupErrorCodes(),
 		)
 		if err != nil {
 			return fmt.Errorf("mark sandbox worker seen: %w", err)

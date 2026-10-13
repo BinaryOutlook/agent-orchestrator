@@ -437,14 +437,10 @@ func run(logger *slog.Logger) error {
 				return
 			}
 			logger.Error("background workspace startup failed; waiting for session open", "error", err)
+			failure := checkoutStartupFailure(err)
+			reportWorkspaceStartup(runCtx, logger, client, failure)
 			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
-				message := "Repository checkout failed. Check this project's GitHub access, then reopen this session to retry."
-				if errors.Is(err, worker.ErrWorkingDirectoryUnusable) {
-					message = "AO couldn't use the working directory set on your Coder connection: " +
-						strings.TrimPrefix(err.Error(), worker.ErrWorkingDirectoryUnusable.Error()+": ") +
-						". Fix the directory or the connection's working directory, then reopen this session."
-				}
-				runner.SetWorkspaceStartupError(message)
+				runner.SetWorkspaceStartupError(failure.Message)
 			}
 			if !chatReadyClosed {
 				close(chatWorkspaceReady)
@@ -468,15 +464,17 @@ func run(logger *slog.Logger) error {
 		// gate the agent like the checkout does: a failed step keeps the agent
 		// from starting until the session is reopened.
 		for {
-			failure := runProjectSetup(runCtx, logger, client, dataDir, bootstrap.Launch.PostCreate, workspace, scriptEnvironment)
-			if failure == "" {
+			failed := runProjectSetup(runCtx, logger, client, dataDir, bootstrap.Launch.PostCreate, workspace, scriptEnvironment)
+			if failed == nil {
 				break
 			}
 			if runCtx.Err() != nil {
 				return
 			}
+			failure := setupStartupFailure(*failed)
+			reportWorkspaceStartup(runCtx, logger, client, failure)
 			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
-				runner.SetWorkspaceStartupError(failure + ". Fix the project's Setup script (Project settings > Scripts), then reopen this session to retry.")
+				runner.SetWorkspaceStartupError(failure.Message + ": " + failed.Output)
 			}
 			if !chatReadyClosed {
 				close(chatWorkspaceReady)
@@ -491,6 +489,8 @@ func run(logger *slog.Logger) error {
 		if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
 			runner.SetWorkspaceStartupError("")
 		}
+		// Clears a failure this or an earlier worker reported for the session.
+		reportWorkspaceStartup(runCtx, logger, client, worker.WorkspaceStartupEvent{Status: worker.WorkspaceStartupReady})
 		close(rehydrateDone)
 		if !chatReadyClosed {
 			close(chatWorkspaceReady)
