@@ -2004,6 +2004,8 @@
 	"archive.artifacts_other": "This session has {{count}} artifacts: {{names}}. Deleting them can't be undone, and a restored session starts without them.",
 	"archive.artifactsMore": "{{names}} and {{count}} more",
 	"archive.prUnaffected": "Its pull request is not affected.",
+	"archive.artifactsNotDeleted": "Session archived, artifacts kept",
+	"archive.artifactsNotDeletedBody": "Its artifact files could not be deleted and are still on disk.",
 	"archive.dialog": "Are you sure you want to archive this session?",
 	"archive.dialogNamed": "Are you sure you want to archive {{title}}?",
 	"terminal.agent": "agent",

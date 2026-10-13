@@ -1806,6 +1806,8 @@
 	"archive.artifacts_other": "Esta sesión tiene {{count}} artefactos: {{names}}. Eliminarlos no se puede deshacer y una sesión restaurada empieza sin ellos.",
 	"archive.artifactsMore": "{{names}} y {{count}} más",
 	"archive.prUnaffected": "Su pull request no se ve afectado.",
+	"archive.artifactsNotDeleted": "Sesión archivada, artefactos conservados",
+	"archive.artifactsNotDeletedBody": "No se pudieron eliminar sus archivos de artefactos y siguen en el disco.",
 	"archive.dialog": "¿Seguro que quieres archivar la sesión?",
 	"archive.dialogNamed": "¿Seguro que quieres archivar {{title}}?",
 	"terminal.agent": "agente",

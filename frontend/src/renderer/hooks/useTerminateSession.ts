@@ -16,6 +16,7 @@ import type { CloudCpSession } from "../lib/cloud-cp";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
+import { useUiStore } from "../stores/ui-store";
 
 type TerminateSessionOptions = {
 	/** Fires synchronously as the kill starts — before the cache drops the row. */
@@ -32,16 +33,17 @@ export const terminateSessionMutationKey = ["terminate-session"] as const;
  */
 export type TerminateSessionRequest = WorkspaceSession & { deleteArtifacts?: boolean };
 
-async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<void> {
+/** Resolves to whether the daemon confirmed it deleted the artifacts. */
+async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<boolean> {
 	if (session.cloud) {
 		const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
 		const baseUrl = settings?.cloudControlPlaneUrl ?? "";
 		if (baseUrl === "") throw new Error("The cloud control plane is not configured.");
 		await createRendererCloudCpClient(baseUrl).deleteSession(session.cloud.orgId, session.id);
-		return;
+		return false;
 	}
 
-	const { error, response } = await (session.hostId ? clientForHost(session.hostId) : apiClient).POST("/api/v1/sessions/{sessionId}/kill", {
+	const { data, error, response } = await (session.hostId ? clientForHost(session.hostId) : apiClient).POST("/api/v1/sessions/{sessionId}/kill", {
 		params: { path: { sessionId: session.id } },
 		body: session.deleteArtifacts ? { deleteArtifacts: true } : undefined,
 	});
@@ -49,6 +51,7 @@ async function terminateSession(queryClient: QueryClient, session: TerminateSess
 		const fallback = response ? `Failed to terminate session (${response.status})` : "Failed to terminate session";
 		throw new Error(apiErrorMessage(error, fallback));
 	}
+	return data?.artifactsDeleted === true;
 }
 
 // The merged board recomputes cloud cards from cloudSessionsQueryKey, NOT from
@@ -112,13 +115,14 @@ function summarizeBySession(mutations: TerminateSessionMutationState[]) {
 
 export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	const queryClient = useQueryClient();
+	const { t } = useTranslation();
 	return useMutation({
 		mutationKey: terminateSessionMutationKey,
 		mutationFn: async (session: TerminateSessionRequest) => {
 			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind, session.hostId);
 			void captureRendererEvent("ao.renderer.session_kill_requested", { project_id: session.workspaceId });
 
-			await terminateSession(queryClient, session);
+			return terminateSession(queryClient, session);
 		},
 		// Navigate and archive the card on the click, not on the round trip: the
 		// delete is slow (daemon kill or CP delete + sandbox teardown), and a row
@@ -153,8 +157,13 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			}
 			return { workspace, cloud };
 		},
-		onSuccess: async (_data, session) => {
+		onSuccess: async (artifactsDeleted, session) => {
 			void captureRendererEvent("ao.renderer.session_kill_succeeded", { project_id: session.workspaceId });
+			// The archive stands either way. A failed delete, or a host whose daemon
+			// predates the option, leaves the files on disk, so say so.
+			if (session.deleteArtifacts && !artifactsDeleted) {
+				useUiStore.getState().showGlobalToast(t("archive.artifactsNotDeleted"), t("archive.artifactsNotDeletedBody"), "error");
+			}
 			// Reinforce before refresh; keep the optimistic id until this refetch finishes.
 			const queryKey = workspaceQueryKeyForHost(session.hostId);
 			queryClient.setQueryData<WorkspaceSummary[]>(queryKey, (workspaces) =>

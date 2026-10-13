@@ -807,6 +807,41 @@ describe("TopbarArchiveButton", () => {
 			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		});
 
+		it("warns when the daemon does not confirm the delete", async () => {
+			useUiStore.setState({ globalToasts: [] });
+			// A failed delete and an older daemon both answer without artifactsDeleted.
+			postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1" }, error: undefined });
+			renderKill(withArtifacts(["report.md"]));
+
+			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
+			await userEvent.click(screen.getByRole("button", { name: "Archive session and delete its artifacts" }));
+
+			await waitFor(() =>
+				expect(useUiStore.getState().globalToasts).toEqual([
+					expect.objectContaining({
+						title: "Session archived, artifacts kept",
+						body: "Its artifact files could not be deleted and are still on disk.",
+						tone: "error",
+					}),
+				]),
+			);
+		});
+
+		it("does not warn once the daemon confirms the delete", async () => {
+			useUiStore.setState({ globalToasts: [] });
+			postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1", artifactsDeleted: true }, error: undefined });
+			const { queryClient } = renderKill(withArtifacts(["report.md"]));
+
+			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
+			await userEvent.click(screen.getByRole("button", { name: "Archive session and delete its artifacts" }));
+
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+			await waitFor(() =>
+				expect(queryClient.getMutationCache().getAll().map((mutation) => mutation.state.status)).toEqual(["success"]),
+			);
+			expect(useUiStore.getState().globalToasts).toEqual([]);
+		});
+
 		it("summarizes a long artifact list and notes that the PR is kept", async () => {
 			renderKill(withArtifacts(["a.md", "b.md", "c.md", "d.md", "e.md"], "pr_artifact"));
 

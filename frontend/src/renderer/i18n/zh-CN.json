@@ -1831,6 +1831,8 @@
 	"archive.artifacts_other": "此会话有 {{count}} 个产物：{{names}}。删除后无法撤销，恢复的会话将不包含这些产物。",
 	"archive.artifactsMore": "{{names}} 及另外 {{count}} 个",
 	"archive.prUnaffected": "其拉取请求不受影响。",
+	"archive.artifactsNotDeleted": "会话已归档，产物已保留",
+	"archive.artifactsNotDeletedBody": "无法删除其产物文件，这些文件仍在磁盘上。",
 	"archive.dialog": "确定要归档该会话吗？",
 	"archive.dialogNamed": "确定要归档 {{title}} 吗？",
 	"terminal.agent": "代理",

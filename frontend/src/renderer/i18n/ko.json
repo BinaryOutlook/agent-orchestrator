@@ -1776,6 +1776,8 @@
 	"archive.artifacts_other": "이 세션에는 아티팩트 {{count}}개가 있습니다: {{names}}. 삭제하면 되돌릴 수 없으며 복원한 세션에는 포함되지 않습니다.",
 	"archive.artifactsMore": "{{names}} 외 {{count}}개",
 	"archive.prUnaffected": "풀 리퀘스트에는 영향이 없습니다.",
+	"archive.artifactsNotDeleted": "세션을 보관했습니다. 아티팩트는 유지됨",
+	"archive.artifactsNotDeletedBody": "아티팩트 파일을 삭제하지 못해 디스크에 그대로 남아 있습니다.",
 	"archive.dialog": "세션을 보관하시겠습니까?",
 	"archive.dialogNamed": "{{title}}을(를) 보관하시겠습니까?",
 	"terminal.agent": "agent",

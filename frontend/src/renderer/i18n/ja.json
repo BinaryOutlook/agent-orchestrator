@@ -1776,6 +1776,8 @@
 	"archive.artifacts_other": "このセッションには {{count}} 件のアーティファクトがあります: {{names}}。削除は元に戻せず、復元したセッションには含まれません。",
 	"archive.artifactsMore": "{{names}} ほか {{count}} 件",
 	"archive.prUnaffected": "プルリクエストには影響しません。",
+	"archive.artifactsNotDeleted": "セッションをアーカイブしました（アーティファクトは保持）",
+	"archive.artifactsNotDeletedBody": "アーティファクトのファイルを削除できなかったため、ディスクに残っています。",
 	"archive.dialog": "セッションをアーカイブしてもよろしいですか？",
 	"archive.dialogNamed": "{{title}} をアーカイブしてもよろしいですか？",
 	"terminal.agent": "agent",

@@ -1806,6 +1806,8 @@
 	"archive.artifacts_other": "Esta sessão tem {{count}} artefatos: {{names}}. A exclusão não pode ser desfeita, e uma sessão restaurada começa sem eles.",
 	"archive.artifactsMore": "{{names}} e mais {{count}}",
 	"archive.prUnaffected": "O pull request não é afetado.",
+	"archive.artifactsNotDeleted": "Sessão arquivada, artefatos mantidos",
+	"archive.artifactsNotDeletedBody": "Não foi possível excluir os arquivos de artefatos, que continuam no disco.",
 	"archive.dialog": "Tem certeza de que deseja arquivar a sessão?",
 	"archive.dialogNamed": "Tem certeza de que deseja arquivar {{title}}?",
 	"terminal.agent": "agente",

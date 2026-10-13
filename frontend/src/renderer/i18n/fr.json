@@ -1806,6 +1806,8 @@
 	"archive.artifacts_other": "Cette session a {{count}} artefacts : {{names}}. Leur suppression est irréversible et une session restaurée repart sans eux.",
 	"archive.artifactsMore": "{{names}} et {{count}} autres",
 	"archive.prUnaffected": "Sa pull request n’est pas affectée.",
+	"archive.artifactsNotDeleted": "Session archivée, artefacts conservés",
+	"archive.artifactsNotDeletedBody": "Ses fichiers d’artefacts n’ont pas pu être supprimés et sont toujours sur le disque.",
 	"archive.dialog": "Voulez-vous vraiment archiver la session ?",
 	"archive.dialogNamed": "Voulez-vous vraiment archiver {{title}} ?",
 	"terminal.agent": "agent",
