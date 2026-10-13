@@ -5056,7 +5056,7 @@ describe("SessionView", () => {
 		expect(await screen.findByTestId("session-file-workspace")).toHaveTextContent("/Users/me/worktrees/s/src/App.tsx");
 	});
 
-	it("opens an absolute chat path to a listed artifact in the Files artifact viewer", async () => {
+	it("opens an absolute chat path to a listed artifact in the Artifacts view", async () => {
 		const worker = workerSession("sess-1");
 		worker.mode = "chat";
 		worker.artifactFiles = [{ kind: "markdown", name: "report.md", path: "out/report.md", size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
@@ -5065,6 +5065,7 @@ describe("SessionView", () => {
 			render(<SessionView sessionId="sess-1" />);
 			fireEvent.click(screen.getByRole("button", { name: "open chat absolute path" }));
 			expect(await screen.findByText("selected out/report.md")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
 			expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
 		} finally {
 			delete worker.artifactFiles;
