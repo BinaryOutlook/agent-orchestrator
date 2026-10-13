@@ -33,12 +33,14 @@ const (
 	// workspace stop/start keeps the prepared checkout and does not run it
 	// again.
 	setupDoneFile = "setup.done"
-	// CleanupHookFile and cleanupCommandsFile, in the worker data directory,
+	// CleanupHookFile and CleanupCommandsFile, in the worker data directory,
 	// are what the control plane runs before it deletes a Coder workspace: the
 	// hook enters the session's workspace with the session environment and
-	// runs the project's Cleanup commands.
+	// runs the Cleanup commands script beside it. The control plane rewrites
+	// that script with the project's current Cleanup before running the hook,
+	// as a local project reads its current config at removal time.
 	CleanupHookFile     = "cleanup-hook.sh"
-	cleanupCommandsFile = "cleanup-commands.sh"
+	CleanupCommandsFile = "cleanup-commands.sh"
 	// cleanupStateDir, in the worker data directory, makes Cleanup run at most
 	// once per workspace: the first hook run creates it and records the
 	// outcome there, and any later run (another control-plane replica, a
@@ -281,37 +283,36 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 
 func (b *tailBuffer) String() string { return b.data.String() }
 
-// WriteCleanupHook installs the hook the control plane runs before it deletes
-// the session's workspace, or removes it when there are no Cleanup commands.
-// The hook enters dir with the session environment and runs each command with
-// `sh -c` in order, each bounded by ProjectScriptStepTimeout when timeout(1)
-// is available, and stops at the first failure with that command's status.
-func WriteCleanupHook(dataDir string, commands []string, dir string, environment SessionScriptEnvironment) error {
-	hook := filepath.Join(dataDir, CleanupHookFile)
-	commandsPath := filepath.Join(dataDir, cleanupCommandsFile)
-	commands = nonEmptyCommands(commands)
-	if len(commands) == 0 {
-		for _, path := range []string{hook, commandsPath} {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-		}
-		return nil
-	}
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return err
-	}
+// CleanupCommandsScript is the shell script the Cleanup hook runs: each
+// command with `sh -c` in order, each bounded by ProjectScriptStepTimeout when
+// timeout(1) is available, stopping at the first failure with that command's
+// status. With no commands it does nothing.
+func CleanupCommandsScript(commands []string) string {
 	seconds := strconv.Itoa(int(ProjectScriptStepTimeout / time.Second))
 	var steps strings.Builder
-	steps.WriteString("#!/bin/sh\n# Written by the AO worker: the project's Cleanup commands.\n")
+	steps.WriteString("#!/bin/sh\n# Written by AO: the project's Cleanup commands.\n")
 	steps.WriteString("ao_timeout=\nif command -v timeout >/dev/null 2>&1; then ao_timeout=\"timeout -k 5 " + seconds + "\"; fi\n")
-	for index, command := range commands {
+	for index, command := range nonEmptyCommands(commands) {
 		step := strconv.Itoa(index + 1)
 		steps.WriteString("$ao_timeout sh -c " + shellQuote(command) + " </dev/null\n")
 		steps.WriteString("ao_code=$?\nif [ \"$ao_code\" -ne 0 ]; then echo \"cleanup step " + step +
 			" failed: exit status $ao_code\" >&2; exit \"$ao_code\"; fi\n")
 	}
-	if err := writeFileAtomic(commandsPath, []byte(steps.String()), 0o600); err != nil {
+	return steps.String()
+}
+
+// WriteCleanupHook installs the hook the control plane runs before it deletes
+// the session's workspace. The hook enters dir with the session environment
+// and runs the Cleanup commands script (CleanupCommandsScript). It is
+// installed even when the project has no Cleanup yet, so Cleanup added to the
+// project later still runs in the session's workspace with its environment.
+func WriteCleanupHook(dataDir string, commands []string, dir string, environment SessionScriptEnvironment) error {
+	hook := filepath.Join(dataDir, CleanupHookFile)
+	commandsPath := filepath.Join(dataDir, CleanupCommandsFile)
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(commandsPath, []byte(CleanupCommandsScript(commands)), 0o600); err != nil {
 		return err
 	}
 	state := filepath.Join(dataDir, cleanupStateDir)

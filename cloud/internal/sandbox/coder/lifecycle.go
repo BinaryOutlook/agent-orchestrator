@@ -1,7 +1,10 @@
 package coder
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
 // Worker environment for a bring-your-own connection's working directory and
@@ -109,6 +113,12 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	if existing, ok := cleanupRuns.Load(key); ok {
 		return c.awaitCleanup(ctx, id, existing.(*cleanupRun))
 	}
+	// The project's current Cleanup, when the caller read it: an empty list
+	// means the project has no Cleanup now, so nothing runs.
+	current, known := sandbox.CleanupCommands(ctx)
+	if known && len(current) == 0 {
+		return true
+	}
 	agent, ok := c.selectAgent(view)
 	if normalizeState(view.LatestBuild.Status) != sandbox.StateRunning || !ok || !agentReady(agent) {
 		return true
@@ -116,6 +126,15 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	ptyURL, err := url.Parse(c.baseURL + "/api/v2/workspaceagents/" + url.PathEscape(agent.ID) + "/pty")
 	if err != nil {
 		return true
+	}
+	override := ""
+	if known {
+		if payload, fits := cleanupCommandsPayload(current); fits {
+			override = payload
+		} else {
+			slog.WarnContext(ctx, "coder: the project's current Cleanup is too large to pass to the workspace; running the commands from the session's start",
+				"workspace_id", string(id), "limit_bytes", cleanupPayloadLimit)
+		}
 	}
 	wait := c.cleanupWait
 	if wait <= 0 {
@@ -132,7 +151,7 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	attrs := c.stageAttrs(string(id), agent.ID)
 	go func() {
 		defer close(run.done)
-		c.runCleanup(runCtx, ptyURL, wait, attrs)
+		c.runCleanup(runCtx, ptyURL, wait, override, attrs)
 	}()
 	slog.InfoContext(ctx, "coder: running project cleanup before deleting the workspace",
 		"workspace_id", string(id), "budget", wait)
@@ -165,7 +184,7 @@ func (c *Client) awaitCleanup(ctx context.Context, id sandbox.ID, run *cleanupRu
 
 // runCleanup runs the worker-installed Cleanup hook through the agent PTY and
 // reports the outcome as StageCleanup.
-func (c *Client) runCleanup(ctx context.Context, ptyURL *url.URL, wait time.Duration, attrs map[string]string) {
+func (c *Client) runCleanup(ctx context.Context, ptyURL *url.URL, wait time.Duration, override string, attrs map[string]string) {
 	finish := sandbox.BeginStage(ctx, StageCleanup)
 	runCtx, cancel := context.WithTimeout(ctx, wait+cleanupMargin)
 	defer cancel()
@@ -173,7 +192,7 @@ func (c *Client) runCleanup(ctx context.Context, ptyURL *url.URL, wait time.Dura
 	query := attemptURL.Query()
 	query.Set("width", "200")
 	query.Set("height", "50")
-	query.Set("command", "sh -c "+shellQuote(cleanupHookCommand(c.durableRoot, wait)))
+	query.Set("command", "sh -c "+shellQuote(cleanupHookCommand(c.durableRoot, wait, override)))
 	query.Set("backend_type", "buffered")
 	attemptURL.RawQuery = query.Encode()
 	result, status, err := c.runMarkedCommandOnce(runCtx, &attemptURL, cleanupMarker, wait+cleanupMargin)
@@ -205,24 +224,60 @@ func pruneCleanupRuns() {
 	})
 }
 
+// cleanupPayloadLimit bounds the encoded Cleanup commands passed in the PTY
+// command, which travels in the request URL; larger Cleanup falls back to the
+// commands the worker installed.
+const cleanupPayloadLimit = 12 << 10
+
+// cleanupCommandsPayload is the gzip-compressed, base64-encoded Cleanup
+// commands script for the project's current Cleanup, and whether it fits
+// cleanupPayloadLimit.
+func cleanupCommandsPayload(commands []string) (string, bool) {
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte(worker.CleanupCommandsScript(commands))); err != nil {
+		return "", false
+	}
+	if err := writer.Close(); err != nil {
+		return "", false
+	}
+	payload := base64.StdEncoding.EncodeToString(compressed.Bytes())
+	return payload, len(payload) <= cleanupPayloadLimit
+}
+
 // cleanupHookCommand runs the worker-installed Cleanup hook as the user that
 // owns it (the worker's user: the workspace user itself, or the dedicated
 // ao-worker account through sudo), under timeout(1) when the image has it,
 // then prints the tail of its output and its exit status (or cleanupSkipped)
-// after cleanupMarker.
-func cleanupHookCommand(durableRoot string, budget time.Duration) string {
+// after cleanupMarker. With override (a cleanupCommandsPayload), it first
+// replaces the commands script beside the hook with the project's current
+// Cleanup, as that user, so the hook keeps its working directory, session
+// environment and run-once lock; if that fails the installed commands run.
+func cleanupHookCommand(durableRoot string, budget time.Duration, override string) string {
 	hook := shellQuote(path.Join(durableRoot, ".ao", "worker", cleanupHookFile))
 	if sandbox.NormalizeCoderDurableRoot(durableRoot) == sandbox.CoderHomeDurableRoot {
 		hook = `"$HOME"/.ao/worker/` + cleanupHookFile
 	}
 	seconds := strconv.Itoa(max(1, int(budget/time.Second)))
-	return "ao_hook=" + hook + "\n" +
+	command := "ao_hook=" + hook + "\n" +
 		"ao_skip() { printf '\\n%s:%s\\n' " + cleanupMarker + " " + cleanupSkipped + "; exit 0; }\n" +
+		"ao_owner=\n" +
 		"if [ -x \"$ao_hook\" ]; then set -- \"$ao_hook\"\n" +
 		"elif sudo -n test -x \"$ao_hook\" 2>/dev/null; then\n" +
 		"  ao_owner=$(sudo -n stat -c %U \"$ao_hook\" 2>/dev/null) || ao_skip\n" +
 		"  set -- sudo -n -H -u \"$ao_owner\" \"$ao_hook\"\n" +
-		"else ao_skip; fi\n" +
+		"else ao_skip; fi\n"
+	if override != "" {
+		write := shellQuote(`cat >"$1.tmp" && chmod 600 "$1.tmp" && mv "$1.tmp" "$1"`)
+		command += "ao_commands=$(dirname \"$ao_hook\")/" + worker.CleanupCommandsFile + "\n" +
+			"ao_payload=" + shellQuote(override) + "\n" +
+			"if [ -n \"$ao_owner\" ]; then\n" +
+			"  printf %s \"$ao_payload\" | base64 -d | gzip -dc | sudo -n -H -u \"$ao_owner\" sh -c " + write + " _ \"$ao_commands\"\n" +
+			"else\n" +
+			"  printf %s \"$ao_payload\" | base64 -d | gzip -dc | sh -c " + write + " _ \"$ao_commands\"\n" +
+			"fi || echo \"AO: could not install the project's current Cleanup; running the commands from the session's start\" >&2\n"
+	}
+	return command +
 		"if command -v timeout >/dev/null 2>&1; then\n" +
 		"  ao_out=$(timeout -k 5 " + seconds + " \"$@\" 2>&1 </dev/null)\n" +
 		"else\n" +

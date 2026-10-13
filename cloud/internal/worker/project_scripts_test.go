@@ -91,7 +91,8 @@ func TestSetupKeepsTheTailOfLongOutput(t *testing.T) {
 
 // The Cleanup hook runs the commands in the workspace with the session
 // environment, stops at the first failure, runs them only once however often
-// it is invoked, and is removed when the project has no Cleanup commands.
+// it is invoked, and stays installed (doing nothing) when the project has no
+// Cleanup commands, so Cleanup added later can still run.
 func TestCleanupHookRunsCommandsOnce(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("sh"); err != nil {
@@ -127,10 +128,15 @@ func TestCleanupHookRunsCommandsOnce(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "never-ran")); err == nil {
 		t.Fatal("a step after the failure ran")
 	}
-	if err := WriteCleanupHook(dataDir, []string{" "}, workspace, scriptEnvironment(workspace)); err != nil {
+	emptyDir := t.TempDir()
+	if err := WriteCleanupHook(emptyDir, []string{" "}, workspace, scriptEnvironment(workspace)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(hook); !os.IsNotExist(err) {
-		t.Fatalf("hook left behind: %v", err)
+	output, err = func() (string, error) {
+		out, err := exec.Command(filepath.Join(emptyDir, CleanupHookFile)).CombinedOutput()
+		return string(out), err
+	}()
+	if err != nil || strings.TrimSpace(output) != "" {
+		t.Fatalf("hook with no Cleanup commands: output = %q, err = %v; want a silent success", output, err)
 	}
 }

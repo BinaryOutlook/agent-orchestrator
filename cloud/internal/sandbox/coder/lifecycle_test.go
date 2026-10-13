@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 )
@@ -307,7 +309,7 @@ func TestCleanupHookCommandRunsTheInstalledHook(t *testing.T) {
 	}
 	home := t.TempDir()
 	run := func() string {
-		command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second))
+		command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second, ""))
 		command.Env = append(os.Environ(), "HOME="+home)
 		output, err := command.CombinedOutput()
 		if err != nil {
@@ -328,7 +330,92 @@ func TestCleanupHookCommandRunsTheInstalledHook(t *testing.T) {
 	if output := run(); !strings.Contains(output, "stopping stack") || !strings.Contains(output, cleanupMarker+":4") {
 		t.Fatalf("hook output: %q", output)
 	}
-	if command := cleanupHookCommand("/srv/ao", time.Second); !strings.Contains(command, "'/srv/ao/.ao/worker/"+cleanupHookFile+"'") {
+	if command := cleanupHookCommand("/srv/ao", time.Second, ""); !strings.Contains(command, "'/srv/ao/.ao/worker/"+cleanupHookFile+"'") {
 		t.Fatalf("absolute root command = %q", command)
+	}
+}
+
+// Delete runs the project's Cleanup as it is when the workspace is deleted:
+// the current commands travel with the hook command, an empty list runs
+// nothing, and without a lookup the commands the worker installed run.
+func TestDeleteUsesTheProjectsCurrentCleanup(t *testing.T) {
+	t.Parallel()
+	current, currentClient := newCleanupCoder(t, "running", "0", "")
+	close(current.release)
+	ctx := sandbox.WithCleanupCommands(context.Background(), []string{"docker compose -p current down"})
+	if err := currentClient.Delete(ctx, testWorkspaceID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	waitFor(t, "the cleanup hook", func() bool { runs, _, _ := current.snapshot(); return runs == 1 })
+	_, _, command := current.snapshot()
+	payload, fits := cleanupCommandsPayload([]string{"docker compose -p current down"})
+	if !fits || !strings.Contains(command, payload) {
+		t.Fatalf("hook command does not carry the current Cleanup: %q", command)
+	}
+
+	empty, emptyClient := newCleanupCoder(t, "running", "0", "")
+	close(empty.release)
+	if err := emptyClient.Delete(sandbox.WithCleanupCommands(context.Background(), nil), testWorkspaceID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if runs, transitions, _ := empty.snapshot(); runs != 0 || len(transitions) != 1 || transitions[0] != "delete" {
+		t.Fatalf("a project without Cleanup ran the hook: runs = %d, transitions = %v", runs, transitions)
+	}
+
+	installed, installedClient := newCleanupCoder(t, "running", "0", "")
+	close(installed.release)
+	if err := installedClient.Delete(context.Background(), testWorkspaceID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	waitFor(t, "the cleanup hook", func() bool { runs, _, _ := installed.snapshot(); return runs == 1 })
+	if _, _, command := installed.snapshot(); strings.Contains(command, "ao_payload=") {
+		t.Fatalf("without a lookup the hook command must run the installed commands: %q", command)
+	}
+}
+
+// The hook command replaces the installed Cleanup commands with the current
+// ones and runs them through the worker's hook, in the session's directory
+// with its environment; Cleanup too large to pass falls back to the installed
+// commands.
+func TestCleanupHookCommandRunsTheCurrentCommands(t *testing.T) {
+	t.Parallel()
+	for _, tool := range []string{"sh", "base64", "gzip"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " is unavailable")
+		}
+	}
+	home, workspace := t.TempDir(), t.TempDir()
+	dataDir := filepath.Join(home, ".ao", "worker")
+	environment := worker.SessionScriptEnvironment{SessionID: "session-1", WorkspaceDir: workspace}
+	if err := worker.WriteCleanupHook(dataDir, []string{"echo installed-cleanup"}, workspace, environment); err != nil {
+		t.Fatal(err)
+	}
+	payload, fits := cleanupCommandsPayload([]string{`echo "current-cleanup $AO_SESSION_ID $(basename "$PWD")"`})
+	if !fits {
+		t.Fatal("a one-line Cleanup does not fit the payload limit")
+	}
+	command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second, payload))
+	command.Env = append(os.Environ(), "HOME="+home)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("hook command: %v: %s", err, output)
+	}
+	want := "current-cleanup session-1 " + filepath.Base(workspace)
+	if !strings.Contains(string(output), want) || strings.Contains(string(output), "installed-cleanup") ||
+		!strings.Contains(string(output), cleanupMarker+":0") {
+		t.Fatalf("hook output = %q, want the current Cleanup (%q)", output, want)
+	}
+
+	huge := make([]string, 20)
+	for index := range huge {
+		var step strings.Builder
+		step.WriteString("echo " + strconv.Itoa(index))
+		for step.Len() < 4<<10-40 {
+			step.WriteString(" " + uuid.NewString())
+		}
+		huge[index] = step.String()
+	}
+	if _, fits := cleanupCommandsPayload(huge); fits {
+		t.Fatal("80 KiB of random Cleanup fits the URL payload limit")
 	}
 }

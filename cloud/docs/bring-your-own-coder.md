@@ -122,14 +122,17 @@ connection setting is not needed for them.
   the prepared checkout and does not run them again. Each command may run for
   10 minutes. If one fails or times out, the agent does not start: the session
   shows "Setup step N failed" with the end of the command's output, and
-  reopening the session runs Setup again. This matches a local project, where a
-  failed setup step stops the launch.
+  reopening the session runs Setup again with the project's current commands,
+  so fixing the Setup script and retrying is enough. This matches a local
+  project, where a failed setup step stops the launch.
 - **Cleanup** commands run in order before AO deletes the session's workspace,
   in the same directory and environment, as the same user as the agent. They do
   not run when a workspace is stopped or paused. Cleanup is best effort: it has
   10 minutes in total, a failed command stops the remaining ones, and the
-  workspace is deleted either way. Cleanup currently runs only on Coder; other
-  cloud sandboxes are deleted without it.
+  workspace is deleted either way. Like a local project, AO uses the project's
+  Cleanup as it is when the workspace is deleted, so editing it after a session
+  started still applies to that session. Cleanup currently runs only on Coder;
+  other cloud sandboxes are deleted without it.
 - Up to 20 commands per list, each at most 4 KB.
 
 Environment available to both:

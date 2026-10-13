@@ -1030,6 +1030,39 @@ func (s *Store) WorkerLaunchSpec(
 	return launch, nil
 }
 
+// ProjectCleanupCommands returns the current Cleanup commands (Project
+// settings > Scripts) of the project a session belongs to, read when its
+// sandbox is deleted so Cleanup follows the project's config at removal time.
+// A session whose project is gone or archived is ErrNotFound; the caller then
+// falls back to the commands the worker installed.
+func (s *Store) ProjectCleanupCommands(ctx context.Context, orgID, sessionID string) ([]string, error) {
+	var commands []string
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var config []byte
+		err := tx.QueryRow(
+			ctx,
+			`SELECT project.config
+			FROM ao_sessions session
+			JOIN ao_projects project ON project.id = session.project_id AND project.org_id = session.org_id
+			WHERE session.id = $1 AND session.org_id = $2 AND project.archived_at IS NULL`,
+			sessionID,
+			orgID,
+		).Scan(&config)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("load project cleanup commands: %w", err)
+		}
+		_, commands = domain.ProjectScripts(config)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return commands, nil
+}
+
 // RegisterWorkerBootstrap records the epoch a bootstrap exchange authorized. It
 // does not claim the worker is ready — only a heartbeat does that.
 func (s *Store) RegisterWorkerBootstrap(

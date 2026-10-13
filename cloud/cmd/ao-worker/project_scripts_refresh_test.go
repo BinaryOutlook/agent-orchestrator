@@ -68,7 +68,7 @@ func TestReopenedSessionRetriesSetupWithTheProjectsCurrentCommands(t *testing.T)
 	if _, err := os.Stat(filepath.Join(workspace, "setup-ran")); err != nil {
 		t.Fatalf("the retry did not run the current Setup command: %v", err)
 	}
-	hook, err := os.ReadFile(filepath.Join(dataDir, "cleanup-commands.sh"))
+	hook, err := os.ReadFile(filepath.Join(dataDir, worker.CleanupCommandsFile))
 	if err != nil {
 		t.Fatalf("read reinstalled cleanup commands: %v", err)
 	}
@@ -77,8 +77,8 @@ func TestReopenedSessionRetriesSetupWithTheProjectsCurrentCommands(t *testing.T)
 	}
 }
 
-// A project whose Cleanup was removed no longer leaves a hook behind.
-func TestRefreshRemovesTheCleanupHookWhenCleanupIsCleared(t *testing.T) {
+// A project whose Cleanup was removed leaves a hook that runs nothing.
+func TestRefreshClearsTheCleanupCommandsWhenCleanupIsCleared(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dataDir, workspace := t.TempDir(), t.TempDir()
@@ -88,8 +88,12 @@ func TestRefreshRemovesTheCleanupHookWhenCleanupIsCleared(t *testing.T) {
 	}
 	c := projectScriptsServer(t, nil, nil, nil)
 	refreshProjectScripts(ctx, logger, c, dataDir, workspace, environment, projectScripts{PreRemove: []string{"echo old-cleanup"}})
-	if _, err := os.Stat(filepath.Join(dataDir, worker.CleanupHookFile)); !os.IsNotExist(err) {
-		t.Fatalf("cleanup hook still installed after Cleanup was cleared (stat err %v)", err)
+	script, err := os.ReadFile(filepath.Join(dataDir, worker.CleanupCommandsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(script), "old-cleanup") {
+		t.Fatalf("cleanup commands still run the removed step: %q", script)
 	}
 }
 
