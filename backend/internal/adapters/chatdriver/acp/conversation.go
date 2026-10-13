@@ -461,8 +461,18 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			return err
 		}
 	}
+	var options []SessionOption
+	if optionsFor != nil {
+		options = optionsFor(settings)
+	}
 	if legacyModel && settings.Model != "" {
+		// A binding may name the model differently from the turn settings.
 		model := settings.Model
+		for _, option := range options {
+			if option.ID == "model" && option.Value != "" {
+				model = option.Value
+			}
+		}
 		modelOptionFound := false
 		for _, option := range configOptions {
 			if option.ID != "model" {
@@ -487,12 +497,11 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		}
 		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 	}
-	var options []SessionOption
-	if optionsFor != nil {
-		options = optionsFor(settings)
-	}
 	applyOption := func(option SessionOption) error {
 		if option.ID == "" || option.Value == "" {
+			return nil
+		}
+		if offered, _ := c.configOptionOffers(option.ID, option.Value); option.Optional && !offered {
 			return nil
 		}
 		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {

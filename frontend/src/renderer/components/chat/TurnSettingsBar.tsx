@@ -274,6 +274,7 @@ export function TurnSettingsBar({
 		: modeOption;
 	const primaryModelOption = grouped.model.at(0);
 	const fastOption = grouped.toggles.find(isFastOption);
+	const thinkingOption = grouped.toggles.find(isThinkingToggle);
 	const fastControls = fastOption && onChangeConfigOption
 		? { fast: optionIsEnabled(fastOption), onToggleFast: (on: boolean) => setConfigToggle(fastOption, on, applyOption) }
 		: {};
@@ -345,6 +346,9 @@ export function TurnSettingsBar({
 				}
 				: undefined,
 			...fastControls,
+			...(thinkingOption && onChangeConfigOption
+				? { thinking: optionIsEnabled(thinkingOption), onToggleThinking: (on: boolean) => setConfigToggle(thinkingOption, on, applyOption) }
+				: {}),
 		};
 	// Plan mode and the on/off settings live in the add menu. What is left here
 	// is anything the agent offers beyond its first model and effort setting.
@@ -1404,7 +1408,12 @@ function isModeOption(option: ChatConfigOption): boolean {
 }
 
 function isInlineToggleOption(option: ChatConfigOption): boolean {
-	return option.type === "boolean" || /(?:^|[\s_-])fast(?:[\s_-]|$)/i.test(`${option.id} ${option.name}`);
+	return option.type === "boolean" || isThinkingToggle(option) || /(?:^|[\s_-])fast(?:[\s_-]|$)/i.test(`${option.id} ${option.name}`);
+}
+
+/** Cursor reports thinking as an on/off choice among its effort settings. */
+function isThinkingToggle(option: ChatConfigOption): boolean {
+	return option.id === "thinking" && option.choices.length === 2 && option.choices.some(choiceIsEnabled);
 }
 
 function optionIsEnabled(option: ChatConfigOption): boolean {
@@ -1455,7 +1464,7 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 			else otherModel.push(option);
 			continue;
 		}
-		if (isEffortOption(option)) {
+		if (isEffortOption(option) && !isThinkingToggle(option)) {
 			if (!option.choices.some((choice) => choice.value && choice.value !== "default")) continue;
 			effort.push(option);
 			continue;

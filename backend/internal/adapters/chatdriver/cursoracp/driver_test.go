@@ -289,19 +289,42 @@ func TestConfigureUsesNativeCursorACPWithoutStandingRule(t *testing.T) {
 	}
 }
 
-func TestSessionOptionsMapOnlyAdvertisedModel(t *testing.T) {
+func TestSessionOptionsSplitAModelIDIntoCursorSettings(t *testing.T) {
 	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
 		t.Fatalf("empty settings = %#v", got)
 	}
-	got := sessionOptions(ports.ChatTurnSettings{
-		Model:    "gpt-5.5[context=272k,reasoning=medium,fast=false]",
-		Approval: ports.PermissionModeBypassPermissions,
-		Effort:   "high",
-	})
-	want := []acpdriver.SessionOption{{
-		ID: "model", Value: "gpt-5.5[context=272k,reasoning=medium,fast=false]",
-	}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("options = %#v, want only provider-advertised model option %#v", got, want)
+	opt := func(id, value string) acpdriver.SessionOption {
+		return acpdriver.SessionOption{ID: id, Value: value, Optional: id != "model"}
+	}
+	tests := []struct {
+		name     string
+		settings ports.ChatTurnSettings
+		want     []acpdriver.SessionOption
+	}{
+		{"plain id keeps Cursor's saved settings", ports.ChatTurnSettings{Model: "claude-opus-4-8"},
+			[]acpdriver.SessionOption{opt("model", "claude-opus-4-8")}},
+		{"auto is Cursor's default", ports.ChatTurnSettings{Model: "auto"},
+			[]acpdriver.SessionOption{opt("model", "default")}},
+		{"command-line id with every setting", ports.ChatTurnSettings{Model: "claude-opus-4-8-thinking-high-fast"},
+			[]acpdriver.SessionOption{opt("model", "claude-opus-4-8"), opt("thinking", "true"), opt("effort", "high"), opt("fast", "true")}},
+		{"a setting the id leaves out is off", ports.ChatTurnSettings{Model: "claude-opus-4-8-low"},
+			[]acpdriver.SessionOption{opt("model", "claude-opus-4-8"), opt("thinking", "false"), opt("effort", "low"), opt("fast", "false")}},
+		{"effort before thinking", ports.ChatTurnSettings{Model: "claude-4.6-opus-high-thinking"},
+			[]acpdriver.SessionOption{opt("model", "claude-4.6-opus"), opt("thinking", "true"), opt("effort", "high"), opt("fast", "false")}},
+		{"grok drops the command-line prefix", ports.ChatTurnSettings{Model: "cursor-grok-4.6-high"},
+			[]acpdriver.SessionOption{opt("model", "grok-4.6"), opt("thinking", "false"), opt("effort", "high"), opt("fast", "false")}},
+		{"an older session's bracket id", ports.ChatTurnSettings{Model: "gpt-5.5[context=272k,reasoning=medium,fast=false]"},
+			[]acpdriver.SessionOption{opt("model", "gpt-5.5"), opt("effort", "medium"), opt("fast", "false")}},
+		{"a chosen effort wins", ports.ChatTurnSettings{Model: "gpt-5.5[reasoning=medium]", Effort: "high"},
+			[]acpdriver.SessionOption{opt("model", "gpt-5.5"), opt("effort", "high")}},
+		{"a model whose name ends in a number", ports.ChatTurnSettings{Model: "gpt-5-mini"},
+			[]acpdriver.SessionOption{opt("model", "gpt-5-mini")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sessionOptions(tt.settings); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("options = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
 }

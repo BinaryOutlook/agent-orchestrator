@@ -123,6 +123,9 @@ type PermissionPolicy func(
 type SessionOption struct {
 	ID    string
 	Value string
+	// Optional settings are skipped when the session does not offer them, such
+	// as a thinking setting on a model that has none.
+	Optional bool
 }
 
 // Driver opens ACP conversations for a single harness.
@@ -601,8 +604,11 @@ func (d *Driver) initialize(
 			// These two Claude bridge extensions enrich the transcript. They do
 			// not grant the agent access to AO's terminal or filesystem APIs.
 			Meta: map[string]any{
-				"subagent-transcript": true,
-				"terminal_output":     true,
+				// Cursor reports a model's effort, thinking and speed as their own
+				// settings only to a client that asks. Other agents ignore it.
+				"parameterizedModelPicker": true,
+				"subagent-transcript":      true,
+				"terminal_output":          true,
 				// claude-agent-acp publishes retryable API/transport failures only
 				// when the client opts into this namespaced metadata extension. It is
 				// observational: AO receives status, but grants no new capability.

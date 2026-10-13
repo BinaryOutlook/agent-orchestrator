@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -156,9 +157,65 @@ func permissionOption(
 	return "", false
 }
 
+// sessionOptions turns a chosen model into Cursor's session settings. Cursor
+// names a model plainly and holds its effort, thinking and speed as separate
+// settings, while its command line and its older sessions fold them into the
+// id: "claude-opus-4-8-thinking-high-fast", "claude-opus-4-8[thinking=true,effort=high]".
+// A plain id sets only the model and keeps the settings Cursor saved for it.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if settings.Model == "" {
 		return nil
 	}
-	return []acpdriver.SessionOption{{ID: "model", Value: settings.Model}}
+	model, params := cursorModelParams(settings.Model)
+	if settings.Effort != "" {
+		params["effort"] = settings.Effort
+	}
+	options := []acpdriver.SessionOption{{ID: "model", Value: model}}
+	for _, id := range []string{"thinking", "effort", "fast"} {
+		if value := params[id]; value != "" {
+			options = append(options, acpdriver.SessionOption{ID: id, Value: value, Optional: true})
+		}
+	}
+	return options
 }
+
+func cursorModelParams(id string) (string, map[string]string) {
+	params := map[string]string{}
+	if base, body, bracketed := strings.Cut(strings.TrimSuffix(id, "]"), "["); bracketed {
+		for _, param := range strings.Split(body, ",") {
+			key, value, _ := strings.Cut(strings.TrimSpace(param), "=")
+			if key == "reasoning" || key == "reasoning_effort" {
+				key = "effort"
+			}
+			params[key] = value
+		}
+		return base, params
+	}
+	tokens := strings.Split(id, "-")
+	end := len(tokens)
+	for ; end > 1; end-- {
+		last := tokens[end-1]
+		if last == "fast" || last == "thinking" {
+			params[last] = "true"
+		} else if slices.Contains(cursorEfforts, last) && params["effort"] == "" {
+			params["effort"] = last
+		} else {
+			break
+		}
+	}
+	if len(params) == 0 {
+		if id == "auto" {
+			id = "default"
+		}
+		return id, params
+	}
+	// A command-line id that leaves a setting out means it is off.
+	for _, flag := range []string{"thinking", "fast"} {
+		if params[flag] == "" {
+			params[flag] = "false"
+		}
+	}
+	return strings.TrimPrefix(strings.Join(tokens[:end], "-"), "cursor-"), params
+}
+
+var cursorEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}

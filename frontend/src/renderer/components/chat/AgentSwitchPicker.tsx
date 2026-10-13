@@ -216,11 +216,8 @@ export function AgentModelPicker({
 	const catalogs = useQueries({
 		queries: others.map((agent) => ({ ...agentModelsQueryOptions(agent.id, projectId, hostId), enabled: open })),
 	});
-	// In chat, an agent whose list folds settings into the model id (Cursor) only takes the
-	// models its own session offers, so a switch starts it on its default and the model is set after.
-	const chatFixed = (harness: string) => !terminal && harness !== currentHarness && listsModelVariants(harness);
 	const otherSource = (harness: string, held?: PendingAgentSwitch) => otherAgentSource(
-		harness, chatFixed(harness) ? undefined : catalogs[others.findIndex((agent) => agent.id === harness)]?.data?.models, held, onPendingChange, t,
+		harness, catalogs[others.findIndex((agent) => agent.id === harness)]?.data?.models, held, onPendingChange, t,
 	);
 	// The rows below always describe who answers next: the pending agent, or the running one.
 	const shownHarness = pending?.harness ?? currentHarness;
@@ -255,7 +252,7 @@ export function AgentModelPicker({
 	// A terminal's running agent cannot be given another model from here.
 	const pickable = (harness: string) => (harness === currentHarness
 		? !terminal && Boolean(currentSource.onPickModel)
-		: !agentSwitch.disabled && !chatFixed(harness) && agents.some((agent) => agent.id === harness));
+		: !agentSwitch.disabled && agents.some((agent) => agent.id === harness));
 	// A terminal's Switch button is in this menu, so a pick there must not close it.
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
 	const setups = favorites.filter((entry) => !(terminal && entry.harness === currentHarness));
@@ -366,11 +363,6 @@ export function AgentModelPicker({
 										</OptionMenuItem>
 									</OptionMenuSubContent>
 								</OptionMenuSub>
-								{pending && chatFixed(pending.harness) ? (
-									<p className="px-3 py-2 text-xs text-muted-foreground">
-										{agentLabel(pending.harness)} starts on its default model in chat. Pick a model after the switch.
-									</p>
-								) : null}
 								{settable && source.models.length > 0 ? (
 									<OptionMenuSub>
 										<OptionMenuSubTrigger label="Model" value={modelValue} />
