@@ -467,7 +467,9 @@ describe("a sign-in that is waiting", () => {
 		const { cache } = renderAccounts();
 		await screen.findByTestId("provider-account-a");
 		const reads = mock.get.mock.calls.length;
-		await startAdding(user, 1, "Browser");
+		// The sign-in completes at once, so the methods may be gone before they could be looked up.
+		await user.click(addButtons()[1]);
+		await user.click(screen.getByRole("button", { name: "Browser" }));
 		expect(await status()).toHaveTextContent("Account signed in.");
 		expect(polls()[0][1]).toEqual({ params: { path: { loginId: "login-1" } } });
 		expect(within(detail()).getByRole("heading", { name: clara.displayName })).toBeInTheDocument();
