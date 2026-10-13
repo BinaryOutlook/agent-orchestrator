@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { cloudProjectsQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
@@ -89,6 +89,16 @@ export function CloudProjectScriptsSettings({ projectId, cloudOrgId, onSaveState
 
 type ScriptCommands = { postCreate: string[]; preRemove?: string[] };
 
+/** The variables a Cloud project's Setup and Cleanup steps can use. */
+const cloudScriptVariables = [
+	["AO_WORKTREE_PATH", "settings.project.cloudVarFolder"],
+	["AO_SESSION_ID", "settings.project.cloudVarSessionId"],
+	["AO_SESSION_BRANCH", "settings.project.cloudVarBranch"],
+	["AO_SESSION_KIND", "settings.project.cloudVarKind"],
+	["AO_PROJECT_NAME", "settings.project.cloudVarProject"],
+	["AO_REPOSITORY_URL", "settings.project.cloudVarRepository"],
+] as const;
+
 function ScriptsEditor({ projectId, scratch, postCreate, preRemove, cloud, save, onSaveState, onSaved }: {
 	/** The local project, for retrying its cleanup; absent for a Cloud project. */
 	projectId?: string;
@@ -135,7 +145,10 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, cloud, save,
 	});
 	useEffect(() => {
 		onSaveState?.({
-			phase: mutation.isError ? "failed" : mutation.isPending ? "saving" : dirty ? "pending" : savedAt ? "saved" : "idle",
+			// This form saves only on "Save changes", so unsaved edits are reported as
+			// dirty but never as the autosave "pending" phase, which the settings
+			// sidebar shows as an endless "Saving" spinner.
+			phase: mutation.isError ? "failed" : mutation.isPending ? "saving" : savedAt && !dirty ? "saved" : "idle",
 			dirty,
 			requestPending: mutation.isPending,
 			error: mutation.error instanceof Error ? mutation.error.message : undefined,
@@ -163,12 +176,13 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, cloud, save,
 						<p>{t("settings.project.setupPlatformHint")}</p>
 					</div>}
 					{!scratch && <details className="rounded-md border border-border p-3 text-xs text-settings-muted">
-						<summary className="cursor-pointer font-medium text-settings-label">{t(`settings.project.${kind}Paths`)}</summary>
-						<div className="mt-2 space-y-1">
-							<p><code>{"AO_SOURCE_TREE_PATH"}</code> — {t(cloud ? "settings.project.cloudPathWorkspace" : `settings.project.${kind}SourcePath`)}</p>
-							<p><code>{"AO_WORKTREE_PATH"}</code> — {t(cloud ? "settings.project.cloudPathWorkspace" : `settings.project.${kind}WorktreePath`)}</p>
-							{cloud && <p>{t("settings.project.cloudScriptEnv")}</p>}
-						</div>
+						<summary className="cursor-pointer font-medium text-settings-label">{t(cloud ? "settings.project.cloudVariables" : `settings.project.${kind}Paths`)}</summary>
+						{cloud ? <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
+							{cloudScriptVariables.map(([name, key]) => <Fragment key={name}><dt><code>{"$" + name}</code></dt><dd>{t(key)}</dd></Fragment>)}
+						</dl> : <div className="mt-2 space-y-1">
+							<p><code>{"AO_SOURCE_TREE_PATH"}</code>: {t(`settings.project.${kind}SourcePath`)}</p>
+							<p><code>{"AO_WORKTREE_PATH"}</code>: {t(`settings.project.${kind}WorktreePath`)}</p>
+						</div>}
 					</details>}
 					<div className="space-y-4">
 						{drafts[kind].map((step, index) => <div key={index}>
@@ -193,8 +207,8 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, cloud, save,
 			</TabsContent>)}
 		</Tabs>
 		{mutation.isError && <p role="alert" className="text-sm text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
-		<div className="sticky bottom-0 z-chrome mt-auto flex items-center justify-between gap-3 border-t border-border bg-card py-3">
-			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{dirty ? t("settings.project.unsavedChanges") : savedAt ? t("settings.project.saved") : ""}</span>
+		<div className="flex items-center justify-end gap-3 border-t border-border pt-4">
+			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{savedAt && !dirty ? t("settings.project.saved") : ""}</span>
 			<Button disabled={!dirty || mutation.isPending || retry.isPending} type="submit">{t("settings.project.saveChanges")}</Button>
 		</div>
 	</form>;

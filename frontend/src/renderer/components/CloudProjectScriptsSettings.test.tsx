@@ -32,22 +32,22 @@ beforeEach(() => {
 		Promise.resolve({ project: project({ ...stored, ...body.config }) }));
 });
 
-function renderScripts() {
+function renderScripts(onSaveState?: (state: { phase: string; dirty?: boolean }) => void) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-	return render(<QueryClientProvider client={client}><CloudProjectScriptsSettings projectId="p" cloudOrgId="org-1" /></QueryClientProvider>);
+	return render(<QueryClientProvider client={client}><CloudProjectScriptsSettings projectId="p" cloudOrgId="org-1" onSaveState={onSaveState} /></QueryClientProvider>);
 }
 
 it("edits a Cloud project's Setup and Cleanup and saves only the two lists", async () => {
 	renderScripts();
 	expect(await screen.findByLabelText("Step 1")).toHaveValue("npm ci");
-	expect(screen.getByText(/after the repository checkout and before the agent starts/)).toBeInTheDocument();
+	expect(screen.getByText(/before the agent begins working/)).toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Add step" }));
 	fireEvent.change(screen.getByLabelText("Step 2"), { target: { value: "docker compose -p \"ao-$AO_SESSION_ID\" up -d" } });
 	await userEvent.click(screen.getByRole("tab", { name: "Cleanup" }));
 	expect(screen.getByLabelText("Step 1")).toHaveValue("docker compose -p \"ao-$AO_SESSION_ID\" down");
 	// The local daemon's retry has no Cloud equivalent, and Coder runs Cleanup.
 	expect(screen.queryByRole("button", { name: "Retry cleanup" })).toBeNull();
-	expect(screen.queryByText(/Cleanup runs only for projects on Coder/)).toBeNull();
+	expect(screen.queryByText(/Cleanup only runs for projects that use Coder/)).toBeNull();
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 	// Settings merge objects but replace arrays: coder, worker and the rest stay as stored.
@@ -73,5 +73,18 @@ it("says Cleanup does not run for a project outside Coder", async () => {
 	mocks.defaultProvider = "freestyle";
 	renderScripts();
 	await userEvent.click(await screen.findByRole("tab", { name: "Cleanup" }));
-	expect(screen.getByText(/Cleanup runs only for projects on Coder/)).toBeInTheDocument();
+	expect(screen.getByText(/Cleanup only runs for projects that use Coder/)).toBeInTheDocument();
+});
+
+it("reports unsaved edits as dirty without the autosave Saving state, and lists the variables plainly", async () => {
+	const states: { phase: string; dirty?: boolean }[] = [];
+	renderScripts((state) => states.push(state));
+	fireEvent.change(await screen.findByLabelText("Step 1"), { target: { value: "npm ci --prefer-offline" } });
+	await waitFor(() => expect(states.at(-1)).toMatchObject({ phase: "idle", dirty: true }));
+	expect(states.some((state) => state.phase === "pending")).toBe(false);
+	expect(screen.queryByText("Unsaved changes")).toBeNull();
+	await userEvent.click(screen.getByText("Variables you can use"));
+	expect(screen.getByText("$AO_SESSION_ID")).toBeInTheDocument();
+	expect(screen.getByText(/a unique ID for the session/)).toBeInTheDocument();
+	expect(screen.queryByText(/AO_SOURCE_TREE_PATH/)).toBeNull();
 });
