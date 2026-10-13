@@ -31,11 +31,23 @@ no files go into OS-default app-data or `~/Library/LaunchAgents`. After a
 restart/login, restoring an enabled preference bootstraps an existing setup.
 An unused mobile connection does not need an always-on login installation.
 
-All AO instances of the same login share this directory even with different
-AO_DATA_DIRs: independent owners cannot safely manage an OS-global control.
-A coordinator flock serializes helpers. Scratch lab verification must use policy
-fakes and must not enable host control. Other logins and unrelated sleep
+AO instances of the same login using the default durable data root (`~/.ao/data`)
+share this coordinator. Custom or scratch `AO_DATA_DIR` roots cannot enable native
+lid control: isolated roots cannot independently own the OS-global bit, and must
+never write to production state or alter its power controls. Ordinary idle wake
+remains available in those runs. A coordinator flock serializes helpers; a separate
+setup flock serializes daemon registration. Only `wake/` and its children require
+0700; the existing daemon state parent is neither changed nor rejected for 0750. Other logins and unrelated sleep
 utilities do not participate in this protocol.
+
+A registered protocol-compatible coordinator is reused regardless of the calling
+build's digest. Setup never boots out a registered job or copies another version
+while that job is registered. Incompatible protocol registration fails explicitly.
+To upgrade the native helper, open the lid, disable the option in every instance,
+wait for cleanup, and boot out the registration before opting in again. A fresh
+registration cleans obsolete content-addressed helper copies. New jobs use
+launchd's Standard process type; status freshness allows 30 seconds of timer/work
+margin. Cleanup polling does not hold the status mutex.
 
 Daemon request files contain a UUID, PID, start identity and advancing sequence.
 Renew every 15 seconds; scan every two seconds; expire an unchanged sequence
@@ -71,7 +83,8 @@ Below 10% battery, unknown battery state, or critical thermal state, release lid
 ownership and latch the lease. Renewals and helper restart do not clear a stop;
 an explicit off/on creates a new identity. The ordinary idle assertion remains
 separate. While lid-closed and undocked, a bounded `pmset displaysleepnow`
-request darkens the display; failure stops lid control. Brightness restoration,
+request darkens the display once per transition into an owned closed/undocked
+state; failure stops lid control. Brightness restoration,
 audio, Low Power Mode customization and app freezing remain phase two.
 
 ## Validation and release gate

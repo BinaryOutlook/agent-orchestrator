@@ -788,6 +788,7 @@
 	"mobile.keepAwake.lidReason.critical_heat": "Se detuvo porque el Mac necesita enfriarse. Después, desactiva y vuelve a activar esta opción.",
 	"mobile.keepAwake.lidReason.battery_unknown": "Se detuvo porque no se pudo leer el estado de la batería. Desactiva y vuelve a activar esta opción.",
 	"mobile.keepAwake.lidReason.recovery_failed": "AO no pudo restaurar el reposo normal al cerrar la tapa. Abre la tapa y reinicia AO para reintentar.",
+	"mobile.keepAwake.lidReason.isolated_data_dir": "Mantener activo con la tapa cerrada está desactivado para directorios de datos personalizados o aislados.",
 	"mobile.keepAwake.lidReason.unsupported": "Esta función no está disponible en este Mac o esta versión de macOS.",
 	"mobile.keepAwake.lidReason.helper_missing": "Falta el asistente de escritorio. Actualiza o reinicia la aplicación AO.",
 	"mobile.keepAwake.lidReason.setup_needed": "Desactiva y vuelve a activar esta opción para configurar el asistente de recuperación.",

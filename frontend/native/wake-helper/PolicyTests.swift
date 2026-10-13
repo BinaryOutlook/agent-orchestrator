@@ -70,6 +70,13 @@ import Foundation
         try safetyRestart.latch([lease(a, sequence: 2)], reason: nil, persist: { _ in fatalError("cooling must not clear latch") })
         try safetyRestart.latch([lease(a, sequence: 3)], reason: "low_battery", persist: { _ in fatalError("existing latch remains") })
         assert(safetyRestart.journal.blocked[a] == "critical_heat")
+        var display = WakeDisplayPolicy()
+        assert(!display.needsSleep(closedUndocked: false))
+        assert(display.needsSleep(closedUndocked: true))
+        for _ in 0..<100 { assert(!display.needsSleep(closedUndocked: true)) }
+        // Opening, docking or withdrawing ownership resets the transition.
+        assert(!display.needsSleep(closedUndocked: false))
+        assert(display.needsSleep(closedUndocked: true))
         print("Wake policy and recovery tests passed")
     }
 }

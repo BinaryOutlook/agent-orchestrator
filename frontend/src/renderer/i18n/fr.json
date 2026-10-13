@@ -788,6 +788,7 @@
 	"mobile.keepAwake.lidReason.critical_heat": "Arrêt car le Mac doit refroidir. Ensuite, désactivez et réactivez cette option.",
 	"mobile.keepAwake.lidReason.battery_unknown": "Arrêt car l’état de la batterie est illisible. Désactivez et réactivez cette option.",
 	"mobile.keepAwake.lidReason.recovery_failed": "AO n’a pas pu restaurer la veille normale du capot. Ouvrez le capot et redémarrez AO pour réessayer.",
+	"mobile.keepAwake.lidReason.isolated_data_dir": "Le maintien en éveil avec le capot fermé est désactivé pour les dossiers de données personnalisés ou isolés.",
 	"mobile.keepAwake.lidReason.unsupported": "Cette fonction est indisponible sur ce Mac ou cette version de macOS.",
 	"mobile.keepAwake.lidReason.helper_missing": "L’assistant de bureau est absent. Mettez à jour ou redémarrez AO.",
 	"mobile.keepAwake.lidReason.setup_needed": "Désactivez et réactivez cette option pour configurer l’assistant de récupération.",

@@ -116,9 +116,17 @@ short lid-closed session on your machine before relying on it unattended.
 records current evidence and the release gate.
 
 Helper versions, plist, leases and recovery journal live under `~/.ao/wake`,
-shared by AO instances of the same login even with different data directories.
+shared by AO instances of the same login using the default `~/.ao/data` durable
+data root. Custom or scratch `AO_DATA_DIR` roots disable native lid control so
+isolated runs cannot affect production state or host power. Ordinary Keep awake
+remains available.
 Turning the feature off retains recovery registration but ends requests. To
 remove registration, open the lid, turn the option off in every AO instance and
 wait for recovery to finish, then run
 `launchctl bootout gui/$(id -u)/com.aoagents.mobile-wake`. Do not delete an
 unfinished recovery journal. Re-enabling the option registers the helper again.
+
+An existing compatible helper is reused across app builds, rather than replaced
+while sessions may be active. To upgrade that helper, use the removal steps above
+with the lid open, then enable the option again; fresh registration removes stale
+helper copies.

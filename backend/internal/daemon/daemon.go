@@ -911,7 +911,7 @@ func Run() error {
 	}
 	if mobilebridge.KeepAwakeSupported() {
 		ka := mobilebridge.NewKeepAwake(os.Getpid())
-		ka.SetLidController(mobilebridge.NewLidAwake(os.Getpid(), os.Getenv("AO_WAKE_HELPER")))
+		ka.SetLidController(mobilebridge.NewLidAwake(os.Getpid(), os.Getenv("AO_WAKE_HELPER"), cfg.DataDir))
 		bs.KeepAwake = ka
 	}
 	var nativeSessions ports.AgentNativeSessionResolver

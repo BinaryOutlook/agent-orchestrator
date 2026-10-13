@@ -92,3 +92,14 @@ struct WakeOwnership {
         return true
     }
 }
+
+// Display sleep is a transition action, not work repeated by every lease scan.
+struct WakeDisplayPolicy {
+    private var previouslyClosedUndocked = false
+
+    mutating func needsSleep(closedUndocked: Bool) -> Bool {
+        let needed = closedUndocked && !previouslyClosedUndocked
+        previouslyClosedUndocked = closedUndocked
+        return needed
+    }
+}

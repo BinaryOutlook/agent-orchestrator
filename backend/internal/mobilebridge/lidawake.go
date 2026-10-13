@@ -1,9 +1,7 @@
 package mobilebridge
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -25,10 +25,12 @@ const lidHelperVersion = 1
 const lidHelperLabel = "com.aoagents.mobile-wake"
 
 // LidAwake is a lease client for the independent, launchd-owned coordinator.
-// All AO data directories for this login use one coordinator under ~/.ao/wake;
-// per-data-directory coordinators would race over a global kernel control.
+// Default-data AO instances for this login share ~/.ao/wake. Custom data
+// roots cannot enable host control, which would break isolation.
 type LidAwake struct {
 	mu                    sync.Mutex
+	transitionMu          sync.Mutex
+	execute               func(context.Context, string, ...string) ([]byte, error)
 	binary, directory, id string
 	pid                   int
 	started, sequence     uint64
@@ -57,17 +59,23 @@ type lidStatus struct {
 
 // NewLidAwake probes without changing power state or registering a job. The
 // helper is optional for CLI-only/non-desktop installations.
-func NewLidAwake(pid int, binary string) *LidAwake {
+func NewLidAwake(pid int, binary, dataDir string) *LidAwake {
 	l := &LidAwake{pid: pid, binary: binary, reason: "helper_missing"}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return l
+	}
+	// Host power is global. Scratch/custom data roots must not install or
+	// join the production coordinator; independent roots cannot own that bit.
+	if filepath.Clean(dataDir) != filepath.Join(home, ".ao", "data") {
+		l.reason = "isolated_data_dir"
+		return l
+	}
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
 		l.reason = "unsupported"
 		return l
 	}
 	if binary == "" || !filepath.IsAbs(binary) {
-		return l
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
 		return l
 	}
 	l.directory = filepath.Join(home, ".ao", "wake")
@@ -146,7 +154,7 @@ func (l *LidAwake) readStatus() (lidStatus, error) {
 		return st, err
 	}
 	age := float64(time.Now().UnixMilli())/1000 - st.UpdatedAt
-	if st.Version != lidHelperVersion || age < -5 || age > 6 {
+	if st.Version != lidHelperVersion || age < -5 || age > 30 {
 		return st, errors.New("stale wake status")
 	}
 	return st, nil
@@ -156,6 +164,8 @@ func (l *LidAwake) readStatus() (lidStatus, error) {
 // because the helper binary exists. A restored preference can renew an already
 // registered helper, but cannot silently install one.
 func (l *LidAwake) Start(allowSetup bool) error {
+	l.transitionMu.Lock()
+	defer l.transitionMu.Unlock()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if !l.supported {
@@ -174,14 +184,7 @@ func (l *LidAwake) Start(allowSetup bool) error {
 		l.reason = "setup_failed"
 		return err
 	}
-	var random [16]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return err
-	}
-	random[6] = (random[6] & 0x0f) | 0x40
-	random[8] = (random[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(random[:])
-	l.id = h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
+	l.id = uuid.NewString()
 	l.sequence = 0
 	if err := l.renew(); err != nil {
 		l.reason = "lease_failed"
@@ -232,44 +235,52 @@ func (l *LidAwake) run(ctx context.Context, done chan struct{}) {
 
 // Stop withdraws this daemon's lease and waits for native cleanup acknowledgement.
 func (l *LidAwake) Stop() {
+	l.transitionMu.Lock()
+	defer l.transitionMu.Unlock()
 	l.mu.Lock()
-	cancel, done := l.cancel, l.done
+	cancel, done, id := l.cancel, l.done, l.id
 	l.mu.Unlock()
 	if cancel != nil {
 		cancel()
 		<-done
 	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.id != "" {
-		if err := os.Remove(filepath.Join(l.directory, "leases", l.id+".json")); err != nil && !os.IsNotExist(err) {
-			l.cancel, l.done, l.reason = nil, nil, "lease_failed"
-			return
-		}
-		// Wait for acknowledgement of this lease's release, not another
-		// daemon's global activation. Do not claim cleanup on a missing helper.
+	l.cancel, l.done = nil, nil
+	l.mu.Unlock()
+	if id == "" {
+		return
+	}
+	reason := "recovery_failed"
+	if err := os.Remove(filepath.Join(l.directory, "leases", id+".json")); err != nil && !os.IsNotExist(err) {
+		reason = "lease_failed"
+	} else {
+		// Poll without the status mutex. Only lifecycle operations are serialized.
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			st, err := l.readStatus()
 			if err == nil {
 				owned := false
-				for _, id := range st.Leases {
-					if id == l.id {
+				for _, leaseID := range st.Leases {
+					if leaseID == id {
 						owned = true
 					}
 				}
 				if !owned && st.Reason != "recovery_failed" {
-					l.cancel, l.done, l.id, l.reason = nil, nil, "", ""
-					return
+					reason = ""
+					break
 				}
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		l.cancel, l.done, l.reason = nil, nil, "recovery_failed"
-		return
 	}
-	l.cancel, l.done, l.reason = nil, nil, ""
-
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.id == id {
+		l.reason = reason
+		if reason == "" {
+			l.id = ""
+		}
+	}
 }
 
 func secureWakeDirectory(directory string) error {
@@ -318,10 +329,23 @@ func writeWakeFile(name string, data []byte, mode os.FileMode) error {
 }
 
 func (l *LidAwake) setup() error {
-	for _, directory := range []string{filepath.Dir(l.directory), l.directory, filepath.Join(l.directory, "leases")} {
+	for _, directory := range []string{l.directory, filepath.Join(l.directory, "leases")} {
 		if err := secureWakeDirectory(directory); err != nil {
 			return err
 		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	unlock, err := lockWakeSetup(ctx, filepath.Join(l.directory, "setup.lock"))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	domain := fmt.Sprintf("gui/%d", os.Getuid())
+	if _, err := l.command(ctx, "/bin/launchctl", "print", domain+"/"+lidHelperLabel); err == nil {
+		// Never boot out a registered coordinator: another build may hold a
+		// live lease. Reuse only its compatible protocol, including when idle.
+		return l.checkRegisteredHelper(ctx)
 	}
 	data, err := os.ReadFile(l.binary)
 	if err != nil {
@@ -341,34 +365,81 @@ func (l *LidAwake) setup() error {
 	}
 	plist := []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>Label</key><string>%s</string><key>ProgramArguments</key><array><string>%s</string><string>serve</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>2</integer><key>ProcessType</key><string>Background</string></dict></plist>
+<plist version="1.0"><dict><key>Label</key><string>%s</string><key>ProgramArguments</key><array><string>%s</string><string>serve</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>2</integer><key>ProcessType</key><string>Standard</string></dict></plist>
 `, lidHelperLabel, escape(binary)))
 	name := filepath.Join(l.directory, "agent.plist")
-	previous, readErr := os.ReadFile(name)
-	domain := fmt.Sprintf("gui/%d", os.Getuid())
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if readErr == nil && !bytes.Equal(previous, plist) {
-		// Version replacement first releases old ownership (or leaves its journal
-		// for the new coordinator), then installs the next fixed executable.
-		_ = aoprocess.CommandContext(ctx, "/bin/launchctl", "bootout", domain+"/"+lidHelperLabel).Run()
-	}
 	if err := writeWakeFile(name, plist, 0o600); err != nil {
 		return err
 	}
-	if err := aoprocess.CommandContext(ctx, "/bin/launchctl", "bootstrap", domain, name).Run(); err != nil {
-		// bootstrap also fails when the exact job is already registered.
-		if check := aoprocess.CommandContext(ctx, "/bin/launchctl", "print", domain+"/"+lidHelperLabel).Run(); check != nil {
-			return err
+	if _, err := l.command(ctx, "/bin/launchctl", "bootstrap", domain, name); err != nil {
+		return err
+	}
+	// No previous job was registered, and setup is serialized between clients.
+	// Keep the newly registered executable; remove only obsolete helper copies.
+	entries, err := os.ReadDir(l.directory)
+	if err == nil {
+		for _, entry := range entries {
+			candidate := filepath.Join(l.directory, entry.Name())
+			if !entry.IsDir() && strings.HasPrefix(entry.Name(), "ao-wake-") && candidate != binary {
+				_ = os.Remove(candidate)
+			}
 		}
+	}
+	return nil
+}
+
+func (l *LidAwake) command(ctx context.Context, binary string, args ...string) ([]byte, error) {
+	if l.execute != nil {
+		return l.execute(ctx, binary, args...)
+	}
+	return aoprocess.CommandContext(ctx, binary, args...).Output()
+}
+
+func (l *LidAwake) checkRegisteredHelper(ctx context.Context) error {
+	data, err := os.ReadFile(filepath.Join(l.directory, "agent.plist"))
+	if err != nil {
+		return err
+	}
+	var plist struct {
+		Arguments []struct {
+			Strings []string `xml:"string"`
+		} `xml:"dict>array"`
+	}
+	if err := xml.Unmarshal(data, &plist); err != nil {
+		return err
+	}
+	if len(plist.Arguments) != 1 || len(plist.Arguments[0].Strings) != 2 {
+		return errors.New("invalid wake helper registration")
+	}
+	binary := plist.Arguments[0].Strings[0]
+	if filepath.Dir(binary) != l.directory || !strings.HasPrefix(filepath.Base(binary), "ao-wake-") || plist.Arguments[0].Strings[1] != "serve" {
+		return errors.New("invalid wake helper registration")
+	}
+	out, err := l.command(ctx, binary, "probe")
+	if err != nil {
+		return err
+	}
+	var probe struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(out, &probe); err != nil {
+		return err
+	}
+	if probe.Version != lidHelperVersion {
+		return errors.New("registered wake helper protocol is incompatible; stop mobile wake sessions before removing its registration")
 	}
 	return nil
 }
 
 // Setup registers the fixed recovery executable without acquiring wake ownership.
 func (l *LidAwake) Setup() error {
+	l.transitionMu.Lock()
+	defer l.transitionMu.Unlock()
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if !l.supported {
+		return errors.New("closed-lid wakefulness is unavailable on this host")
+	}
 	if err := l.setup(); err != nil {
 		l.reason = "setup_failed"
 		return err

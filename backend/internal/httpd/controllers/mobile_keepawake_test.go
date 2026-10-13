@@ -24,6 +24,14 @@ func (f *fakeKeepAwake) Stop()            { f.active = false }
 func (f *fakeKeepAwake) Active() bool     { return f.active }
 func (f *fakeKeepAwake) HasBattery() bool { return f.battery }
 
+func (f *fakeKeepAwake) ConfigureLid(on, _ bool) error {
+	if on {
+		return errors.New("closed-lid wakefulness unavailable")
+	}
+	return nil
+}
+func (f *fakeKeepAwake) LidStatus() (bool, bool, string) { return false, false, "helper_missing" }
+
 func newKeepAwakeBridge(t *testing.T, ka KeepAwakeController) (*BridgeService, *fakeLAN) {
 	t.Helper()
 	lan := &fakeLAN{}
@@ -144,17 +152,30 @@ type fakeLidController struct {
 	supported bool
 	lidActive bool
 	setups    int
+	setupErr  error
+	startErr  error
+	reason    string
 }
 
 func (f *fakeLidController) ConfigureLid(on, setup bool) error {
 	if setup {
 		f.setups++
+		if f.setupErr != nil {
+			f.reason = "setup_failed"
+			return f.setupErr
+		}
+	}
+	if on && f.startErr != nil {
+		f.reason = "setup_failed"
+		return f.startErr
 	}
 	f.lidActive = on
 	return nil
 }
-func (f *fakeLidController) LidStatus() (bool, bool, string) { return f.supported, f.lidActive, "" }
-func (f *fakeLidController) Stop()                           { f.fakeKeepAwake.Stop(); f.lidActive = false }
+func (f *fakeLidController) LidStatus() (bool, bool, string) {
+	return f.supported, f.lidActive, f.reason
+}
+func (f *fakeLidController) Stop() { f.fakeKeepAwake.Stop(); f.lidActive = false }
 
 func TestLidAwakeFollowsServingBridgeAndSurvivesLegacyRequests(t *testing.T) {
 	ka := &fakeLidController{supported: true}
@@ -236,7 +257,7 @@ func TestLidRequestRejectsUnavailableBridge(t *testing.T) {
 	c := &MobileController{Bridge: &fakeBridge{}}
 	w := httptest.NewRecorder()
 	c.KeepAwake(w, httptest.NewRequest(http.MethodPost, "/api/v1/mobile/keep-awake", bytes.NewBufferString(`{"enabled":true,"lidClosed":true}`)))
-	if w.Code != http.StatusBadRequest {
+	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status %d", w.Code)
 	}
 }
@@ -304,5 +325,53 @@ func TestLidAwakeReleasesOnFailedMobileDisable(t *testing.T) {
 	}
 	if !b.Status().KeepAwake.LidClosed {
 		t.Fatal("failed stop must retain the saved lid preference")
+	}
+}
+
+func TestLidSetupFailurePreservesPreferences(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		ka := &fakeLidController{supported: true, setupErr: errors.New("registration failed")}
+		b, _ := newKeepAwakeBridge(t, ka)
+		if _, err := b.Enable(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.SetKeepAwake(on); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.SetKeepAwakeLid(!on, true); err == nil {
+			t.Fatal("expected setup failure")
+		}
+		st, err := mobilebridge.Load(b.ConfigPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.KeepAwake != on || st.KeepAwakeLid || ka.active != on {
+			t.Fatalf("failed setup changed preferences: %+v", st)
+		}
+		b.ShutdownKeepAwake()
+	}
+}
+
+func TestLidFailureDoesNotFailOrdinaryWake(t *testing.T) {
+	for _, restored := range []bool{false, true} {
+		ka := &fakeLidController{supported: true, startErr: errors.New("no GUI domain")}
+		b, _ := newKeepAwakeBridge(t, ka)
+		state := mobilebridge.State{Enabled: true, Password: "pw", KeepAwake: restored, KeepAwakeLid: true}
+		if err := mobilebridge.Save(b.ConfigPath, state); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.RestoreOnBoot(state); err != nil {
+			t.Fatal(err)
+		}
+		c := &MobileController{Bridge: b}
+		w := httptest.NewRecorder()
+		c.KeepAwake(w, httptest.NewRequest(http.MethodPost, "/api/v1/mobile/keep-awake", bytes.NewBufferString(`{"enabled":true}`)))
+		if w.Code != http.StatusOK {
+			t.Fatalf("ordinary wake failed: %d %s", w.Code, w.Body.String())
+		}
+		if got := b.Status().KeepAwake; !got.Active || !got.Enabled || got.LidActive || got.LidReason != "setup_failed" {
+			t.Fatalf("wrong status: %+v", got)
+		}
+		b.ShutdownKeepAwake()
 	}
 }

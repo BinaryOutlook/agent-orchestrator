@@ -782,6 +782,7 @@
 	"mobile.keepAwake.lidReason.display_failed": "Stopped because the display could not be put to sleep. Open the lid and turn this option off and on to retry.",
 	"mobile.keepAwake.lidReason.helper_unavailable": "The recovery helper is unavailable. Turn this option off and on to retry.",
 	"mobile.keepAwake.lidReason.setup_needed": "Turn this option off and on to set up the recovery helper.",
+	"mobile.keepAwake.lidReason.isolated_data_dir": "Closed-lid wakefulness is disabled for custom or isolated data directories.",
 	"mobile.keepAwake.lidReason.unsupported": "Closed-lid wakefulness is unavailable on this Mac or macOS version.",
 	"mobile.keepAwake.lidReason.helper_missing": "The desktop wake helper is missing. Update or restart the AO desktop app.",
 	"mobile.keepAwake.lidReason.setup_failed": "The recovery helper could not be registered. Turn this option off and on to retry.",

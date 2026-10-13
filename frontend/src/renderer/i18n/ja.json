@@ -781,6 +781,7 @@
 	"mobile.keepAwake.lidReason.critical_heat": "Mac の冷却が必要なため停止しました。冷却後、この設定をオフにしてからオンにしてください。",
 	"mobile.keepAwake.lidReason.battery_unknown": "バッテリー状態を読み取れないため停止しました。この設定をオフにしてからオンにしてください。",
 	"mobile.keepAwake.lidReason.recovery_failed": "通常のふたのスリープを復元できませんでした。ふたを開き、AO を再起動してください。",
+	"mobile.keepAwake.lidReason.isolated_data_dir": "カスタムまたは分離されたデータディレクトリでは、蓋を閉じた状態のスリープ防止は無効です。",
 	"mobile.keepAwake.lidReason.unsupported": "この Mac または macOS のバージョンでは利用できません。",
 	"mobile.keepAwake.lidReason.helper_missing": "デスクトップのヘルパーがありません。AO を更新または再起動してください。",
 	"mobile.keepAwake.lidReason.setup_needed": "復元ヘルパーを設定するには、この設定をオフにしてからオンにしてください。",

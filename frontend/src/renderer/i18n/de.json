@@ -781,6 +781,7 @@
 	"mobile.keepAwake.lidReason.critical_heat": "Gestoppt, weil der Mac abkühlen muss. Danach diese Option aus- und wieder einschalten.",
 	"mobile.keepAwake.lidReason.battery_unknown": "Gestoppt, weil der Akkustand nicht gelesen werden konnte. Diese Option aus- und wieder einschalten.",
 	"mobile.keepAwake.lidReason.recovery_failed": "AO konnte den normalen Deckel-Ruhezustand nicht wiederherstellen. Deckel öffnen und AO neu starten.",
+	"mobile.keepAwake.lidReason.isolated_data_dir": "Bei benutzerdefinierten oder isolierten Datenverzeichnissen ist die Wachhaltefunktion bei geschlossenem Deckel deaktiviert.",
 	"mobile.keepAwake.lidReason.unsupported": "Diese Funktion ist auf diesem Mac oder dieser macOS-Version nicht verfügbar.",
 	"mobile.keepAwake.lidReason.helper_missing": "Der Desktop-Helfer fehlt. AO aktualisieren oder neu starten.",
 	"mobile.keepAwake.lidReason.setup_needed": "Diese Option aus- und wieder einschalten, um den Wiederherstellungshelfer einzurichten.",

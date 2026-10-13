@@ -28,6 +28,7 @@ type mobileBridge interface {
 	StartRemoteAccess() (MobileStatusResponse, error)
 	SetSecurePairing(on bool) (MobileStatusResponse, error)
 	SetKeepAwake(on bool) (MobileStatusResponse, error)
+	SetKeepAwakeLid(on, lidClosed bool) (MobileStatusResponse, error)
 }
 
 // MobileController exposes the Connect Mobile bridge control endpoints
@@ -166,14 +167,7 @@ func (c *MobileController) KeepAwake(w http.ResponseWriter, r *http.Request) {
 	var res MobileStatusResponse
 	var err error
 	if body.LidClosed != nil {
-		setter, ok := c.Bridge.(interface {
-			SetKeepAwakeLid(bool, bool) (MobileStatusResponse, error)
-		})
-		if !ok {
-			envelope.WriteAPIError(w, r, http.StatusBadRequest, "invalid_request", "MOBILE_KEEP_AWAKE", "closed-lid wakefulness unavailable", nil)
-			return
-		}
-		res, err = setter.SetKeepAwakeLid(body.Enabled, *body.LidClosed)
+		res, err = c.Bridge.SetKeepAwakeLid(body.Enabled, *body.LidClosed)
 	} else {
 		res, err = c.Bridge.SetKeepAwake(body.Enabled)
 	}
@@ -215,6 +209,8 @@ type KeepAwakeController interface {
 	Stop()
 	Active() bool
 	HasBattery() bool
+	ConfigureLid(on, allowSetup bool) error
+	LidStatus() (supported, active bool, reason string)
 }
 
 // BridgeService is the production mobileBridge. It persists state and drives
@@ -498,9 +494,7 @@ func (b *BridgeService) keepAwakeStatus(on, lidClosed bool) KeepAwakeStatus {
 		HasBattery: b.KeepAwake.HasBattery(),
 	}
 	res.LidClosed = lidClosed
-	if lid, ok := b.KeepAwake.(interface{ LidStatus() (bool, bool, string) }); ok {
-		res.LidSupported, res.LidActive, res.LidReason = lid.LidStatus()
-	}
+	res.LidSupported, res.LidActive, res.LidReason = b.KeepAwake.LidStatus()
 	return res
 }
 
@@ -515,9 +509,9 @@ func (b *BridgeService) applyKeepAwakeLocked(on, lidClosed bool) error {
 		if err := b.KeepAwake.Start(); err != nil {
 			return err
 		}
-		if lid, ok := b.KeepAwake.(interface{ ConfigureLid(bool, bool) error }); ok {
-			return lid.ConfigureLid(lidClosed, false)
-		}
+		// Idle wake succeeded. Native lid failures are reported in LidReason,
+		// and must not turn that success into an HTTP error.
+		_ = b.KeepAwake.ConfigureLid(lidClosed, false)
 		return nil
 	}
 	b.KeepAwake.Stop()
@@ -554,15 +548,8 @@ func (b *BridgeService) SetKeepAwakeLid(on, lidClosed bool) (MobileStatusRespons
 	if b.KeepAwake == nil {
 		return MobileStatusResponse{}, errors.New("keeping this machine awake is only supported on macOS")
 	}
-	lid, ok := b.KeepAwake.(interface {
-		ConfigureLid(bool, bool) error
-		LidStatus() (bool, bool, string)
-	})
 	if lidClosed {
-		if !ok {
-			return MobileStatusResponse{}, errors.New("closed-lid wakefulness unavailable")
-		}
-		supported, _, _ := lid.LidStatus()
+		supported, _, _ := b.KeepAwake.LidStatus()
 		if !supported {
 			return MobileStatusResponse{}, errors.New("closed-lid wakefulness requires a supported Apple Silicon MacBook (macOS 13–26) and the desktop helper")
 		}
@@ -571,15 +558,15 @@ func (b *BridgeService) SetKeepAwakeLid(on, lidClosed bool) (MobileStatusRespons
 	if err != nil && !os.IsNotExist(err) {
 		return MobileStatusResponse{}, err
 	}
+	// Register before committing a new opt-in; failure preserves both preferences.
+	if lidClosed && !st.KeepAwakeLid {
+		if err := b.KeepAwake.ConfigureLid(false, true); err != nil {
+			return MobileStatusResponse{}, err
+		}
+	}
 	st.KeepAwake, st.KeepAwakeLid = on, lidClosed
 	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
 		return MobileStatusResponse{}, err
-	}
-	// Explicit opt-in registers recovery even if mobile access is currently off.
-	if lidClosed {
-		if err := lid.ConfigureLid(false, true); err != nil {
-			return MobileStatusResponse{}, err
-		}
 	}
 	if err := b.applyKeepAwakeLocked(on && st.Enabled, st.KeepAwakeLid); err != nil {
 		return MobileStatusResponse{}, err

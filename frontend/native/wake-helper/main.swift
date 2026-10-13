@@ -121,7 +121,6 @@ var stopping = false
 func serve() throws {
     signal(SIGTERM) { _ in stopping = true }
     signal(SIGINT) { _ in stopping = true }
-    try secureDirectory(home.appendingPathComponent(".ao"))
     try secureDirectory(directory)
     try secureDirectory(leasesDirectory)
     let lock = open(directory.appendingPathComponent("coordinator.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
@@ -151,6 +150,7 @@ func serve() throws {
                               leases: [], blocked: ownership.journal.blocked), statusURL)
     }
     var policy = WakePolicy()
+    var displayPolicy = WakeDisplayPolicy()
     func requests() throws -> [WakeLease] {
         let files = try FileManager.default.contentsOfDirectory(at: leasesDirectory, includingPropertiesForKeys: nil)
         return files.filter { $0.pathExtension == "json" }.compactMap { try? read(WakeLease.self, $0) }
@@ -202,15 +202,14 @@ func serve() throws {
             // native command arms the control; don't falsely fail an
             // open-lid acquisition by treating that property as an ACK.
             if !active { reason = "native_failed" }
-            if active && rootProperty("AppleClamshellState") == true && docked() != true {
-                if !displaySleep() {
-                    for lease in accepted { ownership.journal.blocked[lease.id] = "display_failed" }
-                    try write(ownership.journal, journalURL)
-                    active = false
-                    reason = restore() ? "display_failed" : "recovery_failed"
-                }
-            }
         } else { reason = "native_failed" }
+        let closedUndocked = active && rootProperty("AppleClamshellState") == true && docked() != true
+        if displayPolicy.needsSleep(closedUndocked: closedUndocked) && !displaySleep() {
+            for lease in accepted { ownership.journal.blocked[lease.id] = "display_failed" }
+            try write(ownership.journal, journalURL)
+            active = false
+            reason = restore() ? "display_failed" : "recovery_failed"
+        }
         if !active && ownership.journal.owned && reason != "recovery_failed" {
             if !restore() { reason = "recovery_failed" }
         }

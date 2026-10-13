@@ -781,6 +781,7 @@
 	"mobile.keepAwake.lidReason.critical_heat": "因 Mac 需要降温而停止。冷却后请关闭并重新开启此选项。",
 	"mobile.keepAwake.lidReason.battery_unknown": "无法读取电池状态，已停止。请关闭并重新开启此选项重试。",
 	"mobile.keepAwake.lidReason.recovery_failed": "AO 无法恢复正常合盖睡眠。请打开盖子并重启 AO 以重试恢复。",
+	"mobile.keepAwake.lidReason.isolated_data_dir": "自定义或隔离的数据目录已禁用合盖保持唤醒。",
 	"mobile.keepAwake.lidReason.unsupported": "此 Mac 或 macOS 版本不支持合盖保持唤醒。",
 	"mobile.keepAwake.lidReason.helper_missing": "缺少桌面唤醒助手。请更新或重启 AO 桌面应用。",
 	"mobile.keepAwake.lidReason.setup_needed": "请关闭并重新开启此选项，以设置恢复助手。",
