@@ -346,12 +346,6 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		return nil, errors.New("thread/start returned no thread id")
 	}
 
-	if cfg.RecordFork != nil {
-		if err := cfg.RecordFork(context.WithoutCancel(ctx), resp.Thread.ID); err != nil {
-			_ = conv.Terminate()
-			return nil, fmt.Errorf("record Codex fork: %w", err)
-		}
-	}
 	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
@@ -796,6 +790,12 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	if resp.Thread.ID == "" || resp.Thread.ID == sourceProviderConversationID {
 		_ = conv.Terminate()
 		return nil, errors.New("thread/fork returned no independent thread id")
+	}
+	if cfg.RecordFork != nil {
+		if err := cfg.RecordFork(context.WithoutCancel(ctx), resp.Thread.ID); err != nil {
+			_ = conv.Terminate()
+			return nil, fmt.Errorf("record Codex fork: %w", err)
+		}
 	}
 	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
