@@ -65,6 +65,11 @@ describe("ChatMarkdown", () => {
 		expect(screen.getAllByRole("listitem")).toHaveLength(4);
 	});
 
+	it("keeps the first number of an ordered list that starts after 1", () => {
+		render(<ChatMarkdown text={"6."} />);
+		expect(screen.getByRole("list")).toHaveAttribute("start", "6");
+	});
+
 	it("renders a task list with read-only checkboxes reflecting the agent's state", () => {
 		render(<ChatMarkdown text={"- [x] done thing\n- [ ] pending thing"} />);
 		const boxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
