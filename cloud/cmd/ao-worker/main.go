@@ -144,12 +144,35 @@ func run(logger *slog.Logger) error {
 	// A Coder template that already cloned the repository (and runs its dev
 	// stack there) can ask the session to work in that checkout instead of a
 	// fresh clone. Decide before anything captures the workspace path.
+	// A configured working directory replaces that search: the session works
+	// exactly there, adopting the template's checkout or cloning into it.
+	workingDirectory := readWorkingDirectory()
+	protectSecretFiles := os.Getenv(worker.ProtectSecretFilesEnv) == "1"
 	reuse := worker.ReuseDecision{Workspace: workspace}
-	if os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" &&
-		strings.TrimSpace(bootstrap.Launch.RepositoryURL) != "" &&
-		!worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
+	var workingDirectoryErr error
+	hasRepository := strings.TrimSpace(bootstrap.Launch.RepositoryURL) != "" &&
+		!worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL)
+	switch {
+	case workingDirectory != "" && hasRepository:
+		reuse, workingDirectoryErr = resolveConfiguredWorkspace(ctx, logger, bootstrap, workingDirectory, workspace, dataDir)
+		workspace = reuse.Workspace
+	case os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" && hasRepository:
 		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
 		workspace = reuse.Workspace
+	}
+	scriptEnvironment := worker.SessionScriptEnvironment{
+		SessionID:     bootstrap.SessionID,
+		SessionKind:   bootstrap.Launch.Kind,
+		Branch:        bootstrap.Launch.Branch,
+		WorkspaceDir:  workspace,
+		RepositoryURL: bootstrap.Launch.RepositoryURL,
+		ProjectID:     bootstrap.Launch.ProjectID,
+		ProjectName:   bootstrap.Launch.ProjectName,
+	}
+	// The project's Cleanup commands run before the workspace is deleted; the
+	// provider runs this hook (Coder today) since the worker is gone by then.
+	if err := worker.WriteCleanupHook(dataDir, bootstrap.Launch.PreRemove, workspace, scriptEnvironment); err != nil {
+		logger.Warn("install project cleanup hook", "error", err)
 	}
 
 	// The workspace shell is deliberately available before checkout starts. A
@@ -201,13 +224,24 @@ func run(logger *slog.Logger) error {
 		committedInterface = workertransport.InterfaceTUI
 	}
 	var chatRunner workertransport.ChatRunner
-	if err := verifyHarnessAvailable(bootstrap.Launch.Harness); err != nil {
+	if _, supported := workerexec.SupportedHarness(bootstrap.Launch.Harness); !supported {
 		// Workspace files and shell terminals use the same worker transport as the
-		// coding agent. Keep that transport alive when a rootfs is missing the
-		// selected harness instead of making the whole sandbox unreachable.
-		logger.Warn("coding-agent harness unavailable; continuing with workspace transport", "error", err)
+		// coding agent. Keep that transport alive when the selected harness is
+		// unknown instead of making the whole sandbox unreachable.
+		logger.Warn("coding-agent harness unavailable; continuing with workspace transport",
+			"error", verifyHarnessAvailable(bootstrap.Launch.Harness))
 	} else {
-		b := workerexec.HarnessBuilder{DataDir: dataDir, Launch: bootstrap.Launch, Env: map[string]string{}}
+		if err := verifyHarnessAvailable(bootstrap.Launch.Harness); err != nil {
+			// A template that installs its tools in the background (the Coder
+			// agent reports ready before its own bootstrap finishes) can add the
+			// binary moments later. The command is built lazily, so wire the agent
+			// up anyway; startInteractiveAgent waits for the binary to appear.
+			logger.Warn("coding-agent harness not installed yet; waiting for it", "error", err)
+		}
+		b := workerexec.HarnessBuilder{
+			DataDir: dataDir, Launch: bootstrap.Launch, Env: map[string]string{},
+			ProtectSecretFiles: protectSecretFiles,
+		}
 		b.Env["AO_CLOUD_WORKER_API_URL"] = client.baseURL
 		b.Env["AO_CLOUD_WORKER_TOKEN_FILE"] = client.tokenFile
 		b.Env["AO_SESSION_ID"] = bootstrap.SessionID
@@ -312,6 +346,7 @@ func run(logger *slog.Logger) error {
 		}
 		command, err := (workerexec.HarnessBuilder{
 			DataDir: dataDir, ConfigRoot: filepath.Join(dataDir, "reviews", input.ReviewRunID),
+			ProtectSecretFiles: protectSecretFiles,
 		}).BuildInteractive(launch, credential, workspace)
 		if err != nil {
 			return workerexec.Command{}, err
@@ -391,7 +426,10 @@ func run(logger *slog.Logger) error {
 	go func() {
 		chatReadyClosed := false
 		for {
-			err := prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse)
+			err := workingDirectoryErr
+			if err == nil {
+				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse)
+			}
 			if err == nil {
 				break
 			}
@@ -400,7 +438,13 @@ func run(logger *slog.Logger) error {
 			}
 			logger.Error("background workspace startup failed; waiting for session open", "error", err)
 			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
-				runner.SetWorkspaceStartupError("Repository checkout failed. Check this project's GitHub access, then reopen this session to retry.")
+				message := "Repository checkout failed. Check this project's GitHub access, then reopen this session to retry."
+				if errors.Is(err, worker.ErrWorkingDirectoryUnusable) {
+					message = "AO couldn't use the working directory set on your Coder connection: " +
+						strings.TrimPrefix(err.Error(), worker.ErrWorkingDirectoryUnusable.Error()+": ") +
+						". Fix the directory or the connection's working directory, then reopen this session."
+				}
+				runner.SetWorkspaceStartupError(message)
 			}
 			if !chatReadyClosed {
 				close(chatWorkspaceReady)
@@ -418,6 +462,30 @@ func run(logger *slog.Logger) error {
 		if bootstrap.Launch.RepositoryURL != "" {
 			if err := client.reportGitRefs(runCtx, workspace); err != nil {
 				logger.Warn("report restored branch heads", "error", err)
+			}
+		}
+		// The project's Setup commands run last, in the prepared checkout, and
+		// gate the agent like the checkout does: a failed step keeps the agent
+		// from starting until the session is reopened.
+		for {
+			failure := runProjectSetup(runCtx, logger, client, dataDir, bootstrap.Launch.PostCreate, workspace, scriptEnvironment)
+			if failure == "" {
+				break
+			}
+			if runCtx.Err() != nil {
+				return
+			}
+			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
+				runner.SetWorkspaceStartupError(failure + ". Fix the project's Setup script (Project settings > Scripts), then reopen this session to retry.")
+			}
+			if !chatReadyClosed {
+				close(chatWorkspaceReady)
+				chatReadyClosed = true
+			}
+			select {
+			case <-runCtx.Done():
+				return
+			case <-checkoutRequested:
 			}
 		}
 		if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
@@ -660,8 +728,10 @@ func startInteractiveAgent(
 		return nil
 	case <-rehydrateDone:
 	}
-	if err := verifyHarnessAvailable(bootstrap.Launch.Harness); err != nil {
-		logger.Warn("coding-agent harness unavailable", "error", err)
+	if err := waitForHarness(ctx, logger, bootstrap.Launch.Harness); err != nil {
+		if ctx.Err() == nil {
+			logger.Warn("coding-agent harness unavailable", "error", err)
+		}
 		return nil
 	}
 	if strings.TrimSpace(bootstrap.Launch.Interface) == workertransport.InterfaceChat {
@@ -1126,6 +1196,48 @@ func anonymousCheckoutEnabled() bool {
 		os.Getenv("AO_CLOUD_ALLOW_ANONYMOUS_GITHUB_CHECKOUT"),
 	))
 	return err == nil && enabled
+}
+
+// harnessWaitInterval and harnessWaitLimit pace and bound how long the worker
+// waits for a supported coding-agent harness binary that is not installed yet,
+// for a template that installs its tools after the Coder agent reports ready.
+// The limit matches the default bring-your-own Coder startup budget.
+var (
+	harnessWaitInterval = 10 * time.Second
+	harnessWaitLimit    = 20 * time.Minute
+)
+
+// waitForHarness returns nil once the harness binary is on PATH, checking
+// again every harnessWaitInterval for at most harnessWaitLimit. It returns the
+// availability error at once for an unknown harness, and the last one when the
+// binary never appears.
+func waitForHarness(ctx context.Context, logger *slog.Logger, harness string) error {
+	err := verifyHarnessAvailable(harness)
+	if err == nil {
+		return nil
+	}
+	if _, supported := workerexec.SupportedHarness(harness); !supported {
+		return err
+	}
+	logger.Info("coding-agent harness not installed yet; checking again", "harness", harness,
+		"interval", harnessWaitInterval.String(), "limit", harnessWaitLimit.String())
+	deadline := time.NewTimer(harnessWaitLimit)
+	defer deadline.Stop()
+	ticker := time.NewTicker(harnessWaitInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return err
+		case <-ticker.C:
+			if err = verifyHarnessAvailable(harness); err == nil {
+				logger.Info("coding-agent harness found; starting the agent", "harness", harness)
+				return nil
+			}
+		}
+	}
 }
 
 func verifyHarnessAvailable(harness string) error {

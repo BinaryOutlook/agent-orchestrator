@@ -39,6 +39,7 @@ import { cn } from "../lib/utils";
 import { SHELL_PANEL_SPRING } from "../lib/motion-spring";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { StatusPill } from "./StatusPill";
+import { CoderWorkspaceTopbarButton } from "./CoderWorkspaceLinkButton";
 import { TopbarActionError, TopbarButton, topbarHeaderClass, topbarProjectLabelClass } from "./TopbarButton";
 import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
@@ -306,6 +307,15 @@ export function ShellTopbar({
 								projectId={session.workspaceId}
 								sessionCreatedAt={session.createdAt}
 								sessionTerminated={session.isTerminated}
+								style={noDragStyle}
+							/>
+						) : null}
+						{/* A bring-your-own Coder session names the workspace it runs in, so
+						    the customer can find it in their own Coder. */}
+						{session?.cloud?.coderWorkspaceUrl ? (
+							<CoderWorkspaceTopbarButton
+								key={`coder-workspace-${session.id}`}
+								url={session.cloud.coderWorkspaceUrl}
 								style={noDragStyle}
 							/>
 						) : null}

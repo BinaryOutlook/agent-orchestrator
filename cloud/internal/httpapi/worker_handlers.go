@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	activitylog "github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
@@ -84,6 +85,9 @@ var workerEventTypes = map[string]struct{}{
 	"worker.ready":         {},
 	"chat.assistant_delta": {},
 	"chat.activity":        {},
+	// workspace.setup reports the project's Setup commands' outcome so the
+	// session shows why its setup is missing.
+	worker.SetupEventType: {},
 }
 
 const (
@@ -252,6 +256,7 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 	if err != nil {
 		return worker.LaunchContext{}, err
 	}
+	postCreate, preRemove := domain.ProjectScripts(launch.ProjectConfig)
 	// Extra repos are project-level (chosen at project setup, stored on the
 	// project config), so every session of the project clones the same set.
 	// Decoded before the prompt is built so both the project context (which
@@ -268,12 +273,15 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		}
 	}
 	systemPrompt := roleprompt.Build(roleprompt.Config{
-		Role:              launch.Kind,
-		ProjectID:         launch.ProjectID,
-		ProjectName:       launch.ProjectName,
-		RepositoryURL:     launch.RepositoryURL,
-		DefaultBranch:     launch.DefaultBranch,
-		WorkspacePath:     "/workspace/repository",
+		Role:          launch.Kind,
+		ProjectID:     launch.ProjectID,
+		ProjectName:   launch.ProjectName,
+		RepositoryURL: launch.RepositoryURL,
+		DefaultBranch: launch.DefaultBranch,
+		// The worker knows where the session actually works (it depends on the
+		// provider, the workspace user's home and a Coder connection's working
+		// directory) and substitutes it before launching the agent.
+		WorkspacePath:     worker.WorkspacePathPlaceholder,
 		AgentRules:        agentRules,
 		OrchestratorRules: orchestratorRules,
 		ExtraRepos:        promptExtras,
@@ -281,6 +289,7 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 	return worker.LaunchContext{
 		SessionID:       launch.SessionID,
 		ProjectID:       launch.ProjectID,
+		ProjectName:     launch.ProjectName,
 		Kind:            launch.Kind,
 		Harness:         launch.Harness,
 		DisplayName:     launch.DisplayName,
@@ -299,6 +308,8 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		DefaultBranch:   launch.DefaultBranch,
 		ExtraRepos:      extraRepos,
 		SystemPrompt:    systemPrompt,
+		PostCreate:      postCreate,
+		PreRemove:       preRemove,
 	}, nil
 }
 
@@ -1022,6 +1033,34 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.store.AppendSessionEvent(
 			r.Context(), claims.OrgID, claims.SessionID, input.Type, input.Payload,
 		); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
+	case worker.SetupEventType:
+		var outcome worker.SetupEvent
+		if err := json.Unmarshal(input.Payload, &outcome); err != nil ||
+			(outcome.Status != worker.SetupSucceeded && outcome.Status != worker.SetupFailed &&
+				outcome.Status != worker.SetupTimedOut) || outcome.Step < 0 ||
+			len(input.Payload) > maxWorkerControlBody {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The setup payload is invalid.")
+			return
+		}
+		outcome.Output = activitylog.Excerpt(outcome.Output, 2048)
+		logArgs := []any{
+			"org_id", claims.OrgID, "session_id", claims.SessionID, "status", outcome.Status,
+			"step", outcome.Step, "exit_code", outcome.ExitCode, "duration_ms", outcome.DurationMS,
+		}
+		if outcome.Status == worker.SetupSucceeded {
+			s.logger.Info("project setup finished", logArgs...)
+		} else {
+			s.logger.Warn("project setup did not succeed", append(logArgs, "output", outcome.Output)...)
+		}
+		payload, err := json.Marshal(outcome)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The setup payload is invalid.")
+			return
+		}
+		if _, err := s.store.AppendSessionEvent(r.Context(), claims.OrgID, claims.SessionID, input.Type, payload); err != nil {
 			s.writeWorkerStoreError(w, r, err)
 			return
 		}

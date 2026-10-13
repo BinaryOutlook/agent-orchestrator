@@ -609,6 +609,9 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		coderOpts, coderOverride = placement.options, placement.override
+		if coderOverride != nil {
+			coderOverride.DefaultWorkspaceNamePrefix = domain.CoderWorkspaceNamePrefixFor(project.DisplayName)
+		}
 		if placement.connectionID != "" {
 			request.SandboxProviderConnectionID = placement.connectionID
 		}
@@ -1080,6 +1083,11 @@ func (s *Server) sanitizeCoderConfig(ctx context.Context, cfg domain.ProjectCode
 // settings carry a workspace name prefix Coder would refuse: every session of
 // the project would otherwise fail to provision.
 func validateProjectCoderConfig(config json.RawMessage) error {
+	// The project's Setup and Cleanup commands are checked here too, so both
+	// project create paths reject them in the wrong shape.
+	if err := domain.ValidateProjectScriptsConfig(config); err != nil {
+		return err
+	}
 	if cfg, ok := domain.DecodeProjectCoderConfig(config); ok {
 		if err := domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix); err != nil {
 			return err

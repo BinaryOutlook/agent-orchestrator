@@ -979,7 +979,9 @@ export interface paths {
         /** @description Publishes one allowlisted event. `agent.activity` carries an explicit
          *     coding-agent lifecycle hook signal. `worker.ready` must identify the
          *     authenticated worker and epoch. `chat.assistant_delta` is fenced by both
-         *     the token epoch and the claimed turn attempt.
+         *     the token epoch and the claimed turn attempt. `workspace.setup` reports
+         *     the outcome of the project's Setup commands and is appended to the
+         *     session's event stream.
          *      */
         post: operations["publishWorkerEvent"];
         delete?: never;
@@ -1591,9 +1593,13 @@ export interface components {
             /** @description Defaults to enabled when absent. Independent of session autoInjectReview feedback delivery. */
             autoReview?: boolean;
             coder?: components["schemas"]["ProjectCoderConfig"];
+            postCreate?: components["schemas"]["ProjectScriptCommands"];
+            preRemove?: components["schemas"]["ProjectScriptCommands"];
         } & {
             [key: string]: unknown;
         };
+        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within 10 minutes; a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder only), best effort and within 10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. */
+        ProjectScriptCommands: string[];
         /** @description Coder dev-kit settings inherited by every Coder session of the project. */
         ProjectCoderConfig: {
             /**
@@ -1651,6 +1657,10 @@ export interface components {
             readyProbeTimeoutSeconds?: number;
             /** @description Work in the checkout of the project repository the template already cloned (under $HOME/work/* or $HOME/*) instead of cloning into ~/repository. Always false for the ao-worker user; defaults to true for the workspace user. */
             reuseExistingCheckout: boolean;
+            /** @description Where sessions work: an absolute path or one starting with ~/ or $HOME/, optionally containing {repo} for the repository name (for example ~/work/{repo}). An existing checkout of the session repository there is adopted, a missing or empty directory gets a fresh clone, and anything else fails the checkout. Replaces the reuseExistingCheckout search. Requires the workspace worker user. */
+            workingDirectory?: string;
+            /** @description Keep Claude Code's file tools (and the file commands it recognizes in Bash) from reading or editing .env and .env.* files, except .env.example, .env.sample and .env.template. Defaults to true. Programs that load .env themselves are unaffected. */
+            protectSecretFiles: boolean;
         };
         /**
          * @description Who runs AO's worker and agent in the workspace: a dedicated ao-worker user (default; added to the docker group when one exists), or the workspace's own login user with its real HOME, groups and environment.
@@ -1689,6 +1699,10 @@ export interface components {
             readyProbeTimeoutSeconds?: number;
             /** @description Omit for the default (true with the workspace user). */
             reuseExistingCheckout?: boolean;
+            /** @description Where sessions work: an absolute path or one starting with ~/ or $HOME/, optionally containing {repo} for the repository name (for example ~/work/{repo}). An existing checkout of the session repository there is adopted, a missing or empty directory gets a fresh clone, and anything else fails the checkout. Replaces the reuseExistingCheckout search. Requires the workspace worker user. */
+            workingDirectory?: string;
+            /** @description Keep Claude Code's file tools (and the file commands it recognizes in Bash) from reading or editing .env and .env.* files, except .env.example, .env.sample and .env.template. Defaults to true. Programs that load .env themselves are unaffected. Omit to keep the stored value (true when never set). */
+            protectSecretFiles?: boolean;
         };
         ProjectCoderRepository: {
             /** Format: uri */
@@ -1711,6 +1725,8 @@ export interface components {
                 workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
                 parameters?: components["schemas"]["CoderTemplateParameterValues"];
             };
+            postCreate?: components["schemas"]["ProjectScriptCommands"];
+            preRemove?: components["schemas"]["ProjectScriptCommands"];
         };
         ProjectSettingsInput: {
             displayName?: string;
@@ -1997,7 +2013,26 @@ export interface components {
             type: "agent.activity";
             payload: components["schemas"]["WorkerActivityPayload"];
         };
-        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"];
+        WorkerSetupPayload: {
+            /** @enum {string} */
+            status: "succeeded" | "failed" | "timed_out";
+            /** @description The 1-based Setup command that failed or timed out; absent on success. */
+            step?: number;
+            /** @description The failed command's exit status; -1 when it timed out or could not run. */
+            exitCode: number;
+            durationMs: number;
+            /** @description Redacted tail of the failed (or last) command's combined output, at most 2 KiB. */
+            output?: string;
+        };
+        WorkerSetupEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.setup";
+            payload: components["schemas"]["WorkerSetupPayload"];
+        };
+        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"] | components["schemas"]["WorkerSetupEventInput"];
         WorkerOKResponse: {
             /** @constant */
             ok: true;

@@ -173,3 +173,51 @@ func TestProjectSettingsPatchesCoderWorkspaceNamePrefix(t *testing.T) {
 		t.Fatalf("prefix not cleared: %+v", coder)
 	}
 }
+
+// A cloud project's Setup and Cleanup commands use the local project's keys;
+// settings replace each list as a whole and reject the wrong shape.
+func TestProjectSettingsScripts(t *testing.T) {
+	merged, err := MergeProjectSettingsConfig(
+		json.RawMessage(`{"coder":{"templateId":"t"},"postCreate":["old"]}`),
+		json.RawMessage(`{"postCreate":["npm ci","make up"],"preRemove":["make down"]}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := DecodeProjectSettings(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(settings.PostCreate, "|") != "npm ci|make up" || strings.Join(settings.PreRemove, "|") != "make down" ||
+		settings.Coder == nil || settings.Coder.TemplateID != "t" {
+		t.Fatalf("settings = %+v", settings)
+	}
+	cleared, err := MergeProjectSettingsConfig(merged, json.RawMessage(`{"preRemove":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, preRemove := ProjectScripts(cleared); preRemove != nil {
+		t.Fatalf("cleared preRemove = %q", preRemove)
+	}
+	tooMany := make([]string, MaxProjectScriptCommands+1)
+	for index := range tooMany {
+		tooMany[index] = `"true"`
+	}
+	for name, patch := range map[string]string{
+		"not an array":  `{"postCreate":"npm ci"}`,
+		"not strings":   `{"preRemove":[1]}`,
+		"blank command": `{"postCreate":[" "]}`,
+		"too many":      `{"postCreate":[` + strings.Join(tooMany, ",") + `]}`,
+		"too long":      `{"postCreate":["` + strings.Repeat("x", MaxProjectScriptCommandBytes+1) + `"]}`,
+	} {
+		if _, err := MergeProjectSettingsConfig(json.RawMessage(`{}`), json.RawMessage(patch)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+		if err := ValidateProjectScriptsConfig(json.RawMessage(patch)); err == nil {
+			t.Errorf("%s: accepted at create", name)
+		}
+	}
+	if err := ValidateProjectScriptsConfig(json.RawMessage(`{"postCreate":["npm ci"],"preRemove":["make down"]}`)); err != nil {
+		t.Fatalf("valid scripts rejected: %v", err)
+	}
+}
