@@ -41,6 +41,7 @@ export class BrowserScreencast {
 			if (!this.stopped) {
 				this.lastFrameAt = Date.now();
 				this.fallbackTimer = setInterval(() => void this.captureHiddenFrame(), 500);
+				this.fallbackTimer.unref?.();
 			}
 		} catch (error) {
 			this.removeListener();
@@ -101,7 +102,13 @@ export class BrowserScreencast {
 		const dimensions = jpegDimensions(jpeg);
 		this.sequence += 1n;
 		this.lastFrameAt = Date.now();
-		this.emit({ sequence: this.sequence, capturedAtMs: BigInt(Date.now()), width: dimensions.width, height: dimensions.height, jpeg });
+		this.emit({
+			sequence: this.sequence,
+			capturedAtMs: BigInt(Date.now()),
+			width: dimensions.width,
+			height: dimensions.height,
+			jpeg,
+		});
 	}
 
 	private async consume(params: Record<string, unknown>): Promise<void> {
