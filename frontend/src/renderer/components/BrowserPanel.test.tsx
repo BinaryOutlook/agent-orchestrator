@@ -1138,7 +1138,6 @@ describe("BrowserPanel", () => {
 	it("renders the complete tab chrome in the drag overlay", () => {
 		render(
 			<BrowserTopTabDragOverlay
-				onlyTab={false}
 				tab={{ id: "t1", url: "http://localhost:3000/", title: "First app", active: true }}
 			/>,
 		);
@@ -1180,6 +1179,15 @@ describe("BrowserPanel", () => {
 		await userEvent.click(within(tabList).getByRole("button", { name: "Close tab Second app" }));
 
 		expect(hookState.closeTab).toHaveBeenCalledWith("t2");
+	});
+
+	it("allows closing the final browser tab", async () => {
+		hookState.tabs = [{ id: "t1", url: "https://example.test/", title: "Last page", active: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Close tab Last page" }));
+		expect(hookState.closeTab).toHaveBeenCalledWith("t1");
 	});
 
 	it("opens a new browser tab from the horizontal tab strip", async () => {

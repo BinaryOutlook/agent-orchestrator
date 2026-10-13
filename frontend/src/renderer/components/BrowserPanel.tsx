@@ -1107,7 +1107,6 @@ export function BrowserPanelView({
 									key={tab.id}
 									onClose={handleCloseTab}
 									onSelect={handleSelectTab}
-									onlyTab={tabs.length === 1}
 									selected={tab.id === activeTabId}
 									tab={tab}
 								/>
@@ -1120,7 +1119,7 @@ export function BrowserPanelView({
 					</div>
 				</SortableContext>
 				<DragOverlay adjustScale={false} dropAnimation={null} modifiers={browserTopTabDragModifiers}>
-					{draggedTopTab ? <BrowserTopTabDragOverlay onlyTab={tabs.length === 1} tab={draggedTopTab} /> : null}
+					{draggedTopTab ? <BrowserTopTabDragOverlay tab={draggedTopTab} /> : null}
 				</DragOverlay>
 			</DndContext>
 				<BrowserControlTooltip label={t("browser.openNewTab")}>
@@ -1825,13 +1824,11 @@ function BrowserControlTooltip({
 const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	tab,
 	selected,
-	onlyTab,
 	onSelect,
 	onClose,
 }: {
 	tab: BrowserViewModel["tabs"][number];
 	selected: boolean;
-	onlyTab: boolean;
 	onSelect: (tabId: string) => void;
 	onClose: (tabId: string) => void;
 }) {
@@ -1869,11 +1866,10 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					<span className="browser-panel__tab-title">{label.title}</span>
 				</button>
 			</BrowserControlTooltip>
-			<BrowserControlTooltip label={onlyTab ? t("browser.onlyTab") : closeLabel}>
+			<BrowserControlTooltip label={closeLabel}>
 				<button
 					aria-label={closeLabel}
 					className="browser-panel__tab-close"
-					disabled={onlyTab}
 					onClick={() => onClose(tab.id)}
 					type="button"
 				>
@@ -1886,10 +1882,8 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 
 export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 	tab,
-	onlyTab,
 }: {
 	tab: BrowserViewModel["tabs"][number];
-	onlyTab: boolean;
 }) {
 	const label = browserTabLabel(tab.title, tab.url);
 	return (
@@ -1906,11 +1900,9 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 				)}
 				<span className="browser-panel__tab-title">{label.title}</span>
 			</div>
-			{onlyTab ? null : (
-				<span className="browser-panel__tab-close">
-					<X aria-hidden="true" className="size-icon-base" />
-				</span>
-			)}
+			<span className="browser-panel__tab-close">
+				<X aria-hidden="true" className="size-icon-base" />
+			</span>
 		</div>
 	);
 });
