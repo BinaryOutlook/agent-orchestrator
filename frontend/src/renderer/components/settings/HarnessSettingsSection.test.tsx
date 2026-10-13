@@ -354,7 +354,7 @@ describe("HarnessSettingsSection", () => {
 		expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
 		expect(row).toHaveAttribute("data-focus-highlighted");
 
-		fireEvent.change(screen.getByRole("textbox", { name: "Search harnesses" }), { target: { value: "Claude" } });
+		fireEvent.change(screen.getByRole("searchbox", { name: "Search harnesses" }), { target: { value: "Claude" } });
 		expect(document.querySelector('[data-agent="codex"]')).toBe(row);
 
 		const highlightTimeout = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 2_000)?.[0];
@@ -514,7 +514,9 @@ describe("HarnessSettingsSection", () => {
 			resolveRefresh({ data: refreshed });
 		});
 		await waitFor(() => {
-			expect(within(row).getByRole("button", { name: "Installed" })).toBeDisabled();
+			// Installed is a terminal state shown as muted text, not a disabled button.
+			expect(within(row).getByText("Installed")).toBeInTheDocument();
+			expect(within(row).queryByRole("button", { name: "Installed" })).toBeNull();
 		});
 	});
 

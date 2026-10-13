@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Copy, Download, ExternalLink, KeyRound, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, Copy, Download, ExternalLink, KeyRound, LoaderCircle, LogIn, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -36,7 +36,7 @@ import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { useCloudGate } from "../../hooks/useCloudGate";
-import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
+import { SettingsSearch } from "./SettingsSearch";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 
@@ -173,6 +173,9 @@ function installMethodLabel(method: { id: string; label: string } | undefined, f
 
 export type HarnessView = "local" | "cloud";
 
+/** Row actions on this page: ghost, muted until hover (settings contract 5). */
+const ROW_ACTION = "text-settings-muted hover:text-settings-label";
+
 export function HarnessSettingsSection({
 	focusAgentId,
 	hostId,
@@ -197,15 +200,18 @@ export function HarnessSettingsSection({
 	const [selectedHostId, setSelectedHostId] = useState(hostId ?? LOCAL_HOST);
 	useEffect(() => setSelectedHostId(hostId ?? LOCAL_HOST), [hostId]);
 	const remoteOffline = selectedHostId !== LOCAL_HOST && !connected.includes(selectedHostId);
-	return <SettingsSection title={t("settings.harness")} titleHidden={titleHidden} sectionId="harness">
-		<div className="sticky top-toolbar z-10 flex items-center gap-2 bg-(--color-bg-primary) pb-2 pt-2">
-			<label className="flex h-9! min-w-0 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
-				<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
-				<span className="sr-only">{t("settings.harness.search")}</span>
-				<input aria-label={t("settings.harness.search")} className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted" placeholder={t("settings.harness.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
-			</label>
-			{cloudEnabled ? <Tabs value={cloudView ? "cloud" : "local"} onValueChange={(value) => setView(value as HarnessView)}><TabsList aria-label={t("settings.harness.viewLabel")}><TabsTrigger value="local">{t("settings.harness.viewLocal")}</TabsTrigger><TabsTrigger value="cloud">{t("settings.harness.viewCloud")}</TabsTrigger></TabsList></Tabs> : null}
-		</div>
+	return <SettingsSection
+		title={t("settings.harness")}
+		titleHidden={titleHidden}
+		sectionId="harness"
+		toolbar={<SettingsSearch
+			aria-label={t("settings.harness.search")}
+			placeholder={t("settings.harness.searchPlaceholder")}
+			value={search}
+			onChange={setSearch}
+			trailing={cloudEnabled ? <Tabs value={cloudView ? "cloud" : "local"} onValueChange={(value) => setView(value as HarnessView)}><TabsList aria-label={t("settings.harness.viewLabel")}><TabsTrigger value="local">{t("settings.harness.viewLocal")}</TabsTrigger><TabsTrigger value="cloud">{t("settings.harness.viewCloud")}</TabsTrigger></TabsList></Tabs> : undefined}
+		/>}
+	>
 		{!cloudView && (connected.length > 0 || remoteOffline) ? <SettingsOptionMenu
 				aria-label={t("remote.host")}
 				value={selectedHostId}
@@ -213,8 +219,8 @@ export function HarnessSettingsSection({
 				onChange={setSelectedHostId}
 				triggerClassName="w-fit max-w-full"
 			/> : null}
-		{!cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="text-xs text-muted-foreground">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
-		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} />}
+		{!cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="px-3 text-xs text-settings-muted">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
+		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="px-3 text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} />}
 	</SettingsSection>;
 }
 
@@ -243,32 +249,33 @@ function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: string; 
 	}, [connections.isPending, org?.id, targetAgentId]);
 
 	return <>
-		{!org?.id ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.cloudAgents.signIn")}</p>
-			: connections.error ? <p className="px-3 py-6 text-sm text-error" role="alert">{String(connections.error)}</p>
+		{!org?.id ? <div className="settings-grouped-rows"><div className="settings-row-bar text-sm text-settings-muted">{t("settings.cloudAgents.signIn")}</div></div>
+			: connections.error ? <p className="px-3 text-xs text-error" role="alert">{String(connections.error)}</p>
 			: connections.isPending ? null
 			: <div className="settings-grouped-rows flex w-full flex-col" ref={rowsRef}>
 				{rows.map((agentId) => {
 					const connected = isCloudHarnessConnected(connections.data, agentId);
 					return <div
 						aria-labelledby={`harness-agent-${agentId}`}
-						className={cn("settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200", highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
+						className={cn("transition-[background-color,box-shadow] duration-200 outline-none", highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
 						data-agent={agentId}
 						data-focus-highlighted={highlightedAgentId === agentId ? "" : undefined}
 						key={agentId}
 						tabIndex={-1}
 					>
-						<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
-						<div className="min-w-0 flex-1">
-							<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
-							<p className="truncate text-xs text-settings-muted">{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</p>
-						</div>
-						{loginAgent === agentId ? null : <Button data-harness-primary-action="" size="sm" variant={connected ? "outline" : "primary"} onClick={() => setLoginAgent(agentId)}>{t(connected ? "settings.harness.refreshLogin" : "settings.harness.login")}</Button>}
-						{loginAgent === agentId ? <div className="basis-full pl-10"><CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /></div> : null}
+						<SettingsRow
+							leading={<AgentAvatar className="size-7" decorative provider={agentId} />}
+							label={<span id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</span>}
+							description={connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}
+						>
+							{loginAgent === agentId ? null : <Button data-harness-primary-action="" size="sm" variant="ghost" className={ROW_ACTION} onClick={() => setLoginAgent(agentId)}>{t(connected ? "settings.harness.refreshLogin" : "settings.harness.login")}</Button>}
+						</SettingsRow>
+						{loginAgent === agentId ? <div className="settings-content-row pt-0"><CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /></div> : null}
 					</div>;
 				})}
-				{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
+				{rows.length === 0 ? <div className="settings-row-bar text-sm text-settings-muted">{t("settings.harness.noResults")}</div> : null}
 			</div>}
-		{org?.id ? <div className="mt-3 border-t border-border px-3 pt-3"><CloudGitHubPatRow /></div> : null}
+		{org?.id ? <CloudGitHubPatRow /> : null}
 	</>;
 }
 
@@ -738,7 +745,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 											aria-label={t("settings.harness.installMethod")}
 											value={selectedMethodId}
 											options={availableMethods.map((method) => ({ value: method.id, label: installMethodLabel(method) ?? method.label }))}
-											triggerClassName="h-8! min-h-8! w-8! min-w-8! justify-center! rounded-none! border-l border-settings-menu bg-transparent px-0! text-xs leading-4 hover:bg-[var(--color-bg-settings-trigger-hover)]!"
+											triggerClassName="h-control-md! min-h-control-md! w-control-md! min-w-control-md! justify-center! rounded-md! border-0! bg-transparent! px-0! text-settings-muted hover:bg-muted! hover:text-settings-label! data-[state=open]:bg-muted!"
 							renderTrigger={(selected) => <span className="sr-only">{selected?.label}</span>}
 							onChange={(value) => setSelectedMethods((current) => ({ ...current, [agentId]: value }))}
 						/>
@@ -746,7 +753,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const authControls = authPlan && authPlan.action !== "instructions" ? (
 							<>
 								{showAuthAction ? (
-									<Button data-harness-primary-action="" data-terminal-focus-handoff="true" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} size="sm" onClick={() => void startAuth(agentId)}>
+									<Button data-harness-primary-action="" data-terminal-focus-handoff="true" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} size="sm" variant="ghost" className={ROW_ACTION} onClick={() => void startAuth(agentId)}>
 										{authState?.pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 										{authState?.pending ? t("settings.harness.loggingIn") : isDocumentationAction ? t("settings.harness.viewDocumentation") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
 									</Button>
@@ -755,7 +762,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						) : null;
 						// A logged-in harness's only action is to re-run its login.
 						const refreshLocal = authPlan?.action === "login" && connectedCredential ? (
-							<Button type="button" size="sm" variant="outline" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
+							<Button type="button" size="sm" variant="ghost" className={ROW_ACTION} disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
 								{t("settings.harness.refreshLogin")}
 							</Button>
 						) : null;
@@ -766,16 +773,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 								{/* The subtitle already states a login ("Connected", "Configured"); the
 								    chip is only for installed harnesses whose subtitle doesn't say so. */}
 								{showInstallationStatus && !connectedCredential ? (
-									<Button
-										type="button"
-										size="none"
-										variant="ghost"
-										className={cn(MENU_TRIGGER_CHROME, "h-8! min-h-8! shrink-0 rounded-md! border-0! bg-[var(--color-bg-settings-trigger)] px-3! text-xs leading-4")}
-										aria-label={installationStatusLabel}
-										disabled
-									>
-										{installationStatusLabel}
-									</Button>
+									<span className="px-2.5 text-xs text-settings-muted">{installationStatusLabel}</span>
 								) : null}
 								{authControls}
 								{refreshLocal}
@@ -783,40 +781,37 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 							) : failed ? (
 								<div className="flex items-center gap-1.5">
 									{methodSelect}
-									<Button size="sm" variant="outline" disabled={pending} onClick={() => void verifyInstall(agentId)}>{t("settings.harness.verifyAgain")}</Button>
-									{selectedMethodId ? <Button className={MENU_TRIGGER_CHROME} size="sm" variant="ghost" onClick={() => void startInstall(agentId, selectedMethodId)} disabled={pending}>{t("settings.harness.retry")}</Button> : null}
+									<Button size="sm" variant="ghost" className={ROW_ACTION} disabled={pending} onClick={() => void verifyInstall(agentId)}>{t("settings.harness.verifyAgain")}</Button>
+									{selectedMethodId ? <Button size="sm" variant="ghost" className={ROW_ACTION} onClick={() => void startInstall(agentId, selectedMethodId)} disabled={pending}>{t("settings.harness.retry")}</Button> : null}
 								</div>
 							) : installationPending ? null : availableMethods.length > 0 ? (
-				<div className="flex items-stretch overflow-hidden rounded-md bg-[var(--color-bg-settings-trigger)]">
+				<div className="flex items-center">
 									<Button
 										data-harness-primary-action=""
-										className={cn(
-											MENU_TRIGGER_CHROME,
-											"h-8! min-h-8! rounded-none! border-0! bg-transparent px-3! text-xs leading-4 hover:bg-[var(--color-bg-settings-trigger-hover)]! dark:hover:bg-[var(--color-bg-settings-trigger-hover)]!",
-											availableMethods.length > 1 && "pr-3",
-										)}
-										size="none"
+										className={ROW_ACTION}
+										size="sm"
 										variant="ghost"
 										aria-label={t("settings.harness.install")}
 										disabled={pending}
 										onClick={() => selectedMethodId && void startInstall(agentId, selectedMethodId)}
 									>
-										<Download aria-hidden="true" />{methodLabel}
+										<Download aria-hidden="true" />{methodLabel ? `${t("settings.harness.install")} · ${methodLabel}` : t("settings.harness.install")}
 									</Button>
 									{methodSelect}
 								</div>
 							) : plan?.command ? (
-								<Button size="sm" variant="outline" onClick={() => void copyText(agentId, plan.command!)}>{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copiedAgent === agentId ? t("settings.harness.copied") : t("settings.harness.copyCommand")}</Button>
+								<Button size="sm" variant="ghost" className={ROW_ACTION} onClick={() => void copyText(agentId, plan.command!)}>{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copiedAgent === agentId ? t("settings.harness.copied") : t("settings.harness.copyCommand")}</Button>
 							) : plan?.documentationUrl ? (
-								<Button data-harness-primary-action="" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>
+								<Button data-harness-primary-action="" size="sm" variant="ghost" className={ROW_ACTION} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>
 									<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
 								</Button>
 							) : null;
+					const rowSummary = isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))));
 					return (
 						<div
 							aria-labelledby={`harness-agent-${agentId}`}
 							className={cn(
-								"settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200",
+								"transition-[background-color,box-shadow] duration-200 outline-none",
 								highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent",
 							)}
 							data-agent={agentId}
@@ -824,59 +819,55 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 							key={agentId}
 							tabIndex={-1}
 						>
-							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
-							<div className="min-w-0 flex-1">
-								<div className="flex items-center gap-1.5">
-									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
+							<SettingsRow
+								leading={<AgentAvatar className="size-7" decorative provider={agentId} />}
+								label={<span id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</span>}
+								description={<span className={cn("line-clamp-2", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? authPlan?.reason ?? plan?.reason}>{rowSummary}</span>}
+							>
+								<div className="flex shrink-0 items-center gap-1">
+									{localControls}
+									{authPlan?.action === "instructions" && authPlan.documentationUrl ? (
+										<Button size="icon-sm" variant="ghost" className={ROW_ACTION} aria-label={t("settings.harness.instructions")} title={t("settings.harness.instructions")} onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}>
+											<BookOpen aria-hidden="true" />
+										</Button>
+									) : null}
 								</div>
-								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? authPlan?.reason ?? plan?.reason}>
-									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
-								</p>
-							</div>
-
-			{localControls}
-
-				{authPlan?.action === "instructions" && authPlan.documentationUrl ? (
-					<Button size="icon-sm" variant="ghost" aria-label={t("settings.harness.instructions")} title={t("settings.harness.instructions")} onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}>
-						<BookOpen aria-hidden="true" />
-					</Button>
-				) : null}
-
-				{!isInstalled && hasDiagnostics ? (
-				<div className="basis-full">
-					<div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", expandedDiagnostics[agentId] ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-						<div className="min-h-0 overflow-hidden">
-							<div className="mt-1 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) p-3 text-xs text-settings-muted">
-								{job?.method ? <p><span className="font-medium text-settings-label">{t("settings.harness.method")}:</span> {job.method}</p> : null}
-								{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
-								{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
-								{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
-								<Button className="mt-2" size="sm" variant="outline" onClick={() => job && void copyDiagnostics(agentId, job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
-							</div>
-						</div>
-					</div>
-					<Button aria-expanded={expandedDiagnostics[agentId] === true} size="sm" variant="ghost" onClick={() => setExpandedDiagnostics((current) => ({ ...current, [agentId]: !current[agentId] }))}>
-						{expandedDiagnostics[agentId] ? t("settings.harness.hideDiagnostics") : t("settings.harness.showDiagnostics")}
-					</Button>
-					</div>
-										) : null}
-										{rowAuthWorkflow ? (
-											<div className="basis-full pl-10">
-												<HarnessAuthTerminalPanel
-													workflow={rowAuthWorkflow}
-													hostId={hostId}
-													onClose={() => void closeAuth(rowAuthWorkflow)}
-													onRetry={() => void closeAuth(rowAuthWorkflow).then((closed) => { if (closed) void startAuth(agentId); })}
-													onTerminalState={(state) => {
-														if (state === "exited" && authWorkflowRef.current?.phase === "running") void finishAuth(rowAuthWorkflow);
-													}}
-												/>
+							</SettingsRow>
+							{!isInstalled && hasDiagnostics ? (
+								<div className="settings-content-row pt-0">
+									<div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", expandedDiagnostics[agentId] ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+										<div className="min-h-0 overflow-hidden">
+											<div className="mb-1 rounded-md bg-(--color-bg-settings-input) p-3 text-xs text-settings-muted">
+												{job?.method ? <p><span className="font-medium text-settings-label">{t("settings.harness.method")}:</span> {job.method}</p> : null}
+												{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
+												{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
+												{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
+												<Button className={cn("mt-2 -ml-2.5", ROW_ACTION)} size="sm" variant="ghost" onClick={() => job && void copyDiagnostics(agentId, job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
 											</div>
-										) : null}
+										</div>
+									</div>
+									<Button aria-expanded={expandedDiagnostics[agentId] === true} className={cn("-ml-2.5", ROW_ACTION)} size="sm" variant="ghost" onClick={() => setExpandedDiagnostics((current) => ({ ...current, [agentId]: !current[agentId] }))}>
+										{expandedDiagnostics[agentId] ? t("settings.harness.hideDiagnostics") : t("settings.harness.showDiagnostics")}
+									</Button>
+								</div>
+							) : null}
+							{rowAuthWorkflow ? (
+								<div className="settings-content-row pt-0">
+									<HarnessAuthTerminalPanel
+										workflow={rowAuthWorkflow}
+										hostId={hostId}
+										onClose={() => void closeAuth(rowAuthWorkflow)}
+										onRetry={() => void closeAuth(rowAuthWorkflow).then((closed) => { if (closed) void startAuth(agentId); })}
+										onTerminalState={(state) => {
+											if (state === "exited" && authWorkflowRef.current?.phase === "running") void finishAuth(rowAuthWorkflow);
+										}}
+									/>
+								</div>
+							) : null}
 						</div>
 					);
 				})}
-				{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
+				{rows.length === 0 ? <div className="settings-row-bar text-sm text-settings-muted">{t("settings.harness.noResults")}</div> : null}
 			</div>
 		</>
 	);
@@ -927,32 +918,33 @@ function CloudGitHubPatRow() {
 		}
 	};
 	return (
-		<div className="flex w-full flex-col gap-1.5">
-			<SettingsRow key="github-pat" icon={KeyRound} label={t("settings.cloudAgents.github.title")}>
-				<span className="text-sm leading-5 text-settings-muted">{githubPATConnected ? t("settings.cloudAgents.github.connected") : t("settings.cloudAgents.github.notConnected")}</span>
-			</SettingsRow>
-			<GitHubTokenField
-				id="settings-github-pat"
-				bare
-				className="mt-2"
-				label={t("settings.cloudAgents.github.tokenLabel")}
-				hint={t("settings.cloudAgents.github.tokenHint")}
-				value={githubPAT}
-				disabled={githubPATBusy}
-				error={githubPATError}
-				submitLabel={githubPATBusy ? t("settings.cloudAgents.github.saving") : t("settings.cloudAgents.github.save")}
-				submitVariant="outline"
-				submitDisabled={githubPATBusy}
-				onChange={setGitHubPAT}
-				onSubmit={() => void saveGitHubPAT()}
-			/>
-			{githubPATConnected ? (
-				<div className="mt-2 flex justify-end">
-					<Button type="button" variant="footer" disabled={githubPATBusy} onClick={() => void removeGitHubPAT()}>
-						{t("settings.cloudAgents.github.remove")}
-					</Button>
+		<div className="settings-grouped-rows mt-6 flex w-full flex-col">
+			<SettingsRow icon={KeyRound} label={t("settings.cloudAgents.github.title")}>
+				<div className="flex shrink-0 items-center gap-1">
+					<span className="px-2.5 text-xs text-settings-muted">{githubPATConnected ? t("settings.cloudAgents.github.connected") : t("settings.cloudAgents.github.notConnected")}</span>
+					{githubPATConnected ? (
+						<Button type="button" size="sm" variant="ghost" className={ROW_ACTION} disabled={githubPATBusy} onClick={() => void removeGitHubPAT()}>
+							{t("settings.cloudAgents.github.remove")}
+						</Button>
+					) : null}
 				</div>
-			) : null}
+			</SettingsRow>
+			<div className="settings-content-row">
+				<GitHubTokenField
+					id="settings-github-pat"
+					bare
+					label={t("settings.cloudAgents.github.tokenLabel")}
+					hint={t("settings.cloudAgents.github.tokenHint")}
+					value={githubPAT}
+					disabled={githubPATBusy}
+					error={githubPATError}
+					submitLabel={githubPATBusy ? t("settings.cloudAgents.github.saving") : t("settings.cloudAgents.github.save")}
+					submitVariant="outline"
+					submitDisabled={githubPATBusy}
+					onChange={setGitHubPAT}
+					onSubmit={() => void saveGitHubPAT()}
+				/>
+			</div>
 		</div>
 	);
 }
