@@ -130,6 +130,14 @@ func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, 
 	if activity.ProviderItemID != "" {
 		for i, existing := range f.activities {
 			if existing.ConversationID == conversationID && existing.ProviderItemID == activity.ProviderItemID {
+				if activity.Kind == domain.ActivityKindAOAction &&
+					activity.Status == domain.ActivityStatusRunning &&
+					(existing.Status == domain.ActivityStatusCompleted ||
+						existing.Status == domain.ActivityStatusFailed ||
+						existing.Status == domain.ActivityStatusCancelled ||
+						existing.Status == domain.ActivityStatusResolved) {
+					return nil
+				}
 				activity.ID = existing.ID
 				activity.ConversationID = conversationID
 				activity.Sequence = existing.Sequence

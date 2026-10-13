@@ -187,23 +187,24 @@ type outputTypeReconciler interface {
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
-	manager             commander
-	store               Store
-	prClaimer           ports.PRClaimer
-	scm                 scmProvider
-	tracker             ports.Tracker
-	clock               func() time.Time
-	dataDir             string
-	telemetry           ports.EventSink
-	logger              *slog.Logger
-	backgroundContext   context.Context
-	agentReadiness      ports.AgentReadinessProvider
-	runBackground       func(func())
-	orchestratorLocksMu sync.Mutex
-	orchestratorLocks   map[domain.ProjectID]*sync.Mutex
-	workspaceCache      *workspaceCache
-	workspaceManifests  *workspaceManifestIndex
-	workspaceEditsMu    sync.Mutex
+	manager                commander
+	store                  Store
+	prClaimer              ports.PRClaimer
+	scm                    scmProvider
+	tracker                ports.Tracker
+	clock                  func() time.Time
+	afterActionStatusCheck func()
+	dataDir                string
+	telemetry              ports.EventSink
+	logger                 *slog.Logger
+	backgroundContext      context.Context
+	agentReadiness         ports.AgentReadinessProvider
+	runBackground          func(func())
+	orchestratorLocksMu    sync.Mutex
+	orchestratorLocks      map[domain.ProjectID]*sync.Mutex
+	workspaceCache         *workspaceCache
+	workspaceManifests     *workspaceManifestIndex
+	workspaceEditsMu       sync.Mutex
 	// workspaceGroup coalesces concurrent cache-miss compare/status lookups
 	// for the same (session, root): "Expand All" on many files fires that
 	// many GetWorkspaceFile calls at once, and without this each one would

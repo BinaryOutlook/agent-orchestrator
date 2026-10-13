@@ -256,6 +256,9 @@ func (s *Service) recordAgentSwitched(ctx context.Context, id domain.SessionID, 
 	if status == domain.ActivityStatusRunning && s.actionAlreadyTerminal(ctx, id, "ao-action:"+actionSessionAgentSwitched+":"+operationID) {
 		return
 	}
+	if status == domain.ActivityStatusRunning && s.afterActionStatusCheck != nil {
+		s.afterActionStatusCheck()
+	}
 	s.recordAction(ctx, id, actionDetail{
 		Action:          actionSessionAgentSwitched,
 		OperationID:     operationID,

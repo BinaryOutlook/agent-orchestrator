@@ -2528,7 +2528,19 @@ func (s *Store) ActivityStatusByProviderItem(ctx context.Context, conversationID
 	return row.Status, true, nil
 }
 
+func aoActionStatusSettled(status domain.ActivityStatus) bool {
+	switch status {
+	case domain.ActivityStatusCompleted, domain.ActivityStatusFailed, domain.ActivityStatusCancelled, domain.ActivityStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // UpsertActivity records or updates a non-message timeline entry.
+// A running ao_action does not replace a completed, failed, cancelled, or
+// resolved row. The admission write and the terminal callback take this lock
+// separately, so the decision uses the row read in this call.
 func (s *Store) UpsertActivity(
 	ctx context.Context,
 	conversationID, providerTurnID string,
@@ -2541,12 +2553,17 @@ func (s *Store) UpsertActivity(
 	detail := string(activity.Detail)
 
 	if activity.ProviderItemID != "" {
-		_, err := q.SelectConversationActivityByProviderItem(ctx,
+		row, err := q.SelectConversationActivityByProviderItem(ctx,
 			gen.SelectConversationActivityByProviderItemParams{
 				ConversationID: conversationID,
 				ProviderItemID: activity.ProviderItemID,
 			})
 		if err == nil {
+			if activity.Kind == domain.ActivityKindAOAction &&
+				activity.Status == domain.ActivityStatusRunning &&
+				aoActionStatusSettled(row.Status) {
+				return nil
+			}
 			if settleErr := q.SettleConversationActivity(ctx,
 				gen.SettleConversationActivityParams{
 					Status:         activity.Status,
