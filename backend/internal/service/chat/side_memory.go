@@ -491,7 +491,7 @@ func (m *memorySideStore) SideProviderCleanupPending(_ context.Context) ([]domai
 	defer m.mu.Unlock()
 	openForks := make(map[string]bool, len(m.sides))
 	for _, side := range m.sides {
-		if side.ClosedAt == nil && side.ProviderForkID != "" && !(side.State == "failed" && side.RecreateRequired) {
+		if side.ClosedAt == nil && side.ProviderForkID != "" && (side.State != "failed" || !side.RecreateRequired) {
 			openForks[side.ProviderForkID] = true
 		}
 	}
