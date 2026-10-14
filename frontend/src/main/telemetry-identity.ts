@@ -24,6 +24,10 @@ export class TelemetryIdentityController {
 	// Bumped whenever the daemon's copy goes stale (restart, or a new user), so an
 	// in-flight hand-off to the previous daemon cannot mark the new one as synced.
 	private generation = 0;
+	// Hand-offs run one at a time. A request cannot be recalled once sent, so two
+	// in flight could commit in the opposite order and leave the daemon on the
+	// older user; queued runs always send the latest state when their turn comes.
+	private queue: Promise<void> = Promise.resolve();
 	// The install ID handed to the renderer's PostHog client at startup.
 	private servedInstallId: string | null = null;
 
@@ -95,7 +99,13 @@ export class TelemetryIdentityController {
 	}
 
 	/** Retries the hand-off; called when the daemon becomes ready. */
-	async flush(): Promise<void> {
+	flush(): Promise<void> {
+		const run = this.queue.then(() => this.flushOnce());
+		this.queue = run.catch(() => undefined);
+		return run;
+	}
+
+	private async flushOnce(): Promise<void> {
 		if (this.pushed) return;
 		const base = this.origin();
 		if (!base) return;

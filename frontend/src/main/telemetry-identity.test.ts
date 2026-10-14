@@ -78,6 +78,7 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
 
 		const setUser = ctl.setCloudUser("user_1"); // in flight to daemon A
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		ctl.invalidate(); // A leaves ready
 		release(); // A's late 204 arrives before daemon B is ready
 		await setUser;
@@ -87,23 +88,50 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		expect(fetcher).toHaveBeenCalledTimes(2);
 	});
 
-	it("a late response for a replaced user does not mark the new user as synced", async () => {
+	it("never lets an older user's request land after a newer one: the daemon ends on the latest", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => (release = resolve));
-		const fetcher = vi.fn(async () => {
-			if (fetcher.mock.calls.length === 1) await gate;
+		// A fake daemon that records the order identities were committed in.
+		const committed: string[] = [];
+		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+			if (fetcher.mock.calls.length === 1) await gate; // user_1's request hangs in flight
+			committed.push(JSON.parse(init.body as string).cloudUserId);
 			return new Response(null, { status: 204 });
 		});
 		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
+
 		const first = ctl.setCloudUser("user_1");
-		await ctl.setCloudUser("user_2");
+		const second = ctl.setCloudUser("user_2");
+		await Promise.resolve();
+		expect(fetcher).toHaveBeenCalledTimes(1); // user_2 waits its turn
 		release();
-		await first;
-		const bodies = fetcher.mock.calls.map((c) => JSON.parse((c as unknown as [string, RequestInit])[1].body as string).cloudUserId);
-		expect(bodies).toEqual(["user_1", "user_2"]);
+		await Promise.all([first, second]);
+
+		expect(committed.at(-1)).toBe("user_2");
 		await ctl.flush(); // already synced to user_2: nothing more to send
-		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(committed.at(-1)).toBe("user_2");
+		expect(fetcher.mock.calls.length).toBeLessThanOrEqual(2);
+	});
+
+	it("a queued hand-off sends the newest state, so a stale one is never replayed", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => (release = resolve));
+		const committed: (string)[] = [];
+		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+			if (fetcher.mock.calls.length === 1) await gate;
+			committed.push(JSON.parse(init.body as string).cloudUserId);
+			return new Response(null, { status: 204 });
+		});
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
+
+		const a = ctl.setCloudUser("user_A");
+		const b = ctl.setCloudUser("user_B");
+		const out = ctl.setCloudUser(null);
+		release();
+		await Promise.all([a, b, out]);
+		expect(committed.at(-1)).toBe("");
 	});
 
 	it("refuses a non-loopback origin", async () => {
