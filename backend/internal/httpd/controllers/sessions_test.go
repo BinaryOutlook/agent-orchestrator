@@ -42,6 +42,8 @@ import (
 
 type fakeSessionService struct {
 	cleanupPending             bool
+	artifactsDeleted           []domain.SessionID
+	deleteArtifactsErr         error
 	sessions                   map[domain.SessionID]domain.Session
 	sent                       string
 	sentAttachment             *ports.SpawnAttachment
@@ -54,6 +56,7 @@ type fakeSessionService struct {
 	cleanupResult              []domain.SessionID
 	cleanupSkipped             []sessionsvc.CleanupSkipped
 	workspaceFiles             sessionsvc.WorkspaceFiles
+	workspaceListHook          func(context.Context) error
 	workspaceFile              sessionsvc.WorkspaceFileDetail
 	workspaceFileSection       sessionsvc.WorkspaceFileSection
 	workspaceFileCommitSHA     string
@@ -492,6 +495,14 @@ func (f *fakeSessionService) Kill(_ context.Context, id domain.SessionID) (bool,
 	return true, nil
 }
 
+func (f *fakeSessionService) DeleteArtifacts(_ context.Context, id domain.SessionID) error {
+	if f.deleteArtifactsErr != nil {
+		return f.deleteArtifactsErr
+	}
+	f.artifactsDeleted = append(f.artifactsDeleted, id)
+	return nil
+}
+
 func (f *fakeSessionService) RollbackSpawn(_ context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error) {
 	if _, ok := f.sessions[id]; ok {
 		delete(f.sessions, id)
@@ -640,7 +651,12 @@ func (f *fakeSessionService) StageAttachments(
 	return f.stagedPaths, nil
 }
 
-func (f *fakeSessionService) ListWorkspaceFiles(_ context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error) {
+func (f *fakeSessionService) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error) {
+	if f.workspaceListHook != nil {
+		if err := f.workspaceListHook(ctx); err != nil {
+			return sessionsvc.WorkspaceFiles{}, err
+		}
+	}
 	if f.workspaceErr != nil {
 		return sessionsvc.WorkspaceFiles{}, f.workspaceErr
 	}
@@ -3960,6 +3976,18 @@ func TestSessionsAPI_GetWorkspaceFileBlobRequiresPath(t *testing.T) {
 func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	workspace := t.TempDir()
 	svc := newFakeSessionService()
+	// Permit the startup reconciliation, then block refresh work to verify
+	// that the invalidation edge is sent before scanning the changed workspace.
+	scans := 0
+	svc.workspaceListHook = func(ctx context.Context) error {
+		scans++
+		if scans == 1 {
+			return nil
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
 	session := svc.sessions["ao-1"]
 	session.Metadata.WorkspacePath = workspace
 	svc.sessions["ao-1"] = session
@@ -4718,6 +4746,55 @@ func TestSessionsAPI_InteractionRecencyKeepsHumanTimestampSeparate(t *testing.T)
 func (f *fakeSessionService) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	freed, err := f.Kill(ctx, id)
 	return sessionmanager.KillResult{Freed: freed && !f.cleanupPending, CleanupPending: f.cleanupPending}, err
+}
+
+func TestSessionsAPI_KillKeepsArtifactsByDefault(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/kill", "")
+	if status != http.StatusOK || strings.Contains(string(body), "artifactsDeleted") {
+		t.Fatalf("kill response = %d %s", status, body)
+	}
+	if len(svc.artifactsDeleted) != 0 {
+		t.Fatalf("artifacts deleted without the flag: %v", svc.artifactsDeleted)
+	}
+}
+
+func TestSessionsAPI_KillDeletesArtifactsWhenAsked(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/kill", `{"deleteArtifacts":true}`)
+	var result struct {
+		ArtifactsDeleted bool `json:"artifactsDeleted"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusOK || !result.ArtifactsDeleted || !svc.sessions["ao-1"].IsTerminated {
+		t.Fatalf("kill response = %d %s", status, body)
+	}
+	if len(svc.artifactsDeleted) != 1 || svc.artifactsDeleted[0] != "ao-1" {
+		t.Fatalf("artifactsDeleted = %v, want [ao-1]", svc.artifactsDeleted)
+	}
+}
+
+func TestSessionsAPI_KillSucceedsWhenArtifactDeleteFails(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.deleteArtifactsErr = errors.New("disk busy")
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/kill", `{"deleteArtifacts":true}`)
+	if status != http.StatusOK || strings.Contains(string(body), "artifactsDeleted") || !svc.sessions["ao-1"].IsTerminated {
+		t.Fatalf("kill response = %d %s", status, body)
+	}
+}
+
+func TestSessionsAPI_KillRejectsMalformedBody(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	_, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/kill", `{"deleteArtifacts":`)
+	if status != http.StatusBadRequest || svc.sessions["ao-1"].IsTerminated {
+		t.Fatalf("status = %d terminated=%v, want 400 and a live session", status, svc.sessions["ao-1"].IsTerminated)
+	}
 }
 
 func TestSessionsAPI_KillReportsAcceptedCleanup(t *testing.T) {
