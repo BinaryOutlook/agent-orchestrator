@@ -1,4 +1,5 @@
 import { syncMacWindowButtons } from "./main/window-chrome";
+import { createWindowTranslucency } from "./main/window-translucency";
 import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
 import { acknowledgeMacUpdateRestart } from "./main/mac-update-progress";
@@ -17,6 +18,7 @@ import {
 	Notification as ElectronNotification,
 	powerMonitor,
 	protocol,
+	screen,
 	shell,
 	session,
 	WebContentsView,
@@ -415,11 +417,15 @@ function getShellWebContents(): WebContents | null {
 let rendererWindowBackground: string | null = null;
 // macOS window transparency: the shell paints translucent surfaces and the
 // native vibrancy material underneath blurs the desktop.
-let windowTranslucent = false;
+const windowTranslucency = createWindowTranslucency({
+	platform: process.platform,
+	getWindow: () => mainWindow,
+	syncBackground: syncNativeWindowBackground,
+});
 
 function syncNativeWindowBackground(): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
-	if (windowTranslucent) {
+	if (windowTranslucency.enabled) {
 		mainWindow.setBackgroundColor("#00000000");
 		return;
 	}
@@ -793,7 +799,10 @@ async function createWindowInternal(): Promise<void> {
 		platform: process.platform,
 	});
 	windowComposition = composition;
-	syncNativeWindowBackground();
+	// Apply the remembered transparency now, so a reopened window does not wait
+	// on its renderer (which re-sends the setting once it mounts).
+	windowTranslucency.reapply();
+	mainWindow.on("show", () => windowTranslucency.reapply());
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
@@ -1074,10 +1083,6 @@ async function createWindowInternal(): Promise<void> {
 				console.error("AO: window teardown failed:", error);
 			});
 		mainWindow = null;
-		// Vibrancy belongs to the destroyed window. Forget it so the replacement
-		// window's renderer re-applies it instead of hitting the unchanged-state
-		// early return in theme:set-window-translucent.
-		windowTranslucent = false;
 		// Drop any pending dock bounce with the window it was attached to: its
 		// focus listener died with the window, so leaving the id set would make
 		// the next bounce skip attaching one to the replacement window.
@@ -2307,11 +2312,7 @@ ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 });
 
 ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
-	if (process.platform !== "darwin" || typeof enabled !== "boolean" || enabled === windowTranslucent) return;
-	if (!mainWindow || mainWindow.isDestroyed()) return;
-	windowTranslucent = enabled;
-	mainWindow.setVibrancy(enabled ? "under-window" : null);
-	syncNativeWindowBackground();
+	if (typeof enabled === "boolean") windowTranslucency.set(enabled);
 });
 
 ipcMain.handle("theme:persist-terminal",(_event, scheme: unknown) => {
@@ -3233,6 +3234,16 @@ app.whenReady().then(async () => {
 	}
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
+		// macOS can leave a long-lived window's vibrancy view stale across sleep,
+		// lock, display changes and GPU process restarts. Rebuild it after each.
+		const rebuildVibrancy = () => windowTranslucency.reapply({ rebuild: true });
+		powerMonitor.on("resume", rebuildVibrancy);
+		powerMonitor.on("unlock-screen", rebuildVibrancy);
+		screen.on("display-added", rebuildVibrancy);
+		screen.on("display-removed", rebuildVibrancy);
+		app.on("child-process-gone", (_event, details) => {
+			if (details.type === "GPU") rebuildVibrancy();
+		});
 	}
 	await createWindow();
 	if (browserQuitRequested) return;
