@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TELEMETRY_OPT_OUT_FILE, TelemetryIdentityController } from "./telemetry-identity";
 
 const ORIGIN = "http://127.0.0.1:4010";
@@ -286,5 +286,48 @@ describe("TelemetryIdentityController acknowledgement", () => {
 		expect(await signOut).toBe(true);
 		expect(sent).toEqual(["", ""]); // the original request, then only the newest state
 		expect(sent).not.toContain("user_A");
+	});
+});
+
+describe("TelemetryIdentityController across app restarts", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("a new controller whose clock is behind the daemon's sequence catches up instead of being refused", async () => {
+		// A daemon that outlived the previous app process and enforces ordering.
+		let daemonUser = "";
+		let lastSeq = 0;
+		const daemon = vi.fn(async (_url: string, init: RequestInit) => {
+			const body = JSON.parse(init.body as string) as { cloudUserId: string; sequence: number };
+			if (body.sequence < lastSeq) {
+				return new Response(JSON.stringify({ code: "STALE_TELEMETRY_IDENTITY", details: { lastSequence: lastSeq } }), { status: 409 });
+			}
+			lastSeq = body.sequence;
+			daemonUser = body.cloudUserId;
+			return new Response(null, { status: 204 });
+		});
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-14T12:00:00Z"));
+		const before = new TelemetryIdentityController(dir, () => ORIGIN, daemon as never);
+		expect(await before.setCloudUser("user_A")).toBe(true);
+		expect(daemonUser).toBe("user_A");
+
+		// Electron restarts after the system clock was corrected backward.
+		vi.setSystemTime(new Date("2026-10-14T11:00:00Z"));
+		const after = new TelemetryIdentityController(dir, () => ORIGIN, daemon as never);
+		expect(await after.setCloudUser("user_B")).toBe(true);
+		expect(daemonUser).toBe("user_B");
+		expect(daemon).toHaveBeenCalledTimes(3); // A, B refused, B accepted
+		await after.flush(); // acknowledged: nothing left to send
+		expect(daemon).toHaveBeenCalledTimes(3);
+	});
+
+	it("gives up quietly when the 409 carries no usable sequence", async () => {
+		const { ctl, fetcher } = await controller(vi.fn(async () => new Response("{}", { status: 409 })));
+		expect(await ctl.setCloudUser("user_A")).toBe(false);
+		expect(fetcher).toHaveBeenCalledTimes(1);
 	});
 });

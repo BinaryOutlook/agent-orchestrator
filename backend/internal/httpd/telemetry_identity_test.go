@@ -157,11 +157,13 @@ func TestTelemetryIdentityRouteRejectsAnOlderSequence(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewRouterWithControl(config.Config{DataDir: dir}, discardLogger(), nil, APIDeps{TelemetryIdentity: ident}, ControlDeps{})
+	var lastBody string
 	post := func(body string) int {
 		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:3001/internal/telemetry/identity", strings.NewReader(body))
 		req.Host = "127.0.0.1:3001"
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
+		lastBody = rec.Body.String()
 		return rec.Code
 	}
 
@@ -170,6 +172,10 @@ func TestTelemetryIdentityRouteRejectsAnOlderSequence(t *testing.T) {
 	}
 	if c := post(`{"cloudUserId":"user_A","sequence":10}`); c != http.StatusConflict {
 		t.Fatalf("late older request = %d, want 409", c)
+	}
+	// The rejection tells a client whose clock regressed where the daemon is.
+	if !strings.Contains(lastBody, `"lastSequence":20`) {
+		t.Fatalf("409 body should carry the daemon's sequence: %s", lastBody)
 	}
 	if got := ident.Snapshot().CloudUserID; got != "user_B" {
 		t.Fatalf("daemon ended on %q, want user_B", got)

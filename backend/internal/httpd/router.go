@@ -417,7 +417,7 @@ func mountTelemetryIdentity(r chi.Router, ident ports.TelemetryIdentityStore) {
 		defer seqMu.Unlock()
 		if body.Sequence > 0 {
 			if body.Sequence < lastSeq {
-				envelope.WriteAPIError(w, req, http.StatusConflict, "conflict", "STALE_TELEMETRY_IDENTITY", "a newer telemetry identity was already applied", nil)
+				envelope.WriteAPIError(w, req, http.StatusConflict, "conflict", "STALE_TELEMETRY_IDENTITY", "a newer telemetry identity was already applied", map[string]any{"lastSequence": lastSeq})
 				return
 			}
 			lastSeq = body.Sequence

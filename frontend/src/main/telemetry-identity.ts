@@ -7,6 +7,17 @@ export const TELEMETRY_OPT_OUT_FILE = "telemetry_opt_out";
 
 type Fetcher = (input: string, init: RequestInit) => Promise<Response>;
 
+/** The newest sequence the daemon applied, from the details of its 409. */
+async function daemonSequence(response: Response): Promise<number | null> {
+	try {
+		const body = (await response.json()) as { details?: { lastSequence?: unknown } };
+		const last = body.details?.lastSequence;
+		return typeof last === "number" && Number.isFinite(last) ? last : null;
+	} catch {
+		return null;
+	}
+}
+
 const CLOUD_USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
@@ -103,11 +114,24 @@ export class TelemetryIdentityController {
 		const sent = this.cloudUserId ?? "";
 		const generation = this.generation;
 		try {
-			const response = await this.request(base, "/internal/telemetry/identity", { method: "POST", body: { cloudUserId: sent, sequence: this.nextSequence() } });
-			// An older daemon without the route answers 404/405; nothing to retry.
-			if (generation !== this.generation) return;
-			this.pushed = response.ok || response.status === 404 || response.status === 405;
-			if (response.ok) this.ackedGeneration = generation;
+			// Two attempts: a 409 on the first means this process's sequence is behind
+			// the daemon's (an earlier app process, or the clock moved backward), so it
+			// jumps past the daemon's value and sends the same, newest, state again.
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const response = await this.request(base, "/internal/telemetry/identity", { method: "POST", body: { cloudUserId: sent, sequence: this.nextSequence() } });
+				// An older daemon without the route answers 404/405; nothing to retry.
+				if (generation !== this.generation) return;
+				if (response.status === 409 && attempt === 0) {
+					const last = await daemonSequence(response);
+					if (last !== null) {
+						this.sequence = Math.max(this.sequence, last);
+						continue;
+					}
+				}
+				this.pushed = response.ok || response.status === 404 || response.status === 405;
+				if (response.ok) this.ackedGeneration = generation;
+				return;
+			}
 		} catch {
 			// Daemon not reachable yet; flush() runs again on the next ready transition.
 		}
