@@ -240,4 +240,28 @@ describe("TelemetryIdentityController acknowledgement", () => {
 		expect(await first).toBe(false);
 		expect(await second).toBe(true);
 	});
+
+	it("pending anonymous request, A sign-in, sign-out before the queue drains: A is never acknowledged", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => (release = resolve));
+		const sent: string[] = [];
+		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+			if (fetcher.mock.calls.length === 1) await gate; // the anonymous request is still in flight
+			sent.push(JSON.parse(init.body as string).cloudUserId);
+			return new Response(null, { status: 204 });
+		});
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
+
+		const anonymous = ctl.setCloudUser(null);
+		const signIn = ctl.setCloudUser("user_A"); // queued behind it
+		const signOut = ctl.setCloudUser(null); // replaces A before the queue drains
+		release();
+
+		expect(await anonymous).toBe(false);
+		expect(await signIn).toBe(false); // the renderer must not identify A
+		expect(await signOut).toBe(true);
+		expect(sent).not.toContain("user_A");
+		expect(sent.at(-1)).toBe("");
+	});
 });
