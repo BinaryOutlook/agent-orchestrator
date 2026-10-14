@@ -198,41 +198,6 @@ describe("PostHog identity and opt-out", () => {
 		posthogStub.reset.mockReset();
 	});
 
-	it("drops a bootstrap install ID that main reports retired while init is still pending", async () => {
-		let release!: () => void;
-		const gate = new Promise<void>((resolve) => (release = resolve));
-		mockPosthog();
-		vi.doMock("./bridge", () => ({
-			aoBridge: {
-				// The bootstrap (an ID linked to account A on an earlier launch) is read first;
-				// the update-settings read is still pending when the sign-out resolves.
-				telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubLogin: vi.fn(async () => null) },
-				updateSettings: { get: vi.fn(async () => { await gate; return {}; }) },
-			},
-		}));
-		const { initTelemetry, clearCloudUser, retireBootstrapId } = await import("./telemetry");
-		const init = initTelemetry();
-		await Promise.resolve();
-		clearCloudUser();
-		retireBootstrapId();
-		expect(posthogStub.reset).not.toHaveBeenCalled(); // no client yet
-		release();
-		await init;
-		expect(posthogStub.init).toHaveBeenCalledTimes(1);
-		expect(posthogStub.reset).toHaveBeenCalledTimes(1); // the stale ID is dropped right after creation
-	});
-
-	it("drops a retired bootstrap ID once, and never touches a never-signed-in install", async () => {
-		mockBridge(async () => bootstrap);
-		const { initTelemetry, clearCloudUser, retireBootstrapId } = await import("./telemetry");
-		await initTelemetry();
-		clearCloudUser(); // signed out, never identified: keeps the install ID
-		expect(posthogStub.reset).not.toHaveBeenCalled();
-		retireBootstrapId();
-		retireBootstrapId();
-		expect(posthogStub.reset).toHaveBeenCalledTimes(1);
-	});
-
 	it("opt-out stops capture and resets the SDK identity; a later sign-in does not identify", async () => {
 		mockBridge(async () => bootstrap);
 		const { initTelemetry, identifyCloudUser, applyAnalyticsOptOut } = await import("./telemetry");

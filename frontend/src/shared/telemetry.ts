@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -74,6 +74,21 @@ export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<s
 	return distinctId;
 }
 
+/**
+ * The ID the renderer's PostHog client starts on. The daemon keeps
+ * `telemetry_bound_user` while the install ID may be linked to an AO Cloud
+ * account (identify() merged it into that person). Whether that account is still
+ * signed in is only known once the session resolves, after init has already
+ * captured its first events, so a linked ID is withheld: the client starts on a
+ * throwaway anonymous ID, and a signed-in user's identify() merges it into the
+ * person anyway.
+ */
+async function bootstrapDistinctId(dataDir: string): Promise<string> {
+	const installId = await loadOrCreateTelemetryInstallId(dataDir);
+	const linked = await access(path.join(dataDir, "telemetry_bound_user")).then(() => true, () => false);
+	return linked ? `anon_${randomUUID()}` : installId;
+}
+
 export async function buildTelemetryBootstrap(
 	env: Record<string, string | undefined>,
 	appVersion: string,
@@ -94,7 +109,7 @@ export async function buildTelemetryBootstrap(
 	// product analytics retain their own packaged/env gate above.
 	const eventsEnabled = policy.eventsEnabled && policy.acknowledged;
 	return {
-		distinctId: await loadOrCreateTelemetryInstallId(dataDir),
+		distinctId: await bootstrapDistinctId(dataDir),
 		appVersion,
 		platform,
 		disabledEvents: parseDisabledEvents(env.AO_TELEMETRY_DISABLED_EVENTS),

@@ -2392,10 +2392,7 @@ ipcMain.handle("telemetry:getBootstrap", () => {
 	if (!telemetryPolicyController) return null;
 	// Opted out: no bootstrap, so the renderer never constructs a PostHog client.
 	if (telemetryIdentity.isOptedOut()) return null;
-	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot()).then((bootstrap) => {
-		telemetryIdentity.noteServedInstallId(bootstrap?.distinctId ?? null);
-		return bootstrap;
-	});
+	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot());
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
 ipcMain.handle("telemetry:setAnalyticsOptOut", (event, optedOut: unknown) => {

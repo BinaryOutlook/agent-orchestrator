@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -90,4 +90,22 @@ test("buildTelemetryBootstrap carries the deny list across the process boundary"
 test("parseDisabledEvents treats absent or blank policy as no policy", () => {
 	expect(parseDisabledEvents(undefined)).toEqual([]);
 	expect(parseDisabledEvents(" , , ")).toEqual([]);
+});
+
+test("buildTelemetryBootstrap withholds an install id linked to an AO Cloud account", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(dir);
+	const env = { AO_DATA_DIR: dir };
+	const installId = await loadOrCreateTelemetryInstallId(dir);
+
+	const unlinked = await buildTelemetryBootstrap(env, "1.2.3", "linux", "/home/test", true, enabledPolicy);
+	expect(unlinked?.distinctId).toBe(installId);
+
+	await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
+	const linked = await buildTelemetryBootstrap(env, "1.2.3", "linux", "/home/test", true, enabledPolicy);
+	const again = await buildTelemetryBootstrap(env, "1.2.3", "linux", "/home/test", true, enabledPolicy);
+	expect(linked?.distinctId).toMatch(/^anon_/);
+	expect(linked?.distinctId).not.toBe(installId);
+	expect(again?.distinctId).not.toBe(linked?.distinctId); // throwaway, never reused across launches
+	expect(await readFile(path.join(dir, "telemetry_install_id"), "utf8")).toContain(installId);
 });

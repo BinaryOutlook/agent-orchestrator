@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
-import { clearCloudUser, identifyCloudUser, retireBootstrapId } from "../lib/telemetry";
+import { clearCloudUser, identifyCloudUser } from "../lib/telemetry";
 
 // Ties the AO Cloud sign-in to the PostHog identity: identifies the user in the
 // renderer (email as a person property, once) and hands the opaque user ID to the
@@ -15,16 +15,9 @@ export function TelemetryIdentityRuntime() {
 		// Until the session resolves, "no user" only means "not known yet"; telling
 		// the daemon would be read as a sign-out and retire the install ID.
 		if (status === "loading") return;
-		const handoff = aoBridge.telemetry.setCloudUser(userId);
-		if (userId) {
-			void identifyCloudUser({ id: userId, email });
-			handoff.catch(() => undefined);
-			return;
-		}
-		clearCloudUser();
-		// Main knows whether the install ID this launch started with was linked to
-		// an account that has since left, including one from an earlier launch.
-		handoff.then((retired) => retired && retireBootstrapId()).catch(() => undefined);
+		void aoBridge.telemetry.setCloudUser(userId).catch(() => undefined);
+		if (userId) void identifyCloudUser({ id: userId, email });
+		else clearCloudUser();
 	}, [userId, email, status]);
 	return null;
 }

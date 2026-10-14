@@ -1,12 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /** Same file the daemon's telemetry Identity reads (adapters/telemetry/identity.go). */
 export const TELEMETRY_OPT_OUT_FILE = "telemetry_opt_out";
-const INSTALL_ID_FILE = "telemetry_install_id";
-/** Written by the daemon while the install ID may be linked to an AO Cloud account. */
-const BOUND_USER_FILE = "telemetry_bound_user";
 
 type Fetcher = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -28,8 +25,6 @@ export class TelemetryIdentityController {
 	// in flight could commit in the opposite order and leave the daemon on the
 	// older user; queued runs always send the latest state when their turn comes.
 	private queue: Promise<void> = Promise.resolve();
-	// The install ID handed to the renderer's PostHog client at startup.
-	private servedInstallId: string | null = null;
 
 	constructor(
 		private readonly dataDir: string,
@@ -54,38 +49,13 @@ export class TelemetryIdentityController {
 		return optedOut;
 	}
 
-	/** Remembers the install ID the renderer's PostHog client was created with. */
-	noteServedInstallId(id: string | null): void {
-		this.servedInstallId = id;
-	}
-
-	/**
-	 * Whether the install ID the renderer holds is linked to an account that is no
-	 * longer signed in: the daemon still flags it bound (rotation pending, e.g. the
-	 * daemon is not ready yet) or has already replaced it on disk.
-	 */
-	private servedInstallIdRetired(): boolean {
-		if (existsSync(path.join(this.dataDir, BOUND_USER_FILE))) return true;
-		try {
-			const current = readFileSync(path.join(this.dataDir, INSTALL_ID_FILE), "utf8").trim();
-			return this.servedInstallId !== null && current !== "" && current !== this.servedInstallId;
-		} catch {
-			return false;
-		}
-	}
-
-	/**
-	 * Records the signed-in user (null on sign-out) and pushes it to the daemon.
-	 * Resolves true when this was a sign-out and the install ID the renderer is
-	 * using belongs to the account that just left, so the renderer must drop it.
-	 */
-	async setCloudUser(userId: string | null): Promise<boolean> {
+	/** Records the signed-in user (null on sign-out) and pushes it to the daemon. */
+	async setCloudUser(userId: string | null): Promise<void> {
 		if (userId !== null && !CLOUD_USER_ID_PATTERN.test(userId)) throw new Error("invalid cloud user id");
 		this.cloudUserId = userId;
 		this.pushed = false;
 		this.generation++;
 		await this.flush();
-		return userId === null && this.servedInstallIdRetired();
 	}
 
 	/**

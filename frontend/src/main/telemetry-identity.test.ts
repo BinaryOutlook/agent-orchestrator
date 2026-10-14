@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -153,32 +153,5 @@ describe("TelemetryIdentityController githubLogin", () => {
 	it("is null when unresolved or the daemon is down", async () => {
 		expect(await (await controller(vi.fn(async () => new Response("{}", { status: 200 })))).ctl.githubLogin()).toBeNull();
 		expect(await (await controller(vi.fn(async () => { throw new Error("down"); }))).ctl.githubLogin()).toBeNull();
-	});
-});
-
-describe("TelemetryIdentityController retired install ID", () => {
-	it("reports a sign-out while the daemon still flags the served ID as bound (rotation pending)", async () => {
-		const { dir, ctl } = await controller(vi.fn(async () => new Response(null, { status: 503 })));
-		await writeFile(path.join(dir, "telemetry_install_id"), "ins_old\n");
-		await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
-		ctl.noteServedInstallId("ins_old");
-		expect(await ctl.setCloudUser(null)).toBe(true);
-	});
-
-	it("reports a sign-out after the daemon already replaced the served ID", async () => {
-		const { dir, ctl } = await controller();
-		await writeFile(path.join(dir, "telemetry_install_id"), "ins_new\n");
-		ctl.noteServedInstallId("ins_old");
-		expect(await ctl.setCloudUser(null)).toBe(true);
-	});
-
-	it("leaves a never-signed-in install and a sign-in alone", async () => {
-		const { dir, ctl } = await controller();
-		await writeFile(path.join(dir, "telemetry_install_id"), "ins_same\n");
-		ctl.noteServedInstallId("ins_same");
-		expect(await ctl.setCloudUser(null)).toBe(false);
-		await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
-		expect(await ctl.setCloudUser("user_A")).toBe(false);
-		await rm(path.join(dir, "telemetry_bound_user"));
 	});
 });
