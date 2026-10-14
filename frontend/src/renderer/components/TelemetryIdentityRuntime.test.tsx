@@ -113,6 +113,45 @@ describe("TelemetryIdentityRuntime", () => {
 		expect(hooks.identifyCloudUser).not.toHaveBeenCalled();
 	});
 
+	it("keeps retrying a sign-out past the schedule, at the capped interval, until the daemon acknowledges", async () => {
+		vi.useFakeTimers();
+		hooks.session = null;
+		const attemptsInSchedule = BINDING_RETRY_MS.length + 1;
+		let calls = 0;
+		hooks.setCloudUser.mockImplementation(async () => ++calls > attemptsInSchedule + 2); // recovers well after the schedule ends
+		render(<TelemetryIdentityRuntime />);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(BINDING_RETRY_MS.reduce((a, b) => a + b, 0));
+		});
+		expect(calls).toBe(attemptsInSchedule); // the whole schedule is spent and still not acknowledged
+		const cap = BINDING_RETRY_MS[BINDING_RETRY_MS.length - 1];
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(cap);
+		});
+		expect(calls).toBe(attemptsInSchedule + 1);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(cap);
+		});
+		expect(calls).toBe(attemptsInSchedule + 2); // the daemon answers here
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(cap * 5);
+		});
+		expect(calls).toBe(attemptsInSchedule + 3); // acknowledged on the next attempt, then it stops
+		expect(hooks.identifyCloudUser).not.toHaveBeenCalled();
+	});
+
+	it("still gives up on a sign-in after the schedule", async () => {
+		vi.useFakeTimers();
+		hooks.session = account("workos");
+		hooks.setCloudUser.mockImplementation(async () => false);
+		render(<TelemetryIdentityRuntime />);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(BINDING_RETRY_MS.reduce((a, b) => a + b, 0) * 3);
+		});
+		expect(hooks.setCloudUser).toHaveBeenCalledTimes(BINDING_RETRY_MS.length + 1);
+		expect(hooks.identifyCloudUser).not.toHaveBeenCalled();
+	});
+
 	it("never identifies the dev-only local provider", async () => {
 		hooks.session = account("local");
 		render(<TelemetryIdentityRuntime />);
