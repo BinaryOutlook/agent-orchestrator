@@ -91,27 +91,34 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 	it("never lets an older user's request land after a newer one: the daemon ends on the latest", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => (release = resolve));
+		let started!: () => void;
+		const firstStarted = new Promise<void>((resolve) => (started = resolve));
 		// A fake daemon that records the order identities were committed in.
 		const committed: string[] = [];
 		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
-			if (fetcher.mock.calls.length === 1) await gate; // user_1's request hangs in flight
-			committed.push(JSON.parse(init.body as string).cloudUserId);
+			const user = JSON.parse(init.body as string).cloudUserId as string;
+			if (fetcher.mock.calls.length === 1) {
+				started();
+				await gate; // user_1's request hangs in flight
+			}
+			committed.push(user);
 			return new Response(null, { status: 204 });
 		});
 		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
 
 		const first = ctl.setCloudUser("user_1");
+		await firstStarted; // user_1's request is genuinely in flight before user_2 arrives
 		const second = ctl.setCloudUser("user_2");
 		await Promise.resolve();
 		expect(fetcher).toHaveBeenCalledTimes(1); // user_2 waits its turn
 		release();
 		await Promise.all([first, second]);
 
-		expect(committed.at(-1)).toBe("user_2");
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(committed).toEqual(["user_1", "user_2"]);
 		await ctl.flush(); // already synced to user_2: nothing more to send
-		expect(committed.at(-1)).toBe("user_2");
-		expect(fetcher.mock.calls.length).toBeLessThanOrEqual(2);
+		expect(fetcher).toHaveBeenCalledTimes(2);
 	});
 
 	it("a request delayed past the timeout cannot overwrite a newer identity on the daemon", async () => {
@@ -161,21 +168,31 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 	it("a queued hand-off sends the newest state, so a stale one is never replayed", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => (release = resolve));
-		const committed: (string)[] = [];
+		let started!: () => void;
+		const firstStarted = new Promise<void>((resolve) => (started = resolve));
+		const committed: string[] = [];
 		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
-			if (fetcher.mock.calls.length === 1) await gate;
-			committed.push(JSON.parse(init.body as string).cloudUserId);
+			const user = JSON.parse(init.body as string).cloudUserId as string;
+			if (fetcher.mock.calls.length === 1) {
+				started();
+				await gate;
+			}
+			committed.push(user);
 			return new Response(null, { status: 204 });
 		});
 		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
 
 		const a = ctl.setCloudUser("user_A");
+		await firstStarted; // A is in flight; B and the sign-out queue behind it
 		const b = ctl.setCloudUser("user_B");
 		const out = ctl.setCloudUser(null);
 		release();
 		await Promise.all([a, b, out]);
-		expect(committed.at(-1)).toBe("");
+
+		// A went out first; B was superseded before its turn, so only the newest
+		// state (signed out) follows.
+		expect(committed).toEqual(["user_A", ""]);
 	});
 
 	it("refuses a non-loopback origin", async () => {
@@ -244,9 +261,14 @@ describe("TelemetryIdentityController acknowledgement", () => {
 	it("pending anonymous request, A sign-in, sign-out before the queue drains: A is never acknowledged", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => (release = resolve));
+		let started!: () => void;
+		const firstStarted = new Promise<void>((resolve) => (started = resolve));
 		const sent: string[] = [];
 		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
-			if (fetcher.mock.calls.length === 1) await gate; // the anonymous request is still in flight
+			if (fetcher.mock.calls.length === 1) {
+				started();
+				await gate; // the anonymous request is still in flight
+			}
 			sent.push(JSON.parse(init.body as string).cloudUserId);
 			return new Response(null, { status: 204 });
 		});
@@ -254,6 +276,7 @@ describe("TelemetryIdentityController acknowledgement", () => {
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
 
 		const anonymous = ctl.setCloudUser(null);
+		await firstStarted;
 		const signIn = ctl.setCloudUser("user_A"); // queued behind it
 		const signOut = ctl.setCloudUser(null); // replaces A before the queue drains
 		release();
@@ -261,7 +284,7 @@ describe("TelemetryIdentityController acknowledgement", () => {
 		expect(await anonymous).toBe(false);
 		expect(await signIn).toBe(false); // the renderer must not identify A
 		expect(await signOut).toBe(true);
+		expect(sent).toEqual(["", ""]); // the original request, then only the newest state
 		expect(sent).not.toContain("user_A");
-		expect(sent.at(-1)).toBe("");
 	});
 });
