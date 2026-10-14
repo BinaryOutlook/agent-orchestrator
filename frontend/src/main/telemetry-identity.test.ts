@@ -251,11 +251,32 @@ describe("TelemetryIdentityController acknowledgement", () => {
 	});
 
 	it("a superseded call is not acknowledged even if the daemon accepted its state", async () => {
-		const { ctl } = await controller();
+		let releaseResponse!: () => void;
+		const held = new Promise<void>((resolve) => (releaseResponse = resolve));
+		let applied!: () => void;
+		const aApplied = new Promise<void>((resolve) => (applied = resolve));
+		let daemonUser = "";
+		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+			daemonUser = JSON.parse(init.body as string).cloudUserId; // the daemon applies the state...
+			if (fetcher.mock.calls.length === 1) {
+				applied();
+				await held; // ...but A's response is still on its way back
+			}
+			return new Response(null, { status: 204 });
+		});
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
+
 		const first = ctl.setCloudUser("user_A");
-		const second = ctl.setCloudUser("user_B");
-		expect(await first).toBe(false);
+		await aApplied;
+		expect(daemonUser).toBe("user_A");
+		const second = ctl.setCloudUser("user_B"); // supersedes A while A's response is held
+		releaseResponse();
+
+		expect(await first).toBe(false); // A's late 204 must not count: the state moved on
 		expect(await second).toBe(true);
+		expect(daemonUser).toBe("user_B");
+		expect(fetcher).toHaveBeenCalledTimes(2);
 	});
 
 	it("pending anonymous request, A sign-in, sign-out before the queue drains: A is never acknowledged", async () => {
