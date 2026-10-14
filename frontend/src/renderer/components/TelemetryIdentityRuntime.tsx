@@ -3,9 +3,10 @@ import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
 import { clearCloudUser, identifyCloudUser } from "../lib/telemetry";
 
-// Waits between attempts to get the daemon to record the signed-in user. The
-// daemon is usually still starting when the session resolves; after the last
-// attempt this launch stays anonymous rather than identify without a record.
+// Waits between attempts to get the daemon to acknowledge the current user (or
+// the sign-out). The daemon is usually still starting when the session resolves;
+// after the last attempt a signed-in launch stays anonymous rather than identify
+// without a record.
 export const BINDING_RETRY_MS = [1_000, 3_000, 10_000, 30_000, 60_000, 180_000];
 
 // Ties the AO Cloud sign-in to the PostHog identity: hands the opaque user ID to
@@ -23,20 +24,19 @@ export function TelemetryIdentityRuntime() {
 		// Until the session resolves, "no user" only means "not known yet"; telling
 		// the daemon would be read as a sign-out and retire the install ID.
 		if (status === "loading") return;
-		if (!userId) {
-			void Promise.resolve(aoBridge.telemetry.setCloudUser(null)).catch(() => undefined);
-			clearCloudUser();
-			return;
-		}
+		if (!userId) clearCloudUser();
 		let cancelled = false;
 		void (async () => {
+			// The same acknowledged, cancellable retry serves sign-in and sign-out: a
+			// lost sign-out request would otherwise leave the live daemon exporting
+			// under the account that just left.
 			for (const delay of [0, ...BINDING_RETRY_MS]) {
 				if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 				if (cancelled) return;
 				const acknowledged = await Promise.resolve(aoBridge.telemetry.setCloudUser(userId)).catch(() => false);
 				if (cancelled) return;
 				if (acknowledged) {
-					await identifyCloudUser({ id: userId, email });
+					if (userId) await identifyCloudUser({ id: userId, email });
 					return;
 				}
 			}

@@ -86,6 +86,33 @@ describe("TelemetryIdentityRuntime", () => {
 		expect(hooks.setCloudUser).toHaveBeenLastCalledWith(null);
 	});
 
+	it("retries a sign-out whose request was lost until the daemon acknowledges it", async () => {
+		vi.useFakeTimers();
+		hooks.session = null;
+		// Transport failures with no daemon status change in between.
+		hooks.setCloudUser.mockRejectedValueOnce(new Error("aborted")).mockResolvedValueOnce(false).mockResolvedValue(true);
+		render(<TelemetryIdentityRuntime />);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(0);
+		});
+		expect(hooks.setCloudUser).toHaveBeenCalledTimes(1);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(BINDING_RETRY_MS[0]);
+		});
+		expect(hooks.setCloudUser).toHaveBeenCalledTimes(2);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(BINDING_RETRY_MS[1]);
+		});
+		expect(hooks.setCloudUser).toHaveBeenCalledTimes(3);
+		expect(hooks.setCloudUser.mock.calls.every(([id]) => id === null)).toBe(true);
+		// Acknowledged: no further attempts.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(BINDING_RETRY_MS.reduce((a, b) => a + b, 0));
+		});
+		expect(hooks.setCloudUser).toHaveBeenCalledTimes(3);
+		expect(hooks.identifyCloudUser).not.toHaveBeenCalled();
+	});
+
 	it("never identifies the dev-only local provider", async () => {
 		hooks.session = account("local");
 		render(<TelemetryIdentityRuntime />);
