@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
-import { isEditorId, type EditorHandoffState, type OpenArtifactsTargetId, type OpenTargetId } from "../../shared/editor-handoff";
+import { isEditorId, type EditorHandoffState, type OpenSessionArtifactsInput, type OpenTargetId } from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";
 import { captureRendererEvent } from "../lib/telemetry";
 
@@ -139,12 +139,12 @@ export function useOpenSessionTarget() {
 	});
 }
 
-/** Opens a session's artifact directory in the file manager or a terminal. */
+/** Opens a session's artifact directory, or reveals one artifact, in the file manager or a terminal. */
 export function useOpenSessionArtifacts() {
 	return useMutation({
-		mutationFn: async ({ sessionId, targetId }: { sessionId: string; targetId: OpenArtifactsTargetId }) => {
+		mutationFn: async (input: OpenSessionArtifactsInput) => {
 			try {
-				return await aoBridge.editorHandoff.openArtifacts({ sessionId, targetId });
+				return await aoBridge.editorHandoff.openArtifacts(input);
 			} catch (error) {
 				throw new Error(editorHandoffErrorMessage(error) ?? String(error));
 			}

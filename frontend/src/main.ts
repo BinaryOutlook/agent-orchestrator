@@ -1199,6 +1199,10 @@ const editorHandoff = createEditorHandoff({
 		const error = await shell.openPath(workspacePath);
 		if (error) throw new Error(error);
 	},
+	revealPath: async (filePath) => {
+		if (!(await stat(filePath).catch(() => undefined))) throw new Error(`${filePath} does not exist`);
+		shell.showItemInFolder(filePath);
+	},
 	copyText: (text) => clipboard.writeText(text),
 	logError: (message, error) => console.error(message, error),
 });

@@ -82,6 +82,8 @@ export type EditorHandoffDeps = {
 	writePreference: (editorId: EditorId) => Promise<void>;
 	launch: (command: string, args: readonly string[], cwd: string) => Promise<void>;
 	openDirectory: (workspacePath: string) => Promise<void>;
+	/** Shows one file selected in the system file manager. */
+	revealPath: (filePath: string) => Promise<void>;
 	/** Puts text on the system clipboard. The workspace path never reaches the renderer. */
 	copyText?: (text: string) => void;
 	isExecutable?: (candidatePath: string) => boolean;
@@ -115,6 +117,19 @@ function defaultIsDirectory(candidatePath: string): boolean {
 
 function pathAPI(platform: Platform) {
 	return platform === "win32" ? path.win32 : path.posix;
+}
+
+// An artifact's absolute path, which must stay inside the artifact directory.
+function artifactFilePath(api: typeof path.posix, artifactDir: string, relativePath: string): string {
+	if (typeof relativePath !== "string" || !relativePath.trim() || api.isAbsolute(relativePath)) {
+		throw new Error("That artifact is not valid.");
+	}
+	const filePath = api.resolve(artifactDir, relativePath);
+	const relative = api.relative(artifactDir, filePath);
+	if (!relative || relative === ".." || relative.startsWith(`..${api.sep}`) || api.isAbsolute(relative)) {
+		throw new Error("That artifact is not valid.");
+	}
+	return filePath;
 }
 
 function executableNames(command: string, platform: Platform, env: NodeJS.ProcessEnv): string[] {
@@ -340,10 +355,10 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		return { editors, terminal, targets };
 	};
 
-	const openTarget = async (target: OpenTarget, resolved: ResolvedCommand | undefined, directory: string) => {
+	const openTarget = async (target: OpenTarget, resolved: ResolvedCommand | undefined, directory: string, revealPath?: string) => {
 		try {
 			if (target.kind === "file_manager") {
-				await deps.openDirectory(directory);
+				await (revealPath ? deps.revealPath(revealPath) : deps.openDirectory(directory));
 			} else {
 				if (!resolved) throw new Error("target command was not resolved");
 				await deps.launch(resolved.command, resolved.argsForWorkspace(directory), directory);
@@ -412,7 +427,8 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			const target = input.targetId === "file-manager" ? fileManager : terminal?.target;
 			if (!target) throw new Error("That open target is not available.");
 			const artifactDir = await deps.resolveArtifactDir(sessionId);
-			await openTarget(target, terminal?.command, artifactDir);
+			const filePath = input.path === undefined ? undefined : artifactFilePath(pathAPI(deps.platform), artifactDir, input.path);
+			await openTarget(target, terminal?.command, filePath ? pathAPI(deps.platform).dirname(filePath) : artifactDir, filePath);
 			return target;
 		},
 

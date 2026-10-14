@@ -55,6 +55,8 @@ export type OpenArtifactsTargetId = Extract<OpenTargetId, "file-manager" | "term
 export type OpenSessionArtifactsInput = {
 	sessionId: string;
 	targetId: OpenArtifactsTargetId;
+	/** One artifact, relative to the artifact directory: the file manager reveals it and a terminal opens in its folder. */
+	path?: string;
 };
 
 const editorIDSet = new Set<string>(EDITOR_IDS);

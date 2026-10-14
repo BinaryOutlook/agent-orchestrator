@@ -14,6 +14,7 @@ function deps(overrides: Partial<EditorHandoffDeps> = {}): EditorHandoffDeps {
 		writePreference: vi.fn().mockResolvedValue(undefined),
 		launch: vi.fn().mockResolvedValue(undefined),
 		openDirectory: vi.fn().mockResolvedValue(undefined),
+		revealPath: vi.fn().mockResolvedValue(undefined),
 		isExecutable: (candidatePath) => candidatePath === "/bin/code",
 		isDirectory: (candidatePath) => candidatePath === "/Applications/Cursor.app",
 		...overrides,
@@ -164,6 +165,25 @@ describe("editor handoff", () => {
 		expect(input.launch).toHaveBeenCalledWith("/usr/bin/open", ["-a", "Terminal", "/ao/data/artifacts/ao-1"], "/ao/data/artifacts/ao-1");
 		expect(input.resolveWorkspace).not.toHaveBeenCalled();
 		expect(input.writePreference).not.toHaveBeenCalled();
+	});
+
+	it("reveals one artifact in Finder and opens Terminal in its folder", async () => {
+		const input = deps();
+		const handoff = createEditorHandoff(input);
+		await handoff.openArtifacts({ sessionId: "ao-1", targetId: "file-manager", path: "plans/notes.md" });
+		await handoff.openArtifacts({ sessionId: "ao-1", targetId: "terminal", path: "plans/notes.md" });
+		expect(input.revealPath).toHaveBeenCalledWith("/ao/data/artifacts/ao-1/plans/notes.md");
+		expect(input.openDirectory).not.toHaveBeenCalled();
+		expect(input.launch).toHaveBeenCalledWith("/usr/bin/open", ["-a", "Terminal", "/ao/data/artifacts/ao-1/plans"], "/ao/data/artifacts/ao-1/plans");
+	});
+
+	it.each(["../ao-2/secret.md", "/etc/passwd", "plans/../../x.md", ""])("refuses an artifact path outside the artifact directory: %j", async (artifactPath) => {
+		const input = deps();
+		const handoff = createEditorHandoff(input);
+		await expect(handoff.openArtifacts({ sessionId: "ao-1", targetId: "file-manager", path: artifactPath })).rejects.toThrow(
+			"That artifact is not valid.",
+		);
+		expect(input.revealPath).not.toHaveBeenCalled();
 	});
 
 	it("refuses to open artifacts in an editor", async () => {

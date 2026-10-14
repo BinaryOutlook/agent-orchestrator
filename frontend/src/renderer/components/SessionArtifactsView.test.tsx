@@ -11,9 +11,15 @@ import { TooltipProvider } from "./ui/tooltip";
 const { openPreviewMock } = vi.hoisted(() => ({ openPreviewMock: vi.fn() }));
 
 vi.mock("../hooks/useOpenArtifactPreview", () => ({ useOpenArtifactPreview: () => openPreviewMock }));
+vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
+	sessionArtifactFileQueryOptions: (sessionId: string, path: string) => ({
+		queryKey: ["artifact-file", sessionId, path],
+		queryFn: async () => ({ content: `contents of ${path}` }),
+	}),
+}));
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ artifactName, feedbackRequestKey, path }: { artifactName: string; feedbackRequestKey?: number; path: string }) => (
-		<div data-feedback-key={feedbackRequestKey ?? ""} data-testid="artifact-view">{`${artifactName}:${path}`}</div>
+	ArtifactFileView: ({ feedbackRequestKey, path }: { feedbackRequestKey?: number; path: string }) => (
+		<div data-feedback-key={feedbackRequestKey ?? ""} data-testid="artifact-view">{`viewer:${path}`}</div>
 	),
 }));
 
@@ -100,18 +106,60 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView session={session()} />);
 
 		await userEvent.click(screen.getByRole("button", { name: /plan\.md/ }));
-		expect(screen.getByTestId("artifact-view")).toHaveTextContent("plan.md:reports/plan.md");
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:reports/plan.md");
 
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
 		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
 	});
 
+	it("names the open artifact once, as a menu that reveals it in the file manager and the terminal", async () => {
+		const openArtifacts = vi.spyOn(aoBridge.editorHandoff, "openArtifacts");
+		renderView(<SessionArtifactsView request={{ key: 1, path: "reports/plan.md" }} session={session()} />);
+
+		expect(screen.getByRole("button", { name: "Back to artifacts" })).toBeInTheDocument();
+		expect(screen.getAllByText("plan.md")).toHaveLength(1);
+		await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
+		const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+		expect(items).toEqual([expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown"]);
+		await userEvent.click(screen.getAllByRole("menuitem")[0]);
+		await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
+		await userEvent.click(screen.getAllByRole("menuitem")[1]);
+
+		expect(openArtifacts).toHaveBeenNthCalledWith(1, { sessionId: "sess-1", targetId: "file-manager", path: "reports/plan.md" });
+		expect(openArtifacts).toHaveBeenNthCalledWith(2, { sessionId: "sess-1", targetId: "terminal", path: "reports/plan.md" });
+		openArtifacts.mockRestore();
+	});
+
+	it("copies a markdown artifact as Markdown", async () => {
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Copy as Markdown" }));
+
+		await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("contents of notes.md"));
+		writeText.mockRestore();
+	});
+
+	it("copies the contents of any other artifact, and offers only that on a remote host", async () => {
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const other: SessionArtifact = { kind: "file", name: "data.json", path: "data.json", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
+		renderView(<SessionArtifactsView hostId="remote-1" request={{ key: 1, path: "data.json" }} session={session([other])} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "data.json" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy contents"]);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Copy contents" }));
+
+		await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("contents of data.json"));
+		writeText.mockRestore();
+	});
+
 	it("opens a requested artifact and passes its feedback request through", () => {
 		renderView(<SessionArtifactsView request={{ feedback: true, key: 7, path: "notes.md" }} session={session()} />);
 
 		const viewer = screen.getByTestId("artifact-view");
-		expect(viewer).toHaveTextContent("notes.md:notes.md");
+		expect(viewer).toHaveTextContent("viewer:notes.md");
 		expect(viewer).toHaveAttribute("data-feedback-key", "7");
 	});
 });

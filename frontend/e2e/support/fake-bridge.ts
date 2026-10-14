@@ -148,6 +148,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						workspaceAvailable: true,
 					}),
 					open: async () => ({ id: "cursor" as const, name: "Cursor", kind: "editor" as const }),
+					openArtifacts: async () => ({ id: "file-manager" as const, name: "File Manager", kind: "file_manager" as const }),
 				},
 				telemetry: {
 					getBootstrap: async () => null,
@@ -764,6 +765,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						workspaceAvailable: true,
 					}),
 					open: async () => ({ id: "cursor" as const, name: "Cursor", kind: "editor" as const }),
+					openArtifacts: async () => ({ id: "file-manager" as const, name: "File Manager", kind: "file_manager" as const }),
 				},
 				telemetry: {
 					getBootstrap: async () => null,

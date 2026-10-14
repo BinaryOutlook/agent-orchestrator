@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, FileText, FolderOpen, Globe, SquareTerminal } from "lucide-react";
+import { ChevronDown, ChevronLeft, Copy, FileText, FolderOpen, Globe, SquareTerminal } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
+import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { formatTimeTerse } from "../lib/format-time";
 import { sessionUiKey } from "../lib/hosts";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { Button } from "./ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { PanelMessage } from "./WorkspaceDiffView";
 
@@ -67,9 +71,74 @@ function OpenArtifactsFolderButtons({ sessionId }: { sessionId: string }) {
 }
 
 /**
+ * The open artifact's name, as a menu: show it in the file manager or a
+ * terminal (local sessions only), or copy its contents.
+ */
+function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact; hostId?: string; session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const open = useOpenSessionArtifacts();
+	const [copyError, setCopyError] = useState("");
+	// The artifact directory is on this machine only for a local session.
+	const local = !hostId && !session.cloud;
+	const markdown = /\.(md|markdown)$/i.test(artifact.path);
+	const reveal = (targetId: OpenArtifactsTargetId) => {
+		setCopyError("");
+		open.mutate({ sessionId: session.id, targetId, path: artifact.path });
+	};
+	const copy = async () => {
+		open.reset();
+		setCopyError("");
+		try {
+			const detail = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl, t("files.error.loadArtifact")));
+			await aoBridge.clipboard.writeText(detail.content);
+		} catch (error) {
+			setCopyError(error instanceof Error ? error.message : String(error));
+		}
+	};
+	const error = open.error?.message || copyError;
+	return (
+		<>
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<Button className="min-w-0 gap-1 px-1.5 font-normal" size="sm" title={artifact.path} type="button" variant="ghost">
+						<span className="truncate">{artifact.name}</span>
+						<ChevronDown aria-hidden="true" className="size-icon-xs shrink-0 text-muted-foreground" />
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="start" className="min-w-44" data-browser-native-overlay="true">
+					{local ? (
+						<>
+							<DropdownMenuItem onSelect={() => reveal("file-manager")}>
+								<FolderOpen aria-hidden="true" />
+								{t("artifacts.showIn", { name: fileManagerName() })}
+							</DropdownMenuItem>
+							<DropdownMenuItem onSelect={() => reveal("terminal")}>
+								<SquareTerminal aria-hidden="true" />
+								{t("artifacts.showIn", { name: terminalName() })}
+							</DropdownMenuItem>
+							<DropdownMenuSeparator />
+						</>
+					) : null}
+					<DropdownMenuItem onSelect={() => void copy()}>
+						<Copy aria-hidden="true" />
+						{t(markdown ? "artifacts.copyMarkdown" : "artifacts.copyContents")}
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+			{error ? (
+				<span className="min-w-0 truncate text-caption text-destructive" role="alert" title={error}>
+					{error}
+				</span>
+			) : null}
+		</>
+	);
+}
+
+/**
  * The inspector's Artifacts view (its own inspector tab): every file in
  * the session's artifact directory. HTML artifacts open in the Browser panel;
- * markdown and other files open in a read-only viewer beside the list.
+ * markdown and other files open in a viewer in place of the list.
  */
 export function SessionArtifactsView({
 	hostId,
@@ -85,6 +154,7 @@ export function SessionArtifactsView({
 	const { t } = useTranslation();
 	const artifacts = useMemo(() => sortedArtifacts(session.artifactFiles ?? []), [session.artifactFiles]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
+	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
 	const openArtifactPreview = useOpenArtifactPreview(session.id, hostId);
 	const uiKey = sessionUiKey(session.id, hostId);
 
@@ -97,7 +167,8 @@ export function SessionArtifactsView({
 	if (selected) {
 		return (
 			<div className="flex h-full min-h-0 flex-col" role="tabpanel">
-				<div className="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-surface px-1">
+				{/* One header row: back, the file's menu, and the viewer's mode and action buttons. */}
+				<div className="flex min-h-9 shrink-0 items-center gap-1 border-b border-border bg-background px-1">
 					<Button
 						aria-label={t("artifacts.back")}
 						onClick={() => setSelectedPath(null)}
@@ -107,7 +178,8 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={selected.path}>{selected.name}</span>
+					<ArtifactMenu artifact={selected} hostId={hostId} session={session} />
+					<div className="ml-auto flex shrink-0 items-center" ref={setToolbarHost} />
 				</div>
 				<div className="min-h-0 flex-1">
 					<ArtifactFileView
@@ -118,6 +190,7 @@ export function SessionArtifactsView({
 						path={selected.path}
 						rawUrl={selected.rawUrl}
 						sessionId={session.id}
+						toolbarHost={toolbarHost}
 					/>
 				</div>
 			</div>
