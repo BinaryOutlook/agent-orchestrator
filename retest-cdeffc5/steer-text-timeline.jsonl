@@ -1,0 +1,6 @@
+{"t":"2026-10-14T04:09:14.025Z","event":"first_turn_busy","turns":[{"id":"d91c2b86","state":"running"}],"controller":"busy","assistant":["# How TCP Congestion Control Works\n\nTCP congestion control s"]}
+{"t":"2026-10-14T04:09:17.637Z","event":"queued"}
+{"t":"2026-10-14T04:09:17.881Z","event":"steered"}
+{"t":"2026-10-14T04:09:36.130Z","event":"steered_turn_settled","turns":[{"id":"d91c2b86","state":"completed"}],"controller":"ready","assistant":["# How TCP Congestion Control Works\n\nTCP congestion control s","4\n\nContinuing the explanation:\n\n## Fast retransmit\n\nWaiting "]}
+{"t":"2026-10-14T04:09:38.758Z","event":"next_prompt_sent"}
+{"t":"2026-10-14T04:09:42.802Z","event":"next_prompt_done","turns":[{"id":"d91c2b86","state":"completed"},{"id":"ca560c1f","state":"completed"}],"controller":"ready","assistant":["# How TCP Congestion Control Works\n\nTCP congestion control s","4\n\nContinuing the explanation:\n\n## Fast retransmit\n\nWaiting ","pong"]}

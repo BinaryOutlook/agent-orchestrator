@@ -1,0 +1,189 @@
+{
+ "conversationId": "954b7001-8b0c-4454-983e-44ea818766a0",
+ "activeBranchId": "954b7001-8b0c-4454-983e-44ea818766a0:root",
+ "branchedFromEarlierMessage": false,
+ "sessionId": "standalone-3",
+ "harness": "claude-code",
+ "mode": "chat",
+ "controller": "ready",
+ "latestSequence": 7,
+ "oldestSequence": 1,
+ "hasMoreBefore": false,
+ "nativeForkAvailableAfterSequence": 1,
+ "turns": [
+  {
+   "id": "44447d0e-cc78-4e11-a112-93e7ea693816",
+   "state": "completed",
+   "providerTurnId": "9cb72604-77f7-4d09-bc26-e7de38e769a5",
+   "requestedAt": "2026-10-14T04:06:32Z",
+   "startedAt": "2026-10-14T04:06:32Z",
+   "completedAt": "2026-10-14T04:07:16Z"
+  },
+  {
+   "id": "7a7c3276-234a-47d7-90f2-88d4171ff822",
+   "state": "completed",
+   "providerTurnId": "35606084-4e4a-42fa-86b9-eed0ac19e64e",
+   "requestedAt": "2026-10-14T04:07:19Z",
+   "startedAt": "2026-10-14T04:07:19Z",
+   "completedAt": "2026-10-14T04:07:21Z"
+  }
+ ],
+ "messages": [
+  {
+   "kind": "message",
+   "id": "d908329f-6beb-4a09-8b57-99910e448a28",
+   "turnId": "44447d0e-cc78-4e11-a112-93e7ea693816",
+   "sequence": 1,
+   "revision": 0,
+   "role": "user",
+   "origin": "human",
+   "text": "Run this Bash command in the foreground (do not run it in the background): `for i in $(seq 1 45); do sleep 1; done; echo long-done`. Then reply \"long done\". If you receive any other user message while you work, answer it briefly in one line.",
+   "editAvailable": true,
+   "streaming": false,
+   "createdAt": "2026-10-14T04:06:32Z"
+  },
+  {
+   "kind": "message",
+   "id": "5f700bfa-4af4-4568-859b-6b5909db631d",
+   "turnId": "44447d0e-cc78-4e11-a112-93e7ea693816",
+   "sequence": 5,
+   "revision": 6,
+   "role": "assistant",
+   "origin": "provider",
+   "text": "4\n\nThe 45-second command is still running in the background; I'll reply \"long done\" once it finishes.",
+   "editAvailable": false,
+   "streaming": false,
+   "createdAt": "2026-10-14T04:07:14Z"
+  },
+  {
+   "kind": "message",
+   "id": "a9d9130e-a43e-4987-a253-a58595da4962",
+   "turnId": "7a7c3276-234a-47d7-90f2-88d4171ff822",
+   "sequence": 6,
+   "revision": 0,
+   "role": "user",
+   "origin": "human",
+   "text": "reply with the single word pong",
+   "editAvailable": true,
+   "streaming": false,
+   "createdAt": "2026-10-14T04:07:19Z"
+  },
+  {
+   "kind": "message",
+   "id": "42487649-8423-4f37-99ce-a5b8d1985e8c",
+   "turnId": "7a7c3276-234a-47d7-90f2-88d4171ff822",
+   "sequence": 7,
+   "revision": 1,
+   "role": "assistant",
+   "origin": "provider",
+   "text": "pong",
+   "editAvailable": false,
+   "streaming": false,
+   "createdAt": "2026-10-14T04:07:20Z"
+  }
+ ],
+ "activities": [
+  {
+   "kind": "activity",
+   "id": "71b2d483-d7f2-4253-b974-66e1bce0c95c",
+   "turnId": "44447d0e-cc78-4e11-a112-93e7ea693816",
+   "sequence": 2,
+   "revision": 8,
+   "activityKind": "command",
+   "status": "completed",
+   "summary": "for i in $(seq 1 45); do sleep 1; done; echo long-done",
+   "detail": {
+    "command": "for i in $(seq 1 45); do sleep 1; done; echo long-done",
+    "content": [
+     {
+      "terminalId": "toolu_01Kt9Qq4MdDYAm7cxetKp9bC",
+      "type": "terminal"
+     }
+    ],
+    "exitCode": 0,
+    "input": {
+     "command": "for i in $(seq 1 45); do sleep 1; done; echo long-done",
+     "description": "Wait 45 seconds then print message",
+     "run_in_background": false
+    },
+    "locations": null,
+    "output": "Command was moved to the background (ID: bx75o9vct) so that a message that arrived while it was running can reach you; it was not interrupted. Output is being written to: /private/tmp/claude-501/-Users-dhruvsharma--ao-dev-pr6270-retest-data-worktrees-standalone-sessions-standalone-3/c4c55c72-470f-4fb2-b05a-edc6792f4733/tasks/bx75o9vct.output. You will be notified when it completes. If it is still running after 30m in the background, it will be stopped and you will be notified. To check interim output, use Read on that file path.",
+    "outputMayBePartial": true,
+    "outputSource": "stream",
+    "protocol": "acp",
+    "providerTitle": "Wait 45 seconds then print message",
+    "providerToolName": "Bash",
+    "rawCommand": "for i in $(seq 1 45); do sleep 1; done; echo long-done",
+    "signal": null,
+    "terminalId": "toolu_01Kt9Qq4MdDYAm7cxetKp9bC",
+    "toolKind": "execute"
+   },
+   "providerItemId": "acp:41:954b7001-8b0c-4454-983e-44ea818766a0:root30:toolu_01Kt9Qq4MdDYAm7cxetKp9bC",
+   "createdAt": "2026-10-14T04:06:34Z"
+  },
+  {
+   "kind": "activity",
+   "id": "2d0be99f-3a06-4182-a473-344a7a2ff5ea",
+   "turnId": "44447d0e-cc78-4e11-a112-93e7ea693816",
+   "sequence": 4,
+   "revision": 0,
+   "activityKind": "system",
+   "status": "completed",
+   "summary": "quick question: what is 2+2? answer with just the number",
+   "detail": {
+    "clientMessageId": "75a34923-3c64-458e-b777-9717b3237082",
+    "event": "steer",
+    "origin": "human",
+    "sourceTurnId": "3632bcc1-db42-4fb8-bbb4-76471906b993",
+    "text": "quick question: what is 2+2? answer with just the number"
+   },
+   "providerItemId": "steer:75a34923-3c64-458e-b777-9717b3237082",
+   "createdAt": "2026-10-14T04:07:13Z"
+  }
+ ],
+ "branchMaterialization": {
+  "strategy": "native",
+  "replayTruncated": false
+ },
+ "settings": {
+  "model": "claude-sonnet-5-5",
+  "approvalMode": "auto"
+ },
+ "title": "Foreground sleep loop command",
+ "usage": {
+  "contextUsed": 73341,
+  "contextWindow": 1000000,
+  "inputTokens": 2,
+  "outputTokens": 4,
+  "cachedTokens": 73339,
+  "totalTokens": 73345,
+  "cost": 0.2687228,
+  "currency": "USD"
+ },
+ "account": {
+  "authenticationState": "authenticated",
+  "authVerifiedAt": "2026-10-14T04:07:21Z"
+ },
+ "capabilities": [
+  "approvals",
+  "compaction",
+  "config_options",
+  "diffs",
+  "elicitation",
+  "embedded_context",
+  "history",
+  "images",
+  "interrupt",
+  "nested_agents",
+  "plans",
+  "prompt_replay",
+  "resource_links",
+  "resume",
+  "skills",
+  "steer",
+  "streaming",
+  "terminal_output",
+  "tools",
+  "usage"
+ ]
+}

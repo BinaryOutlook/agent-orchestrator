@@ -1,0 +1,164 @@
+{
+ "conversationId": "7ef0a0b3-b253-4c06-9148-0b3b5a13522e",
+ "activeBranchId": "7ef0a0b3-b253-4c06-9148-0b3b5a13522e:root",
+ "branchedFromEarlierMessage": false,
+ "sessionId": "standalone-4",
+ "harness": "claude-code",
+ "mode": "chat",
+ "controller": "ready",
+ "latestSequence": 7,
+ "oldestSequence": 1,
+ "hasMoreBefore": false,
+ "nativeForkAvailableAfterSequence": 1,
+ "turns": [
+  {
+   "id": "d91c2b86-51f3-45da-b27b-15b2473f45ca",
+   "state": "completed",
+   "providerTurnId": "3f2fc31f-3d80-406e-be5f-3a693a1479ba",
+   "requestedAt": "2026-10-14T04:09:01Z",
+   "startedAt": "2026-10-14T04:09:01Z",
+   "completedAt": "2026-10-14T04:09:35Z"
+  },
+  {
+   "id": "ca560c1f-9382-476e-9ec8-ffa0208dfa92",
+   "state": "completed",
+   "providerTurnId": "3cc8e18b-eb9c-4128-bee4-c6b1e51c5145",
+   "requestedAt": "2026-10-14T04:09:38Z",
+   "startedAt": "2026-10-14T04:09:38Z",
+   "completedAt": "2026-10-14T04:09:42Z"
+  }
+ ],
+ "messages": [
+  {
+   "kind": "message",
+   "id": "36dd4ac8-bad8-43a4-a60d-f2eaee79f881",
+   "turnId": "d91c2b86-51f3-45da-b27b-15b2473f45ca",
+   "sequence": 1,
+   "revision": 0,
+   "role": "user",
+   "origin": "human",
+   "text": "Write a detailed explanation of how TCP congestion control works, about 1200 words, covering slow start, congestion avoidance, fast retransmit, fast recovery, CUBIC and BBR. Do not use any tools. If you receive any other user message, answer it briefly in one line, then continue the explanation.",
+   "editAvailable": true,
+   "streaming": false,
+   "createdAt": "2026-10-14T04:09:01Z"
+  },
+  {
+   "kind": "message",
+   "id": "57e78811-cfc5-4494-b007-074813a60288",
+   "turnId": "d91c2b86-51f3-45da-b27b-15b2473f45ca",
+   "sequence": 2,
+   "revision": 127,
+   "role": "assistant",
+   "origin": "provider",
+   "text": "# How TCP Congestion Control Works\n\nTCP congestion control stops a sender from pushing more data into the network than it can carry. The sender keeps a **congestion window (cwnd)**, the number of unacknowledged bytes it may have in flight. It sends at most min(cwnd, receiver window). Throughput is roughly cwnd / RTT, so every algorithm below is a rule for growing and shrinking cwnd. The sender can't see the network, so it infers congestion from signals: loss (classic TCP), delay or delivery rate (BBR), or ECN marks.\n\n## Slow start\n\nA new connection doesn't know the path's capacity, so it probes. cwnd starts at the **initial window**, 10 segments on modern stacks (RFC 6928), and grows by one MSS for every ACK received. Each ACK releases new data and also grows the window, so cwnd roughly doubles every RTT:\n\n```\nRTT 0: cwnd = 10\nRTT 1: cwnd = 20\nRTT 2: cwnd = 40\n```\n\nThe name refers to the starting point, not the growth rate, which is exponential. Slow start ends in one of two ways:\n\n- cwnd reaches **ssthresh**, the slow-start threshold, and the sender switches to congestion avoidance.\n- A loss occurs, which means the sender overshot.\n\n## Congestion avoidance\n\nOnce cwnd passes ssthresh, doubling per RTT is too aggressive. The sender switches to **additive increase**: about one MSS per RTT, implemented as cwnd += MSS × MSS / cwnd per ACK. On a loss signal it applies **multiplicative decrease**, cutting cwnd, classically by half.\n\nThis is **AIMD** (additive increase, multiplicative decrease). It produces the familiar sawtooth: climb slowly, hit capacity, drop sharply, climb again.",
+   "editAvailable": false,
+   "streaming": false,
+   "createdAt": "2026-10-14T04:09:13Z"
+  },
+  {
+   "kind": "message",
+   "id": "eb524411-6100-4c2c-a810-b70c15ab8eeb",
+   "turnId": "d91c2b86-51f3-45da-b27b-15b2473f45ca",
+   "sequence": 5,
+   "revision": 331,
+   "role": "assistant",
+   "origin": "provider",
+   "text": "4\n\nContinuing the explanation:\n\n## Fast retransmit\n\nWaiting for the retransmission timeout (RTO) to detect loss is slow, often hundreds of milliseconds or more. TCP has a faster signal. When a segment is lost, later segments still arrive, and the receiver answers each one with a **duplicate ACK** for the last in-order byte. After **three duplicate ACKs**, the sender retransmits the missing segment immediately, without waiting for the timer. Three is the threshold because one or two duplicates can come from simple packet reordering.\n\nAn RTO is treated as a more severe signal. It means no ACKs are coming back at all. In that case ssthresh is set to half the flight size, cwnd drops to 1 MSS, and the sender goes back into slow start.\n\n## Fast recovery\n\nDuplicate ACKs also tell the sender that later segments are still arriving, so the network is not completely stalled. Dropping to cwnd = 1 MSS would be too harsh. **Fast recovery** (Reno) keeps the pipe partly full:\n\n1. On the third duplicate ACK, set ssthresh = max(flight/2, 2 MSS), retransmit the lost segment, and set cwnd = ssthresh + 3 MSS.\n2. For each further duplicate ACK, inflate cwnd by 1 MSS, because each one means another segment has left the network. This lets the sender transmit new data while it waits.\n3. When an ACK for new data arrives, deflate cwnd to ssthresh and enter congestion avoidance.\n\n**NewReno** handles *partial ACKs*, which acknowledge some but not all of the lost segments. It stays in recovery and retransmits the next hole, instead of leaving recovery after the first loss. **SACK** goes further by telling the sender exactly which ranges arrived, so it can repair several losses in one RTT.\n\n## CUBIC\n\nReno's one-MSS-per-RTT growth is too slow on high bandwidth-delay-product paths. On a 10 Gbps link with 100 ms RTT, recovering from one halving takes thousands of RTTs. Reno also favors short-RTT flows, because they gain window faster.\n\n**CUBIC** (the Linux default since 2.6.19, RFC 9438) makes the window a cubic function of the *time since the last loss*, not of the ACK count:\n\n```\nW(t) = C·(t − K)³ + W_max\nK    = ∛(W_max·(1 − β) / C)       β = 0.7, C = 0.4\n```\n\nAfter a loss, cwnd drops to β·W_max (a 30% cut, not 50%). The curve then has three phases:\n\n- **Concave:** fast growth that flattens as it approaches the old W_max.\n- **Plateau:** near W_max, where it spends the most time, because that was the last known capacity.\n- **Convex:** accelerating growth that probes for more bandwidth.\n\nBecause growth depends on elapsed time and not on RTT, flows with different RTTs compete more fairly. CUBIC also includes a \"TCP-friendly\" region, so it is never slower than Reno would be. It is still loss-based: it fills buffers until something drops, which produces **bufferbloat**, meaning high queueing delay on deep-buffered links.\n\n## BBR\n\n**BBR** (Bottleneck Bandwidth and Round-trip propagation time, from Google) stops using loss as the congestion signal. It builds a model of the path and runs at the model's operating point. It tracks two estimates:\n\n- **BtlBw:** the maximum delivery rate seen over roughly the last 10 RTTs.\n- **RTprop:** the minimum RTT seen over roughly the last 10 seconds.\n\nThe ideal amount in flight is BDP = BtlBw × RTprop, which fills the pipe with no standing queue. BBR **paces** packets at gain × BtlBw and caps cwnd at about 2 × BDP. It cycles through four states:\n\n| State | Behavior |\n|---|---|\n| Startup | Gain ≈ 2.89 (2/ln 2) to find BtlBw exponentially, like slow start |\n| Drain | Gain below 1 to empty the queue Startup created |\n| ProbeBW | Steady state: gain cycles 1.25, 0.75, then 1.0 for six phases, to detect more bandwidth and drain any queue it built |\n| ProbeRTT | About every 10 s, cwnd drops to 4 packets for ≈200 ms to re-measure the true RTprop |\n\nBBR sustains high throughput on lossy paths, such as long-haul or wireless links, where loss-based algorithms collapse, and it keeps queues short. BBRv1's weaknesses are that it can be unfair to CUBIC flows, causes heavy retransmissions when buffers are shallow, and ignores loss almost completely. BBRv2 and v3 address this by also reacting to loss rates and ECN marks and by probing more gently.",
+   "editAvailable": false,
+   "streaming": false,
+   "createdAt": "2026-10-14T04:09:22Z"
+  },
+  {
+   "kind": "message",
+   "id": "eae0c61d-b760-4bfa-b2d4-b42c76f2d2be",
+   "turnId": "ca560c1f-9382-476e-9ec8-ffa0208dfa92",
+   "sequence": 6,
+   "revision": 0,
+   "role": "user",
+   "origin": "human",
+   "text": "reply with the single word pong",
+   "editAvailable": true,
+   "streaming": false,
+   "createdAt": "2026-10-14T04:09:38Z"
+  },
+  {
+   "kind": "message",
+   "id": "8b552b56-11c6-447e-8ec3-00c7cb64a717",
+   "turnId": "ca560c1f-9382-476e-9ec8-ffa0208dfa92",
+   "sequence": 7,
+   "revision": 2,
+   "role": "assistant",
+   "origin": "provider",
+   "text": "pong",
+   "editAvailable": false,
+   "streaming": false,
+   "createdAt": "2026-10-14T04:09:42Z"
+  }
+ ],
+ "activities": [
+  {
+   "kind": "activity",
+   "id": "8ff93f1e-3949-4303-b507-d0d2cbe1aa88",
+   "turnId": "d91c2b86-51f3-45da-b27b-15b2473f45ca",
+   "sequence": 4,
+   "revision": 0,
+   "activityKind": "system",
+   "status": "completed",
+   "summary": "quick question: what is 2+2? answer with just the number",
+   "detail": {
+    "clientMessageId": "d791ea7d-3b12-4483-99db-dbe16cb6d4d9",
+    "event": "steer",
+    "origin": "human",
+    "sourceTurnId": "13f3a714-cff8-432f-9e17-48ed77fd855c",
+    "text": "quick question: what is 2+2? answer with just the number"
+   },
+   "providerItemId": "steer:d791ea7d-3b12-4483-99db-dbe16cb6d4d9",
+   "createdAt": "2026-10-14T04:09:17Z"
+  }
+ ],
+ "branchMaterialization": {
+  "strategy": "native",
+  "replayTruncated": false
+ },
+ "settings": {
+  "model": "claude-sonnet-5-5",
+  "approvalMode": "auto"
+ },
+ "title": "TCP congestion control explanation",
+ "usage": {
+  "contextUsed": 76456,
+  "contextWindow": 1000000,
+  "inputTokens": 2,
+  "outputTokens": 311,
+  "cachedTokens": 76453,
+  "totalTokens": 76766,
+  "cost": 0.058393200000000006,
+  "currency": "USD"
+ },
+ "account": {
+  "authenticationState": "authenticated",
+  "authVerifiedAt": "2026-10-14T04:09:42Z"
+ },
+ "capabilities": [
+  "approvals",
+  "compaction",
+  "config_options",
+  "diffs",
+  "elicitation",
+  "embedded_context",
+  "history",
+  "images",
+  "interrupt",
+  "nested_agents",
+  "plans",
+  "prompt_replay",
+  "resource_links",
+  "resume",
+  "skills",
+  "steer",
+  "streaming",
+  "terminal_output",
+  "tools",
+  "usage"
+ ]
+}
