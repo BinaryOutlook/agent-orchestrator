@@ -79,14 +79,19 @@ export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<s
  * `telemetry_bound_user` while the install ID may be linked to an AO Cloud
  * account (identify() merged it into that person). Whether that account is still
  * signed in is only known once the session resolves, after init has already
- * captured its first events, so a linked ID is withheld: the client starts on a
+ * captured its first events, so a linked (or uninspectable) ID is withheld: the client starts on a
  * throwaway anonymous ID, and a signed-in user's identify() merges it into the
  * person anyway.
  */
 async function bootstrapDistinctId(dataDir: string): Promise<string> {
 	const installId = await loadOrCreateTelemetryInstallId(dataDir);
-	const linked = await access(path.join(dataDir, "telemetry_bound_user")).then(() => true, () => false);
-	return linked ? `anon_${randomUUID()}` : installId;
+	// Only a confirmed missing marker proves the ID is unlinked; any other failure
+	// (EACCES, EIO, ELOOP) means it could not be inspected, so fail closed.
+	const unlinked = await access(path.join(dataDir, "telemetry_bound_user")).then(
+		() => false,
+		(error: NodeJS.ErrnoException) => error.code === "ENOENT",
+	);
+	return unlinked ? installId : `anon_${randomUUID()}`;
 }
 
 export async function buildTelemetryBootstrap(

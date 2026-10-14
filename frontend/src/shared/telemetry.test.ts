@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -108,4 +108,16 @@ test("buildTelemetryBootstrap withholds an install id linked to an AO Cloud acco
 	expect(linked?.distinctId).not.toBe(installId);
 	expect(again?.distinctId).not.toBe(linked?.distinctId); // throwaway, never reused across launches
 	expect(await readFile(path.join(dir, "telemetry_install_id"), "utf8")).toContain(installId);
+});
+
+test("buildTelemetryBootstrap withholds the install id when the bound-user marker cannot be inspected", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(dir);
+	const installId = await loadOrCreateTelemetryInstallId(dir);
+	// A self-referencing symlink fails with ELOOP, not ENOENT.
+	await symlink("telemetry_bound_user", path.join(dir, "telemetry_bound_user"));
+
+	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.2.3", "linux", "/home/test", true, enabledPolicy);
+	expect(bootstrap?.distinctId).toMatch(/^anon_/);
+	expect(bootstrap?.distinctId).not.toBe(installId);
 });
