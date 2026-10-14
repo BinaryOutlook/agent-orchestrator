@@ -1,12 +1,15 @@
 package telemetry
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -36,10 +39,16 @@ type Identity struct {
 	optOutPath string
 	fresh      bool
 
+	// File operations are fields so tests can fail them.
+	writeFile  func(path string, data []byte) error
+	removeFile func(path string) error
+
 	mu          sync.RWMutex
 	installID   string
 	cloudUserID string
-	githubLogin string
+	// persistFailed is set while the last SetCloudUserID could not persist.
+	persistFailed bool
+	githubLogin   string
 }
 
 // NewIdentity loads (or creates) the install ID under dataDir.
@@ -48,7 +57,7 @@ func NewIdentity(dataDir string) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Identity{dataDir: dataDir, installID: id, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}, nil
+	return &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}, nil
 }
 
 // FreshInstall reports whether this process is the first run of a brand new
@@ -88,39 +97,67 @@ func (i *Identity) InstallID() string {
 // splits it again, so a sign-out or a different account retires it for a fresh
 // anonymous one. Without that, signed-out or next-account daemon events would
 // keep resolving to the first account.
-func (i *Identity) SetCloudUserID(id string) bool {
+//
+// The binding must be durable before any event is exported under it, so a failed
+// write leaves the previous binding in place, returns the error, and suppresses
+// remote export until a later call completes cleanly.
+func (i *Identity) SetCloudUserID(id string) error {
 	id = strings.TrimSpace(id)
 	if id != "" && !cloudUserIDPattern.MatchString(id) {
-		return false
+		return ports.ErrInvalidCloudUserID
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.cloudUserID = id
-	bound := i.readBoundUser()
-	// ponytail: persistence is best effort; a failed write only means the old
-	// install ID is kept, which is what happened before rotation existed.
-	switch {
-	case id == "" && bound != "", id != "" && bound != "" && bound != id:
-		if next, err := replaceInstallID(i.dataDir); err == nil {
-			i.installID = next
-		}
-		if id == "" {
-			_ = os.Remove(filepath.Join(i.dataDir, boundUserFile))
-		} else {
-			_ = os.WriteFile(filepath.Join(i.dataDir, boundUserFile), []byte(id+"\n"), 0o600)
-		}
-	case id != "" && bound == "":
-		_ = os.WriteFile(filepath.Join(i.dataDir, boundUserFile), []byte(id+"\n"), 0o600)
-	}
-	return true
+	err := i.bindLocked(id)
+	i.persistFailed = err != nil
+	return err
 }
 
-func (i *Identity) readBoundUser() string {
-	b, err := os.ReadFile(filepath.Join(i.dataDir, boundUserFile))
+func (i *Identity) bindLocked(id string) error {
+	boundPath := filepath.Join(i.dataDir, boundUserFile)
+	bound, err := readTrimmed(boundPath)
 	if err != nil {
-		return ""
+		return fmt.Errorf("read telemetry bound user: %w", err)
 	}
-	return strings.TrimSpace(string(b))
+	if bound != "" && bound != id {
+		next := "ins_" + uuid.NewString()
+		if err := i.writeFile(filepath.Join(i.dataDir, installIDFile), []byte(next+"\n")); err != nil {
+			return fmt.Errorf("retire telemetry install id: %w", err)
+		}
+		i.installID = next
+	}
+	switch {
+	case id == "" && bound != "":
+		if err := i.removeFile(boundPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("clear telemetry bound user: %w", err)
+		}
+	case id != "" && bound != id:
+		if err := i.writeFile(boundPath, []byte(id+"\n")); err != nil {
+			return fmt.Errorf("record telemetry bound user: %w", err)
+		}
+	}
+	return nil
+}
+
+func readTrimmed(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	return strings.TrimSpace(string(b)), err
+}
+
+// ExportSuppressed reports whether remote export must stop: the user opted out,
+// or the identity state could not be persisted and an event could be attributed
+// to an account the install ID is no longer allowed to represent.
+func (i *Identity) ExportSuppressed() bool {
+	if i.OptedOut() {
+		return true
+	}
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.persistFailed
 }
 
 // SetGitHubLogin implements ports.TelemetryIdentityStore. A login that does not

@@ -6,25 +6,26 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// OptOutSink drops events while the user has telemetry switched off. It sits in
+// OptOutSink drops events while remote export is suppressed. It sits in
 // front of the aggregator so opted-out activity never enters a rollup bucket
 // that a later opt-in would flush to the remote.
 type OptOutSink struct {
-	next     ports.EventSink
-	optedOut func() bool
+	next       ports.EventSink
+	suppressed func() bool
 }
 
-// NewOptOutSink wraps next. A nil check returns next unchanged.
-func NewOptOutSink(next ports.EventSink, optedOut func() bool) ports.EventSink {
-	if next == nil || optedOut == nil {
+// NewOptOutSink wraps next, dropping events while suppressed reports true (opted
+// out, or an identity that could not be persisted).
+func NewOptOutSink(next ports.EventSink, suppressed func() bool) ports.EventSink {
+	if next == nil || suppressed == nil {
 		return next
 	}
-	return &OptOutSink{next: next, optedOut: optedOut}
+	return &OptOutSink{next: next, suppressed: suppressed}
 }
 
 // Emit forwards the event unless telemetry is currently opted out.
 func (s *OptOutSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
-	if s.optedOut() {
+	if s.suppressed() {
 		return
 	}
 	s.next.Emit(ctx, ev)

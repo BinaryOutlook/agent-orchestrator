@@ -50,8 +50,8 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	}
 
 	sink.Identity().SetGitHubLogin("octocat")
-	if !sink.Identity().SetCloudUserID("user_01HABC") {
-		t.Fatal("valid WorkOS id rejected")
+	if err := sink.Identity().SetCloudUserID("user_01HABC"); err != nil {
+		t.Fatalf("valid WorkOS id rejected: %v", err)
 	}
 	first := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
 	if first["github_actor"] != "octocat" || first["ao_cloud_user_id"] != "user_01HABC" {
@@ -82,7 +82,7 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	}
 
 	// Sign-out drops the user but the person set is re-evaluated, not stale.
-	sink.Identity().SetCloudUserID("")
+	_ = sink.Identity().SetCloudUserID("")
 	out := sink.properties(ports.TelemetryEvent{Name: "ao.http.5xx", Source: "httpd"})
 	if _, ok := out["ao_cloud_user_id"]; ok {
 		t.Fatal("ao_cloud_user_id survived sign-out")
@@ -94,7 +94,7 @@ func TestIdentityRejectsMalformedValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ident.SetCloudUserID("user@example.com") || ident.SetCloudUserID(strings.Repeat("a", 65)) {
+	if ident.SetCloudUserID("user@example.com") == nil || ident.SetCloudUserID(strings.Repeat("a", 65)) == nil {
 		t.Fatal("email-shaped or oversized cloud user id accepted")
 	}
 	ident.SetGitHubLogin("not a login!")
@@ -108,7 +108,7 @@ func TestOptOutStopsExportAndHidesIdentity(t *testing.T) {
 	var hits atomic.Int32
 	sink := newTestSink(t, dir, nil, &hits)
 	sink.Identity().SetGitHubLogin("octocat")
-	sink.Identity().SetCloudUserID("user_01HABC")
+	_ = sink.Identity().SetCloudUserID("user_01HABC")
 
 	if err := os.WriteFile(filepath.Join(dir, OptOutFile), []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -211,12 +211,12 @@ func TestAccountSwitchNeverReusesTheFirstAccountsInstallID(t *testing.T) {
 	}
 
 	emit() // anonymous: the install ID
-	ident.SetCloudUserID("user_A")
+	_ = ident.SetCloudUserID("user_A")
 	emit() // signed in: the account, not the install ID that identify() merges into A
-	ident.SetCloudUserID("")
+	_ = ident.SetCloudUserID("")
 	install1 := ident.InstallID()
 	emit() // signed out: must not resolve to A
-	ident.SetCloudUserID("user_B")
+	_ = ident.SetCloudUserID("user_B")
 	emit()
 
 	got := drainDistinct(t, requests, 4)
@@ -239,7 +239,7 @@ func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := first.InstallID()
-	first.SetCloudUserID("user_A")
+	_ = first.SetCloudUserID("user_A")
 	if first.InstallID() != original {
 		t.Fatal("first sign-in must keep the install ID so identify() aliases it")
 	}
@@ -250,11 +250,11 @@ func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second.SetCloudUserID("user_A")
+	_ = second.SetCloudUserID("user_A")
 	if second.InstallID() != original {
 		t.Fatal("same account replayed after restart must not rotate")
 	}
-	second.SetCloudUserID("")
+	_ = second.SetCloudUserID("")
 	rotated := second.InstallID()
 	if rotated == original {
 		t.Fatal("sign-out did not retire the bound install ID")
@@ -264,12 +264,12 @@ func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	third.SetCloudUserID("")
+	_ = third.SetCloudUserID("")
 	if third.InstallID() != rotated {
 		t.Fatal("repeated signed-out push must not keep rotating")
 	}
-	third.SetCloudUserID("user_B")
-	third.SetCloudUserID("user_C") // account switch without a signed-out step
+	_ = third.SetCloudUserID("user_B")
+	_ = third.SetCloudUserID("user_C") // account switch without a signed-out step
 	if third.InstallID() == rotated {
 		t.Fatal("direct account switch did not retire the install ID")
 	}
@@ -310,5 +310,107 @@ func TestSendRechecksOptOutBeforeRetry(t *testing.T) {
 	sink.send(context.Background(), activeEvent())
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want 1 (retry after opt-out must not be sent)", attempts)
+	}
+}
+
+func TestRotationFailureKeepsTheBindingAndSuppressesExport(t *testing.T) {
+	dir := t.TempDir()
+	ident, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := ident.InstallID()
+	if err := ident.SetCloudUserID("user_A"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sign-out while the install ID cannot be replaced.
+	realWrite := ident.writeFile
+	ident.writeFile = func(path string, data []byte) error {
+		if filepath.Base(path) == installIDFile {
+			return os.ErrPermission
+		}
+		return realWrite(path, data)
+	}
+	if err := ident.SetCloudUserID(""); err == nil {
+		t.Fatal("sign-out reported success although the install ID was not retired")
+	}
+	if ident.InstallID() != original {
+		t.Fatal("install ID changed despite the failed write")
+	}
+	if got, _ := readTrimmed(filepath.Join(dir, boundUserFile)); got != "user_A" {
+		t.Fatalf("binding = %q, want user_A kept so the retirement can be retried", got)
+	}
+	if !ident.ExportSuppressed() {
+		t.Fatal("export must stay suppressed while the retired ID is still in use")
+	}
+
+	// The retry succeeds once the filesystem recovers.
+	ident.writeFile = realWrite
+	if err := ident.SetCloudUserID(""); err != nil {
+		t.Fatal(err)
+	}
+	if ident.InstallID() == original || ident.ExportSuppressed() {
+		t.Fatalf("retry did not retire the ID or lift suppression (id=%s suppressed=%v)", ident.InstallID(), ident.ExportSuppressed())
+	}
+	if _, err := os.Stat(filepath.Join(dir, boundUserFile)); !os.IsNotExist(err) {
+		t.Fatalf("binding survived a completed sign-out: %v", err)
+	}
+}
+
+func TestBindingWriteAndClearFailuresFailClosed(t *testing.T) {
+	ident, err := NewIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	realWrite, realRemove := ident.writeFile, ident.removeFile
+
+	// First sign-in: the binding cannot be recorded, so nothing may export as A.
+	ident.writeFile = func(string, []byte) error { return os.ErrPermission }
+	if err := ident.SetCloudUserID("user_A"); err == nil || !ident.ExportSuppressed() {
+		t.Fatalf("unrecorded binding must fail closed (err=%v suppressed=%v)", err, ident.ExportSuppressed())
+	}
+	ident.writeFile = realWrite
+	if err := ident.SetCloudUserID("user_A"); err != nil || ident.ExportSuppressed() {
+		t.Fatalf("retry should record the binding (err=%v suppressed=%v)", err, ident.ExportSuppressed())
+	}
+
+	// Sign-out where the ID is replaced but the binding cannot be cleared.
+	ident.removeFile = func(string) error { return os.ErrPermission }
+	if err := ident.SetCloudUserID(""); err == nil || !ident.ExportSuppressed() {
+		t.Fatalf("uncleared binding must fail closed (err=%v suppressed=%v)", err, ident.ExportSuppressed())
+	}
+	ident.removeFile = realRemove
+	if err := ident.SetCloudUserID(""); err != nil || ident.ExportSuppressed() {
+		t.Fatalf("retry should clear the binding (err=%v suppressed=%v)", err, ident.ExportSuppressed())
+	}
+}
+
+func TestWriteFileAtomicLeavesOldFileWhenRenameFails(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	// A non-empty directory in the way makes the final rename fail.
+	if err := os.MkdirAll(filepath.Join(target, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(target, []byte("new\n")); err == nil {
+		t.Fatal("rename over a directory should fail")
+	}
+	if _, err := os.Stat(target + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temp file left behind: %v", err)
+	}
+}
+
+func TestSinkExportsNothingWhileIdentityIsUnpersisted(t *testing.T) {
+	var hits atomic.Int32
+	sink := newTestSink(t, t.TempDir(), nil, &hits)
+	defer func() { _ = sink.Close(context.Background()) }()
+	sink.Identity().writeFile = func(string, []byte) error { return os.ErrPermission }
+	_ = sink.Identity().SetCloudUserID("user_A")
+
+	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
+	sink.send(context.Background(), activeEvent())
+	if hits.Load() != 0 {
+		t.Fatalf("exported %d request(s) with an unpersisted identity", hits.Load())
 	}
 }

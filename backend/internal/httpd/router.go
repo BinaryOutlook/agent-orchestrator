@@ -401,8 +401,12 @@ func mountTelemetryIdentity(r chi.Router, ident ports.TelemetryIdentityStore) {
 			envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_JSON", "request body must be valid JSON", nil)
 			return
 		}
-		if !ident.SetCloudUserID(body.CloudUserID) {
-			envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_CLOUD_USER_ID", "cloudUserId is not a valid user id", nil)
+		if err := ident.SetCloudUserID(body.CloudUserID); err != nil {
+			if errors.Is(err, ports.ErrInvalidCloudUserID) {
+				envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_CLOUD_USER_ID", "cloudUserId is not a valid user id", nil)
+				return
+			}
+			envelope.WriteAPIError(w, req, http.StatusInternalServerError, "internal_error", "TELEMETRY_IDENTITY_NOT_PERSISTED", "telemetry identity could not be saved", nil)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

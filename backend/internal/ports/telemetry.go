@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -55,10 +56,15 @@ type TelemetryIdentity struct {
 }
 
 // TelemetryIdentityStore holds the live telemetry identity for the daemon.
+// ErrInvalidCloudUserID is returned for an id that is not a plausible user id.
+var ErrInvalidCloudUserID = errors.New("invalid cloud user id")
+
 type TelemetryIdentityStore interface {
 	Snapshot() TelemetryIdentity
-	// SetCloudUserID records the signed-in AO Cloud user ("" on sign-out).
-	// It reports false when the id is not a plausible WorkOS user id.
-	SetCloudUserID(id string) bool
+	// SetCloudUserID records the signed-in AO Cloud user ("" on sign-out). It
+	// returns ErrInvalidCloudUserID when the id is not a plausible WorkOS user id,
+	// and another error when the identity state could not be made durable, in
+	// which case remote export stays suppressed until a later call succeeds.
+	SetCloudUserID(id string) error
 	SetGitHubLogin(login string)
 }

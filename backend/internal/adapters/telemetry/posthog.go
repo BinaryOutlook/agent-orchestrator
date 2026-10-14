@@ -290,12 +290,13 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 // Identity returns the live identity (install ID, signed-in user, opt-out).
 func (s *PostHogSink) Identity() *Identity { return s.ident }
 
-func (s *PostHogSink) optedOut() bool { return s.ident != nil && s.ident.OptedOut() }
+// suppressed reports an opt-out or an unpersistable identity: nothing is exported.
+func (s *PostHogSink) suppressed() bool { return s.ident != nil && s.ident.ExportSuppressed() }
 
 // Emit enqueues an event for best-effort export. An opted-out install exports
 // nothing, so the stream stops the moment the user flips the switch.
 func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
-	if s.optedOut() {
+	if s.suppressed() {
 		return
 	}
 	s.queueMu.RLock()
@@ -346,7 +347,7 @@ func (s *PostHogSink) loop() {
 	defer s.wg.Done()
 	for ev := range s.ch {
 		// Re-check: the user may have opted out while this event was queued.
-		if s.optedOut() {
+		if s.suppressed() {
 			continue
 		}
 		s.send(s.ctx, ev)
@@ -399,7 +400,7 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	for attempt := 1; attempt <= postHogSendMaxAttempts; attempt++ {
 		// The payload is already built, so a retry after a failed first attempt
 		// must honor an opt-out that landed during the request or the backoff.
-		if s.optedOut() {
+		if s.suppressed() {
 			return
 		}
 		retryable, err := s.sendOnce(ctx, payload)
@@ -702,20 +703,18 @@ func loadOrCreateInstallID(dataDir string) (string, error) {
 	return id, nil
 }
 
-// replaceInstallID mints a new anonymous install ID and swaps it in atomically,
-// so a concurrent reader (the desktop bootstrap) never sees a partial file.
-func replaceInstallID(dataDir string) (string, error) {
-	id := "ins_" + uuid.NewString()
-	path := filepath.Join(dataDir, installIDFile)
+// writeFileAtomic swaps data in through a temp file in the same directory, so a
+// concurrent reader never sees a partial file and a failure leaves the old one.
+func writeFileAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o600); err != nil {
-		return "", fmt.Errorf("write telemetry install id: %w", err)
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return "", fmt.Errorf("replace telemetry install id: %w", err)
+		return err
 	}
-	return id, nil
+	return nil
 }
 
 func sha256String(raw string) string {
