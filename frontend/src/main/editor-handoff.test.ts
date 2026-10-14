@@ -9,6 +9,7 @@ function deps(overrides: Partial<EditorHandoffDeps> = {}): EditorHandoffDeps {
 		env: { PATH: "/bin" },
 		homeDir: "/Users/tester",
 		resolveWorkspace: vi.fn().mockResolvedValue("/worktrees/ao-1"),
+		resolveArtifactDir: vi.fn().mockResolvedValue("/ao/data/artifacts/ao-1"),
 		readPreference: vi.fn().mockResolvedValue("cursor"),
 		writePreference: vi.fn().mockResolvedValue(undefined),
 		launch: vi.fn().mockResolvedValue(undefined),
@@ -152,6 +153,26 @@ describe("editor handoff", () => {
 		await handoff.open({ sessionId: "ao-1", targetId: "file-manager" });
 		expect(input.openDirectory).toHaveBeenCalledWith("/worktrees/ao-1");
 		expect(input.writePreference).not.toHaveBeenCalled();
+	});
+
+	it("opens the artifact directory in Finder and Terminal without the workspace", async () => {
+		const input = deps();
+		const handoff = createEditorHandoff(input);
+		await expect(handoff.openArtifacts({ sessionId: "ao-1", targetId: "file-manager" })).resolves.toMatchObject({ kind: "file_manager" });
+		await expect(handoff.openArtifacts({ sessionId: "ao-1", targetId: "terminal" })).resolves.toMatchObject({ kind: "terminal" });
+		expect(input.openDirectory).toHaveBeenCalledWith("/ao/data/artifacts/ao-1");
+		expect(input.launch).toHaveBeenCalledWith("/usr/bin/open", ["-a", "Terminal", "/ao/data/artifacts/ao-1"], "/ao/data/artifacts/ao-1");
+		expect(input.resolveWorkspace).not.toHaveBeenCalled();
+		expect(input.writePreference).not.toHaveBeenCalled();
+	});
+
+	it("refuses to open artifacts in an editor", async () => {
+		const input = deps();
+		const handoff = createEditorHandoff(input);
+		await expect(handoff.openArtifacts({ sessionId: "ao-1", targetId: "vscode" as never })).rejects.toThrow(
+			"That open target is not supported.",
+		);
+		expect(input.resolveArtifactDir).not.toHaveBeenCalled();
 	});
 
 	it("does not silently replace a missing preferred editor", async () => {

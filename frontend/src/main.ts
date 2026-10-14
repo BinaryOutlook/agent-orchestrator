@@ -68,7 +68,7 @@ import {
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1174,11 +1174,22 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 	}
 }
 
+// Session artifacts live in <data dir>/artifacts/<session id> (see the
+// daemon's sessionartifacts.Dir). The id must be one plain path segment.
+async function resolveSessionArtifactDirForDesktop(sessionId: string): Promise<string> {
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sessionId)) throw new Error("Session is not valid.");
+	const artifactDir = path.join(desktopDataDir, "artifacts", sessionId);
+	const info = await stat(artifactDir).catch(() => undefined);
+	if (!info?.isDirectory()) throw new Error("This session has no artifacts folder yet.");
+	return artifactDir;
+}
+
 const editorHandoff = createEditorHandoff({
 	platform: process.platform,
 	env: process.env,
 	homeDir: os.homedir(),
 	resolveWorkspace: resolveSessionWorkspaceForDesktop,
+	resolveArtifactDir: resolveSessionArtifactDirForDesktop,
 	readPreference: async () => (await readEditorSettings(editorStateDir())).preferredEditorId,
 	writePreference: async (editorId) => {
 		await writeEditorPreference(editorStateDir(), editorId);
@@ -2266,6 +2277,10 @@ ipcMain.handle("editorHandoff:getState", (event, sessionId: string) => {
 ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.open(input && typeof input === "object" ? input : { sessionId: "" });
+});
+ipcMain.handle("editorHandoff:openArtifacts", (event, input) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.openArtifacts(input && typeof input === "object" ? input : { sessionId: "", targetId: "file-manager" });
 });
 ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");

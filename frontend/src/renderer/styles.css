@@ -4082,10 +4082,10 @@ html.sidebar-reordering * {
  * (gap width + x-transform). Dragging updates --ao-inspector-w directly. */
 
 .session-inspector__topbar {
-	/* Width the tab list can need (four tabs, their gaps and the leading pad).
+	/* Width the tab list needs (its tabs, their gaps and the leading pad).
 	   The centered field never grows past what is left once both side tracks
 	   hold that much, so it cannot overlap the last tab. */
-	--inspector-tabs-reserve: calc(4 * var(--size-control-md) + 3 * var(--space-1) + var(--space-1));
+	--inspector-tabs-reserve: calc(var(--inspector-tab-count, 4) * (var(--size-control-md) + var(--space-1)));
 	background: var(--bg);
 	color: var(--fg);
 	user-select: none;

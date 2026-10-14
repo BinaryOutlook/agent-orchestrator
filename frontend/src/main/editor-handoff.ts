@@ -4,6 +4,7 @@ import {
 	isEditorId,
 	type EditorHandoffState,
 	type EditorId,
+	type OpenSessionArtifactsInput,
 	type OpenSessionTargetInput,
 	type OpenSessionTargetResult,
 	type OpenTarget,
@@ -75,6 +76,8 @@ export type EditorHandoffDeps = {
 	env: NodeJS.ProcessEnv;
 	homeDir: string;
 	resolveWorkspace: (sessionId: string) => Promise<string>;
+	/** The session's artifact directory, which lives outside its workspace. */
+	resolveArtifactDir: (sessionId: string) => Promise<string>;
 	readPreference: () => Promise<EditorId>;
 	writePreference: (editorId: EditorId) => Promise<void>;
 	launch: (command: string, args: readonly string[], cwd: string) => Promise<void>;
@@ -89,6 +92,7 @@ export type EditorHandoffDeps = {
 export type EditorHandoff = {
 	getState(sessionId: string): Promise<EditorHandoffState>;
 	open(input: OpenSessionTargetInput): Promise<OpenSessionTargetResult>;
+	openArtifacts(input: OpenSessionArtifactsInput): Promise<OpenSessionTargetResult>;
 	copyWorkspacePath(sessionId: string): Promise<void>;
 };
 
@@ -336,6 +340,20 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		return { editors, terminal, targets };
 	};
 
+	const openTarget = async (target: OpenTarget, resolved: ResolvedCommand | undefined, directory: string) => {
+		try {
+			if (target.kind === "file_manager") {
+				await deps.openDirectory(directory);
+			} else {
+				if (!resolved) throw new Error("target command was not resolved");
+				await deps.launch(resolved.command, resolved.argsForWorkspace(directory), directory);
+			}
+		} catch (error) {
+			deps.logError?.(`failed to open session target ${target.id}`, error);
+			throw new Error(`Could not open ${target.name}. Check that it is installed and try again.`);
+		}
+	};
+
 	const workspaceUnavailable = (error: unknown) =>
 		error instanceof Error && error.message.trim() ? error.message : "Session workspace is not available.";
 	const workspaceUnavailableCode = (error: unknown) => {
@@ -376,21 +394,25 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 				throw new Error("That open target is not available.");
 			}
 			const workspacePath = await deps.resolveWorkspace(sessionId);
-			try {
-				if (target.kind === "file_manager") {
-					await deps.openDirectory(workspacePath);
-				} else {
-					const resolved = target.kind === "terminal"
-						? terminal?.command
-						: editors.find(({ target: editor }) => editor.id === target.id)?.command;
-					if (!resolved) throw new Error("target command was not resolved");
-					await deps.launch(resolved.command, resolved.argsForWorkspace(workspacePath), workspacePath);
-				}
-			} catch (error) {
-				deps.logError?.(`failed to open session target ${target.id}`, error);
-				throw new Error(`Could not open ${target.name}. Check that it is installed and try again.`);
-			}
+			const resolved = target.kind === "terminal"
+				? terminal?.command
+				: editors.find(({ target: editor }) => editor.id === target.id)?.command;
+			await openTarget(target, resolved, workspacePath);
 			if (target.kind === "editor") await deps.writePreference(target.id as EditorId);
+			return target;
+		},
+
+		async openArtifacts(input) {
+			const sessionId = input.sessionId.trim();
+			if (!sessionId) throw new Error("Session is required.");
+			if (input.targetId !== "file-manager" && input.targetId !== "terminal") {
+				throw new Error("That open target is not supported.");
+			}
+			const terminal = input.targetId === "terminal" ? resolveTerminal(deps, isExecutable) : undefined;
+			const target = input.targetId === "file-manager" ? fileManager : terminal?.target;
+			if (!target) throw new Error("That open target is not available.");
+			const artifactDir = await deps.resolveArtifactDir(sessionId);
+			await openTarget(target, terminal?.command, artifactDir);
 			return target;
 		},
 

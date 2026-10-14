@@ -1532,7 +1532,6 @@
 	"shell.archiveSession": "セッションをアーカイブ",
 	"shell.openArtifactNamed": "アーティファクト {{name}} を開く",
 	"shell.moreArtifacts": "他 {{count}} 件",
-	"inspector.more": "その他",
 	"artifacts.sessionEmpty": "このセッションにはまだアーティファクトがありません。",
 	"artifacts.back": "アーティファクトに戻る",
 	"shell.archiving": "アーカイブ中...",

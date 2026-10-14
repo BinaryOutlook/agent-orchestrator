@@ -1691,7 +1691,6 @@
 	"shell.archiveSession": "Archive session",
 	"shell.openArtifactNamed": "Open artifact {{name}}",
 	"shell.moreArtifacts": "+{{count}} more",
-	"inspector.more": "More",
 	"artifacts.sessionEmpty": "No artifacts in this session yet.",
 	"artifacts.back": "Back to artifacts",
 	"shell.archiving": "Archiving…",

@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, Globe, Shapes } from "lucide-react";
+import { ChevronLeft, FileText, FolderOpen, Globe, SquareTerminal } from "lucide-react";
+import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
+import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
+import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { formatTimeTerse } from "../lib/format-time";
 import { sessionUiKey } from "../lib/hosts";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { Button } from "./ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { PanelMessage } from "./WorkspaceDiffView";
 
 export type ArtifactOpenRequest = { feedback?: boolean; key: number; path: string };
@@ -18,8 +22,52 @@ function sortedArtifacts(artifacts: SessionArtifact[]): SessionArtifact[] {
 	);
 }
 
+function fileManagerName(): string {
+	return isMacPlatform() ? "Finder" : isWindowsPlatform() ? "File Explorer" : "File Manager";
+}
+
+function terminalName(): string {
+	return isWindowsPlatform() ? "Command Prompt" : "Terminal";
+}
+
+/** Opens the session's artifact directory in the file manager or a terminal. */
+function OpenArtifactsFolderButtons({ sessionId }: { sessionId: string }) {
+	const { t } = useTranslation();
+	const open = useOpenSessionArtifacts();
+	const targets: { id: OpenArtifactsTargetId; label: string; icon: typeof FolderOpen }[] = [
+		{ id: "file-manager", label: t("editor.openInTarget", { name: fileManagerName() }), icon: FolderOpen },
+		{ id: "terminal", label: t("editor.openInTarget", { name: terminalName() }), icon: SquareTerminal },
+	];
+	return (
+		<>
+			{open.error ? (
+				<span className="min-w-0 truncate text-caption text-destructive" role="alert" title={open.error.message}>
+					{open.error.message}
+				</span>
+			) : null}
+			{targets.map(({ id, label, icon: Icon }) => (
+				<Tooltip key={id}>
+					<TooltipTrigger asChild>
+						<Button
+							aria-label={label}
+							disabled={open.isPending}
+							onClick={() => open.mutate({ sessionId, targetId: id })}
+							size="icon-sm"
+							type="button"
+							variant="ghost"
+						>
+							<Icon aria-hidden="true" className="size-icon-sm" />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{label}</TooltipContent>
+				</Tooltip>
+			))}
+		</>
+	);
+}
+
 /**
- * The inspector's Artifacts view (opened from the three-dot menu): every file in
+ * The inspector's Artifacts view (its own inspector tab): every file in
  * the session's artifact directory. HTML artifacts open in the Browser panel;
  * markdown and other files open in a read-only viewer beside the list.
  */
@@ -78,14 +126,18 @@ export function SessionArtifactsView({
 
 	return (
 		<div className="flex h-full min-h-0 flex-col" role="tabpanel">
-			<div className="flex h-8 shrink-0 items-center px-3 text-sm text-muted-foreground">{t("artifacts.title")}</div>
+			<div className="flex h-8 shrink-0 items-center gap-0.5 pl-3 pr-1 text-sm text-muted-foreground">
+				<span className="min-w-0 flex-1 truncate">{t("artifacts.title")}</span>
+				{/* The artifact directory is on this machine only for a local session. */}
+				{!hostId && !session.cloud && artifacts.length > 0 ? <OpenArtifactsFolderButtons sessionId={session.id} /> : null}
+			</div>
 			{artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
 				<ul className="board-scrollbar flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3 pb-3 pt-1">
 					{artifacts.map((artifact) => {
 						const html = artifact.kind === "html" && Boolean(artifact.previewUrl);
-						const Icon = html ? Globe : Shapes;
+						const Icon = html ? Globe : FileText;
 						return (
 							<li key={artifact.path}>
 								<button

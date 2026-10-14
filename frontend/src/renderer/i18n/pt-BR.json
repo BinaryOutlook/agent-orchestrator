@@ -1560,7 +1560,6 @@
 	"shell.archiveSession": "Arquivar sessão",
 	"shell.openArtifactNamed": "Abrir artefato {{name}}",
 	"shell.moreArtifacts": "+{{count}} a mais",
-	"inspector.more": "Mais",
 	"artifacts.sessionEmpty": "Esta sessão ainda não tem artefatos.",
 	"artifacts.back": "Voltar aos artefatos",
 	"shell.archiving": "Arquivando...",

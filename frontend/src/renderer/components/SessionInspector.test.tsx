@@ -1216,7 +1216,7 @@ describe("SessionInspector Artifacts section", () => {
     );
   });
 
-  it("opens the Artifacts view from the More menu beside the tab list", async () => {
+  it("opens the Artifacts view from its own tab", async () => {
     const onViewChange = vi.fn();
     renderWithQuery(
       <SessionInspector
@@ -1227,20 +1227,22 @@ describe("SessionInspector Artifacts section", () => {
       />,
     );
 
-    const more = screen.getByRole("button", { name: "More" });
-    expect(screen.getByRole("tablist")).not.toContainElement(more);
+    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
-    expect(more).not.toHaveAttribute("data-active");
 
-    await userEvent.click(more);
-    const menu = await screen.findByRole("menu");
-    expect(menu).toHaveAttribute("data-browser-native-overlay", "true");
-    await userEvent.click(within(menu).getByRole("menuitem", { name: "Artifacts" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Artifacts" }));
 
     expect(onViewChange).toHaveBeenCalledWith("artifacts");
     expect(await screen.findByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByRole("button", { name: "More" })).toHaveAttribute("data-active");
+    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("hides the Artifacts tab when the session has no artifacts", () => {
+    renderWithQuery(<SessionInspector session={session([], { artifactFiles: [] })} view="artifacts" />);
+
+    expect(screen.queryByRole("tab", { name: "Artifacts" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("does not render a feedback button on artifact rows", () => {

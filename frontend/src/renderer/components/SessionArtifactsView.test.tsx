@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { aoBridge } from "../lib/bridge";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
@@ -41,7 +42,7 @@ describe("SessionArtifactsView", () => {
 	it("lists every artifact newest first", () => {
 		renderView(<SessionArtifactsView session={session()} />);
 
-		expect(screen.getAllByRole("button").map((button) => button.textContent?.replace(/\d+[a-z]+$|now$/, ""))).toEqual([
+		expect(within(screen.getByRole("list")).getAllByRole("button").map((button) => button.textContent?.replace(/\d+[a-z]+$|now$/, ""))).toEqual([
 			"report.html",
 			"notes.md",
 			"plan.md",
@@ -52,6 +53,38 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView session={session([])} />);
 
 		expect(screen.getByText("No artifacts in this session yet.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Open in / })).not.toBeInTheDocument();
+	});
+
+	it("opens the artifact folder in the file manager and the terminal", async () => {
+		const openArtifacts = vi.spyOn(aoBridge.editorHandoff, "openArtifacts");
+		renderView(<SessionArtifactsView session={session()} />);
+
+		const [fileManager, terminal] = screen.getAllByRole("button", { name: /^Open in / });
+		await userEvent.click(fileManager);
+		await userEvent.click(terminal);
+
+		expect(openArtifacts).toHaveBeenNthCalledWith(1, { sessionId: "sess-1", targetId: "file-manager" });
+		expect(openArtifacts).toHaveBeenNthCalledWith(2, { sessionId: "sess-1", targetId: "terminal" });
+		openArtifacts.mockRestore();
+	});
+
+	it("shows why the artifact folder could not open", async () => {
+		const openArtifacts = vi.spyOn(aoBridge.editorHandoff, "openArtifacts").mockRejectedValue(
+			new Error("Error invoking remote method 'editorHandoff:openArtifacts': Error: This session has no artifacts folder yet."),
+		);
+		renderView(<SessionArtifactsView session={session()} />);
+
+		await userEvent.click(screen.getAllByRole("button", { name: /^Open in / })[0]);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("This session has no artifacts folder yet.");
+		openArtifacts.mockRestore();
+	});
+
+	it("hides the folder actions for a session on a remote host", () => {
+		renderView(<SessionArtifactsView hostId="remote-1" session={session()} />);
+
+		expect(screen.queryByRole("button", { name: /^Open in / })).not.toBeInTheDocument();
 	});
 
 	it("opens an html artifact in the Browser panel", async () => {
