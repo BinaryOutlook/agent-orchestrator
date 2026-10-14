@@ -4,13 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const hooks = vi.hoisted(() => ({
 	session: null as unknown,
 	status: "authenticated" as string,
-	setCloudUser: vi.fn(async () => undefined),
+	setCloudUser: vi.fn(async (_id: string | null) => hooks.retired),
 	identifyCloudUser: vi.fn(async () => undefined),
 	clearCloudUser: vi.fn(),
+	retireBootstrapId: vi.fn(),
+	retired: false,
 }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: hooks.session, status: hooks.status }) }));
 vi.mock("../lib/bridge", () => ({ aoBridge: { telemetry: { setCloudUser: hooks.setCloudUser } } }));
-vi.mock("../lib/telemetry", () => ({ identifyCloudUser: hooks.identifyCloudUser, clearCloudUser: hooks.clearCloudUser }));
+vi.mock("../lib/telemetry", () => ({ identifyCloudUser: hooks.identifyCloudUser, clearCloudUser: hooks.clearCloudUser, retireBootstrapId: hooks.retireBootstrapId }));
 
 import { TelemetryIdentityRuntime } from "./TelemetryIdentityRuntime";
 
@@ -24,6 +26,21 @@ describe("TelemetryIdentityRuntime", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		hooks.status = "authenticated";
+		hooks.retired = false;
+	});
+
+	it("drops the launch's install ID when main reports it retired on sign-out", async () => {
+		hooks.session = null;
+		hooks.retired = true;
+		render(<TelemetryIdentityRuntime />);
+		await vi.waitFor(() => expect(hooks.retireBootstrapId).toHaveBeenCalledTimes(1));
+	});
+
+	it("keeps the install ID when main does not report it retired", async () => {
+		hooks.session = null;
+		render(<TelemetryIdentityRuntime />);
+		await Promise.resolve();
+		expect(hooks.retireBootstrapId).not.toHaveBeenCalled();
 	});
 
 	it("says nothing while the session is still loading, so a launch is not read as a sign-out", () => {

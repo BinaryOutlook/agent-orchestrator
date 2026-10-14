@@ -173,6 +173,30 @@ let githubLogin: string | null = null;
 let identifiedId: string | null = null;
 let posthogReady = false;
 let analyticsOptedOut = false;
+// The SDK starts on the bootstrap install ID. Once main reports it retired (it was
+// linked to an account that has since signed out) the SDK must not keep using it.
+let bootstrapIdRetired = false;
+let sdkOnBootstrapId = false;
+
+function dropBootstrapId(): void {
+	if (!sdkOnBootstrapId) return;
+	sdkOnBootstrapId = false;
+	posthog.reset();
+	registerBaseProperties();
+}
+
+/**
+ * Main reports that the install ID this launch started with belongs to a
+ * previously signed-in account. Drops it, or does so as soon as a pending init
+ * has created the client, so signed-out events never resolve to that account.
+ */
+export function retireBootstrapId(): void {
+	if (!posthogReady) {
+		bootstrapIdRetired = true;
+		return;
+	}
+	dropBootstrapId();
+}
 
 function registerBaseProperties(): void {
 	posthog.register({
@@ -197,6 +221,7 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
 	if (analyticsOptedOut || cloudUser?.id !== user.id) return;
 	// Switching accounts without a sign-out: never layer B onto A's person.
 	if (identifiedId !== null) posthog.reset();
+	sdkOnBootstrapId = false;
 	registerBaseProperties();
 	posthog.identify(user.id, {
 		email: user.email,
@@ -215,6 +240,7 @@ export function clearCloudUser(): void {
 	cloudUser = null;
 	if (!posthogReady || identifiedId === null) return;
 	identifiedId = null;
+	sdkOnBootstrapId = false;
 	posthog.reset();
 	registerBaseProperties();
 }
@@ -1043,7 +1069,13 @@ export async function initTelemetry(): Promise<boolean> {
 		// source of truth and the bootstrap is only handed out when it is absent.
 		posthog.opt_in_capturing({ captureEventName: false });
 		posthogReady = true;
+		sdkOnBootstrapId = true;
 		registerBaseProperties();
+		// Retirement can arrive while init is pending, after the ID was read.
+		if (bootstrapIdRetired) {
+			bootstrapIdRetired = false;
+			dropBootstrapId();
+		}
 		void syncGithubLogin();
 		// Typed renderer fault intake has its own main-owned policy gate. PostHog
 		// product analytics are intentionally independent of that preference.
