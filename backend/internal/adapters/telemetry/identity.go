@@ -173,12 +173,15 @@ func (i *Identity) SetGitHubLogin(login string) {
 }
 
 // Snapshot implements ports.TelemetryIdentityStore. Opted-out installs report
-// no user attributes at all.
+// no user attributes at all. An identity that could not be persisted reports the
+// same way, so a paired phone resets and stops capturing until a later
+// SetCloudUserID succeeds, instead of adopting an install ID that is still
+// linked to the previous account.
 func (i *Identity) Snapshot() ports.TelemetryIdentity {
-	snap := ports.TelemetryIdentity{OptedOut: i.OptedOut()}
+	optedOut := i.OptedOut()
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	snap.InstallID = i.installID
+	snap := ports.TelemetryIdentity{InstallID: i.installID, OptedOut: optedOut || i.persistFailed}
 	if !snap.OptedOut {
 		snap.CloudUserID, snap.GitHubLogin = i.cloudUserID, i.githubLogin
 	}

@@ -52,13 +52,15 @@ type TelemetryIdentity struct {
 	InstallID   string
 	CloudUserID string
 	GitHubLogin string
-	OptedOut    bool
+	// OptedOut is true when export must stop: the user opted out, or the identity
+	// could not be persisted. Consumers (the paired phone) reset and stop capture.
+	OptedOut bool
 }
 
-// TelemetryIdentityStore holds the live telemetry identity for the daemon.
 // ErrInvalidCloudUserID is returned for an id that is not a plausible user id.
 var ErrInvalidCloudUserID = errors.New("invalid cloud user id")
 
+// TelemetryIdentityStore holds the live telemetry identity for the daemon.
 type TelemetryIdentityStore interface {
 	Snapshot() TelemetryIdentity
 	// SetCloudUserID records the signed-in AO Cloud user ("" on sign-out). It

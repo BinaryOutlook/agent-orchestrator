@@ -83,3 +83,67 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 		t.Fatalf("opted-out identity = %#v", got)
 	}
 }
+
+// A sign-out whose install ID rotation fails must not leave the phone on the
+// ID that is still linked to the previous account.
+func TestTelemetryIdentityRouteSuppressesPhoneAfterFailedRotation(t *testing.T) {
+	dir := t.TempDir()
+	ident, err := telemetryadapter.NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRouterWithControl(config.Config{DataDir: dir}, discardLogger(), nil, APIDeps{TelemetryIdentity: ident}, ControlDeps{})
+	post := func(body string) int {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:3001/internal/telemetry/identity", strings.NewReader(body))
+		req.Host = "127.0.0.1:3001"
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	get := func() map[string]any {
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001/api/v1/telemetry/identity", nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		var out map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	if c := post(`{"cloudUserId":"user_A"}`); c != http.StatusNoContent {
+		t.Fatalf("sign-in = %d", c)
+	}
+	// A non-empty directory where the install ID file lives makes the rename fail.
+	idPath := filepath.Join(dir, "telemetry_install_id")
+	if err := os.Remove(idPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(idPath, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if c := post(`{"cloudUserId":""}`); c != http.StatusInternalServerError {
+		t.Fatalf("failed rotation = %d, want 500", c)
+	}
+	got := get()
+	if got["optedOut"] != true {
+		t.Fatalf("phone must be told to stop after a failed rotation: %#v", got)
+	}
+	for _, k := range []string{"distinctId", "cloudUserId", "githubLogin"} {
+		if v, ok := got[k]; ok && v != "" {
+			t.Fatalf("%s leaked while suppressed: %#v", k, got)
+		}
+	}
+
+	// Recovery lifts the suppression and hands out the retired-and-replaced ID.
+	if err := os.RemoveAll(idPath); err != nil {
+		t.Fatal(err)
+	}
+	if c := post(`{"cloudUserId":""}`); c != http.StatusNoContent {
+		t.Fatalf("retry = %d, want 204", c)
+	}
+	got = get()
+	if got["optedOut"] != false || got["distinctId"] == "" {
+		t.Fatalf("suppression not lifted after recovery: %#v", got)
+	}
+}

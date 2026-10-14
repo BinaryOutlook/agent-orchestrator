@@ -345,10 +345,17 @@ func TestRotationFailureKeepsTheBindingAndSuppressesExport(t *testing.T) {
 		t.Fatal("export must stay suppressed while the retired ID is still in use")
 	}
 
+	if snap := ident.Snapshot(); !snap.OptedOut || snap.CloudUserID != "" || snap.GitHubLogin != "" {
+		t.Fatalf("snapshot must suppress the phone after a failed rotation: %#v", snap)
+	}
+
 	// The retry succeeds once the filesystem recovers.
 	ident.writeFile = realWrite
 	if err := ident.SetCloudUserID(""); err != nil {
 		t.Fatal(err)
+	}
+	if ident.Snapshot().OptedOut {
+		t.Fatal("snapshot still suppressed after recovery")
 	}
 	if ident.InstallID() == original || ident.ExportSuppressed() {
 		t.Fatalf("retry did not retire the ID or lift suppression (id=%s suppressed=%v)", ident.InstallID(), ident.ExportSuppressed())

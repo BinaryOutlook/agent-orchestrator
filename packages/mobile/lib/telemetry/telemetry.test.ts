@@ -142,6 +142,25 @@ describe("createMobileTelemetry", () => {
 			expect(persisted).toEqual([true, false]);
 		});
 
+		it("a daemon whose sign-out rotation failed resets and silences the phone until it recovers", () => {
+			const { client, captures, calls } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			// Adopted while account A was signed in on the desktop.
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", githubLogin: "alice", optedOut: false });
+			// The daemon could not retire the install ID: the response carries the
+			// suppressing state and no identifiers.
+			t.adoptDesktopIdentity({ optedOut: true });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual(["identify:user_A", "reset", "optOut"]);
+
+			// A later sync after the daemon recovers adopts the replacement ID.
+			t.adoptDesktopIdentity({ distinctId: "ins_new", optedOut: false });
+			expect(calls.filter((c) => !c.startsWith("unregister")).slice(3)).toEqual(["optIn", "identify:ins_new"]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+		});
+
 		it("drops everything until the saved preference loads, then re-applies a saved opt-out to the SDK", () => {
 			const { client, captures, calls } = fakeClient();
 			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
