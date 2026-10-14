@@ -199,3 +199,45 @@ describe("TelemetryIdentityController githubLogin", () => {
 		expect(await (await controller(vi.fn(async () => { throw new Error("down"); }))).ctl.githubLogin()).toBeNull();
 	});
 });
+
+describe("TelemetryIdentityController acknowledgement", () => {
+	it("acknowledges only a 2xx from the daemon", async () => {
+		const ok = await controller();
+		expect(await ok.ctl.setCloudUser("user_A")).toBe(true);
+		const failing = await controller(vi.fn(async () => new Response(null, { status: 500 })));
+		expect(await failing.ctl.setCloudUser("user_A")).toBe(false);
+		const unreachable = await controller(vi.fn(async () => { throw new Error("ECONNREFUSED"); }));
+		expect(await unreachable.ctl.setCloudUser("user_A")).toBe(false);
+		const noDaemon = await controller(undefined, null);
+		expect(await noDaemon.ctl.setCloudUser("user_A")).toBe(false);
+		// An older daemon without the route cannot record a binding either.
+		const old = await controller(vi.fn(async () => new Response(null, { status: 404 })));
+		expect(await old.ctl.setCloudUser("user_A")).toBe(false);
+	});
+
+	it("A unavailable, sign-out, recovery: the daemon ends signed out and A was never acknowledged", async () => {
+		let daemonUp = false;
+		let daemonUser = "";
+		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+			if (!daemonUp) return new Response(null, { status: 500 });
+			daemonUser = JSON.parse(init.body as string).cloudUserId;
+			return new Response(null, { status: 204 });
+		});
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
+
+		expect(await ctl.setCloudUser("user_A")).toBe(false); // renderer must not identify
+		expect(await ctl.setCloudUser(null)).toBe(false); // still down
+		daemonUp = true;
+		await ctl.flush(); // recovery replays the newest state only
+		expect(daemonUser).toBe("");
+	});
+
+	it("a superseded call is not acknowledged even if the daemon accepted its state", async () => {
+		const { ctl } = await controller();
+		const first = ctl.setCloudUser("user_A");
+		const second = ctl.setCloudUser("user_B");
+		expect(await first).toBe(false);
+		expect(await second).toBe(true);
+	});
+});

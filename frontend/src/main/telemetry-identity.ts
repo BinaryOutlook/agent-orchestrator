@@ -21,6 +21,10 @@ export class TelemetryIdentityController {
 	// Bumped whenever the daemon's copy goes stale (restart, or a new user), so an
 	// in-flight hand-off to the previous daemon cannot mark the new one as synced.
 	private generation = 0;
+	// The generation whose state the daemon acknowledged (2xx), i.e. durably
+	// recorded. Tracked apart from `pushed`, which also stops retrying against an
+	// older daemon that has no such route.
+	private ackedGeneration = -1;
 	// Hand-offs run one at a time. A request cannot be recalled once sent, so two
 	// in flight could commit in the opposite order and leave the daemon on the
 	// older user; queued runs always send the latest state when their turn comes.
@@ -52,13 +56,21 @@ export class TelemetryIdentityController {
 		return optedOut;
 	}
 
-	/** Records the signed-in user (null on sign-out) and pushes it to the daemon. */
-	async setCloudUser(userId: string | null): Promise<void> {
+	/**
+	 * Records the signed-in user (null on sign-out) and pushes it to the daemon.
+	 * Resolves true only when the daemon acknowledged exactly this state: the
+	 * renderer identifies with PostHog only then, because identify() links the
+	 * install ID to the account for good and the daemon must already have recorded
+	 * that binding, or a later sign-out could not retire the ID. Unreachable
+	 * daemon, an error response or a superseding call all resolve false.
+	 */
+	async setCloudUser(userId: string | null): Promise<boolean> {
 		if (userId !== null && !CLOUD_USER_ID_PATTERN.test(userId)) throw new Error("invalid cloud user id");
 		this.cloudUserId = userId;
 		this.pushed = false;
-		this.generation++;
+		const mine = ++this.generation;
 		await this.flush();
+		return this.ackedGeneration === mine;
 	}
 
 	/**
@@ -95,6 +107,7 @@ export class TelemetryIdentityController {
 			// An older daemon without the route answers 404/405; nothing to retry.
 			if (generation !== this.generation) return;
 			this.pushed = response.ok || response.status === 404 || response.status === 405;
+			if (response.ok) this.ackedGeneration = generation;
 		} catch {
 			// Daemon not reachable yet; flush() runs again on the next ready transition.
 		}
