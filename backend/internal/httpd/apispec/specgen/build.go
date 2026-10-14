@@ -432,6 +432,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersListAgentAuthPlansResponse":       "ListAgentAuthPlansResponse",
 	"ControllersStartAgentAuthResponse":           "StartAgentAuthResponse",
 	"PortsAgentModelCatalog":                      "AgentModelsResponse",
+	"PortsModelServiceTier":                       "ModelServiceTier",
 	"PortsAgentModelInfo":                         "AgentModelInfo",
 	"ControllersListNotificationsQuery":           "ListNotificationsQuery",
 	"ControllersNotificationStreamQuery":          "NotificationStreamQuery",
