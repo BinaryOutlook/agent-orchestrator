@@ -5,6 +5,7 @@ name: Frontend
 # This job ensures both compiler/type checking passes and vitest tests succeed.
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:

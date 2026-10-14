@@ -1,6 +1,7 @@
 name: gitleaks
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -22,7 +23,7 @@ jobs:
       - name: Select commits to scan
         shell: bash
         env:
-          BEFORE_SHA: ${{ github.event.before }}
+          BEFORE_SHA: "032ed6f10bfa72c6a8eea221f9c8e9ad1979eaed"
         run: |
           commits_file=".git/gitleaks-commits.txt"
           if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
