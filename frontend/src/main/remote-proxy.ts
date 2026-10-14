@@ -70,6 +70,9 @@ const MAX_PENDING_UPSTREAM_STREAMS = 100;
 const HTTP2_RETRY_MS = 60_000;
 const UPSTREAM_STREAM_WINDOW = 4 << 20;
 const UPSTREAM_SESSION_WINDOW = 32 << 20;
+// How long opening an upstream session may take (connect, TLS, the tunnel's
+// handshake, the identity probe), and how often a live session is pinged.
+const UPSTREAM_TIMING = { openMs: 5_000, pingMs: 10_000 };
 
 function previewHostForSession(id: string, label = "ao-preview"): string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
@@ -143,7 +146,7 @@ function equalsToken(candidate: string, token: string): boolean {
 	return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = RENDERER_ORIGIN): Promise<ActiveProxy> {
+export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = RENDERER_ORIGIN, timing = UPSTREAM_TIMING): Promise<ActiveProxy> {
 	const token = randomBytes(16).toString("hex");
 	const corsHeaders: Record<string, string> = {
 		"access-control-allow-origin": rendererOrigin,
@@ -268,6 +271,8 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		const socket = new WebSocket(`wss://${upstream.host}${prefix}/api/v1/tunnel`, {
 			headers: { authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "x-ao-expected-host-id": entry.hostId } : {}) },
 			perMessageDeflate: false,
+			// An upgrade nobody answers would hold every request waiting on this session.
+			handshakeTimeout: timing.openMs,
 			...(isIP(hostname) ? {} : { servername: hostname }),
 		});
 		// Wrap before "open": the host's first HTTP/2 frame can arrive with it.
@@ -309,6 +314,20 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			stream.on("error", (error: Error) => reject(new UpstreamHttp2Unavailable(error.message)));
 			stream.on("close", () => reject(new UpstreamHttp2Unavailable("session closed")));
 		});
+	// A path can go silent without a FIN or RST (a VPN or network change), and
+	// the session would then carry every request into nothing. A ping still
+	// unanswered when the next is due retires it: its streams fail, and the
+	// next request opens a fresh session.
+	const keepAlive = (session: ClientHttp2Session): void => {
+		let awaitingPong = false;
+		const timer = setInterval(() => {
+			if (session.destroyed) return;
+			if (awaitingPong) return void session.destroy(new Error("upstream stopped answering pings"));
+			awaitingPong = session.ping(() => { awaitingPong = false; });
+		}, timing.pingMs);
+		timer.unref();
+		session.once("close", () => clearInterval(timer));
+	};
 	const openUpstreamSession = (tunnel?: Duplex): Promise<ClientHttp2Session> => {
 		// Node's default 64 KiB receive window would cap a preview at 64 KiB per
 		// round trip; a few hundred modules need megabytes in flight.
@@ -317,24 +336,35 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			...(tunnel ? { createConnection: () => tunnel } : {}),
 			...(secure && !isIP(hostname) ? { servername: hostname } : {}),
 		});
-		const opened = new Promise<ClientHttp2Session>((resolve, reject) => {
-			session.once("connect", () => {
-				session.setLocalWindowSize(UPSTREAM_SESSION_WINDOW);
-				resolve(session);
-			});
-			session.on("error", (error: Error) => reject(new UpstreamHttp2Unavailable(error.message)));
-			session.once("close", () => reject(new UpstreamHttp2Unavailable("session closed")));
-		}).then(async (connected) => {
-			// Always one unauthenticated probe: it also proves the session works.
-			const identityPath = `${upstream.origin}${prefix}/api/v1/identity`;
-			if (!entry.hostId) {
-				await getOverSession(connected, identityPath);
+		let deadline: ReturnType<typeof setTimeout> | undefined;
+		const opened = Promise.race([
+			new Promise<ClientHttp2Session>((resolve, reject) => {
+				session.once("connect", () => {
+					session.setLocalWindowSize(UPSTREAM_SESSION_WINDOW);
+					keepAlive(session);
+					resolve(session);
+				});
+				session.on("error", (error: Error) => reject(new UpstreamHttp2Unavailable(error.message)));
+				session.once("close", () => reject(new UpstreamHttp2Unavailable("session closed")));
+			}).then(async (connected) => {
+				// Always one unauthenticated probe: it also proves the session works.
+				const identityPath = `${upstream.origin}${prefix}/api/v1/identity`;
+				if (!entry.hostId) {
+					await getOverSession(connected, identityPath);
+					return connected;
+				}
+				const actual = await readRemoteIdentity({ url: `${upstream.origin}${prefix}` }, (url) => getOverSession(connected, String(url)));
+				if (actual !== entry.hostId) throw new Error("remote host identity changed");
 				return connected;
-			}
-			const actual = await readRemoteIdentity({ url: `${upstream.origin}${prefix}` }, (url) => getOverSession(connected, String(url)));
-			if (actual !== entry.hostId) throw new Error("remote host identity changed");
-			return connected;
-		});
+			}),
+			// Every request waits on this session: an address that never answers
+			// (a peer gone offline drops packets) would hold them all for the OS
+			// connect timeout.
+			new Promise<never>((_, reject) => {
+				deadline = setTimeout(() => reject(new UpstreamHttp2Unavailable("session open timed out")), timing.openMs);
+				deadline.unref();
+			}),
+		]).finally(() => clearTimeout(deadline));
 		opened.catch(() => session.destroy());
 		return opened;
 	};
@@ -415,6 +445,8 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		method: string | undefined,
 		path: string,
 		kind?: PreviewTarget["kind"],
+		// For an HTTP/2 body: whether its stream was cut off rather than finished.
+		cutOff?: () => boolean,
 	): void => {
 		if (kind === "app" && status === 409 && upstreamHeaders["x-ao-preview-managed-required"] === "1") {
 			body.resume();
@@ -445,7 +477,18 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		// (An HTTP/2 response sends its headers in writeHead.)
 		res.flushHeaders?.();
 		// pipe streams SSE chunk-by-chunk once headers are already on the wire.
-		body.pipe(res);
+		if (!cutOff) {
+			body.pipe(res);
+			return;
+		}
+		// An HTTP/2 stream cut off by its session (the host restarted, the
+		// tunnel closed) just ends, with no "aborted" or "error". Ending the
+		// response then would hand the browser a truncated body as complete.
+		body.pipe(res, { end: false });
+		body.once("end", () => (cutOff() ? closeDroppedStream() : res.end()));
+		body.once("close", () => {
+			if (!res.writableEnded) closeDroppedStream();
+		});
 	};
 
 	const forwardOverHttp1 = (req: ProxyRequest, res: ProxyResponse, path: string, kind?: PreviewTarget["kind"]): void => {
@@ -464,11 +507,20 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		// Closing an EventSource or tab must also close its upstream stream.
 		// Otherwise the remote daemon keeps the SSE request alive after the
 		// renderer is gone, and proxy shutdown can leave orphaned connections.
+		// writableEnded, not writableFinished: an HTTP/2 response reports
+		// finished once its stream closes, a browser's reset included.
 		res.once("close", () => {
-			if (!res.writableFinished) proxied.destroy();
+			if (!res.writableEnded) proxied.destroy();
 		});
 		req.pipe(proxied);
 	};
+
+	// Node's HTTP/2 client ends a GET, HEAD or DELETE with its headers unless
+	// told otherwise, which would drop the body a DELETE can carry.
+	const hasBody = (req: ProxyRequest): boolean =>
+		Number(req.headers["content-length"] ?? 0) > 0 ||
+		req.headers["transfer-encoding"] !== undefined ||
+		(req as Partial<Http2ServerRequest>).stream?.endAfterHeaders === false;
 
 	const forwardOverSession = async (session: ClientHttp2Session, req: ProxyRequest, res: ProxyResponse, path: string, kind?: PreviewTarget["kind"]): Promise<void> => {
 		// Closing an EventSource or tab must also close its upstream stream,
@@ -476,7 +528,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		let stream: ReturnType<ClientHttp2Session["request"]> | undefined;
 		let clientGone = false;
 		res.once("close", () => {
-			clientGone = !res.writableFinished;
+			clientGone = !res.writableEnded;
 			if (clientGone) stream?.close(http2Constants.NGHTTP2_CANCEL);
 		});
 		await acquireStream();
@@ -493,17 +545,31 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		const headers = forwardHeaders(req.headers, kind);
 		delete headers.host; // HTTP/2 names the host in :authority
 		try {
-			stream = session.request({ ...headers, ":method": req.method ?? "GET", ":path": path, ":authority": upstream.host });
+			stream = session.request(
+				{ ...headers, ":method": req.method ?? "GET", ":path": path, ":authority": upstream.host },
+				hasBody(req) ? { endStream: false } : undefined,
+			);
 		} catch (error) {
 			settle();
 			answerUpstreamFailure(res, error as Error, req.method, path, kind);
 			return;
 		}
 		const upstreamStream = stream;
-		upstreamStream.once("close", settle);
-		upstreamStream.once("response", (responseHeaders) => {
+		let responded = false;
+		upstreamStream.once("close", () => {
 			settle();
-			relayResponse(res, Number(responseHeaders[":status"]), responseHeaders as IncomingHttpHeaders, upstreamStream, req.method, path, kind);
+			// Closed before its response: the host restarted, the tunnel closed or
+			// the stream was reset. Node reports a cancelled stream without "error".
+			if (!responded && !clientGone && !res.writableEnded)
+				answerUpstreamFailure(res, new Error(`stream closed with code ${upstreamStream.rstCode}`), req.method, path, kind);
+		});
+		upstreamStream.once("response", (responseHeaders) => {
+			responded = true;
+			settle();
+			// At "end" a finished stream is still alive; a cut one is already
+			// destroyed, often with code 0 (a destroyed session or socket).
+			relayResponse(res, Number(responseHeaders[":status"]), responseHeaders as IncomingHttpHeaders, upstreamStream, req.method, path, kind,
+				() => upstreamStream.destroyed || upstreamStream.rstCode !== http2Constants.NGHTTP2_NO_ERROR);
 		});
 		upstreamStream.on("error", (error: Error) => answerUpstreamFailure(res, error, req.method, path, kind));
 		req.pipe(upstreamStream);
@@ -539,6 +605,10 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			res.end();
 			return;
 		}
+		// The browser may leave while the session or identity check is pending;
+		// an HTTP/2 response has no "destroyed" to say so afterwards.
+		let left = false;
+		res.once("close", () => { left = true; });
 		let session: ClientHttp2Session | null;
 		try {
 			session = await sessionForRequest();
@@ -547,7 +617,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			answerIdentityFailure(res, error, req.method, path, preview?.kind);
 			return;
 		}
-		if (res.destroyed || res.writableEnded) return;
+		if (left || res.writableEnded) return;
 		if (session) await forwardOverSession(session, req, res, path, preview?.kind);
 		else forwardOverHttp1(req, res, path, preview?.kind);
 	};
@@ -705,13 +775,13 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		},
 		agentBrowserUrl: async (sessionId) => {
 			if (!sessionId || sessionId.length > 256) throw new Error("invalid preview session");
-			// A daemon without an agent browser (or too old to have the route)
-			// answers 404: no agent tab. Anything else, a browser that is down
-			// included, gets the tab; its viewer reconnects on its own.
+			// Only a host whose agent browser answers has one. A daemon without one
+			// (or too old for the route) answers 404, and a host this proxy cannot
+			// reach gets the proxy's own 502: neither may show an agent tab.
 			const probe = await fetch(`http://127.0.0.1:${port}/${token}/api/v1/sessions/${encodeURIComponent(sessionId)}/agent-browser/stats`, { signal: AbortSignal.timeout(8_000) })
 				.catch(() => null);
 			await probe?.body?.cancel().catch(() => undefined);
-			if (!probe || probe.status === 404) return "";
+			if (!probe?.ok) return "";
 			// Its own origin per session: never the app's, so the two keep apart.
 			const host = `ao-preview-${originMac(`agent\n${sessionId}`).toString("hex", 0, 16)}.localhost:${securePort}`;
 			previewHosts.set(host, { sessionId, kind: "agent", entry: "" });

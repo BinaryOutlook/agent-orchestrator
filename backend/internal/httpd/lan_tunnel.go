@@ -24,7 +24,8 @@ func (m *LANManager) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	ws.SetReadLimit(1 << 20) // one HTTP/2 frame batch per message
+	// No message size limit: NetConn lifts it, and streams each message into
+	// the HTTP/2 framer, whose own frame size cap bounds what it holds.
 	conn := &tunnelConn{
 		Conn:   websocket.NetConn(context.WithoutCancel(r.Context()), ws, websocket.MessageBinary),
 		remote: tunnelAddr(r.RemoteAddr),

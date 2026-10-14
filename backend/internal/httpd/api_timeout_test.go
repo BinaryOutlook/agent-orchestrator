@@ -30,6 +30,20 @@ func (s *timeoutProbeSessionService) GetRecord(ctx context.Context, _ domain.Ses
 	return domain.SessionRecord{}, errors.New("probe only")
 }
 
+// recordBudget is the deadline GetRecord saw. The route has run by the time it
+// is read, so a route that never reached GetRecord fails here instead of
+// blocking the test.
+func (s *timeoutProbeSessionService) recordBudget(t *testing.T) time.Duration {
+	t.Helper()
+	select {
+	case budget := <-s.previewBudget:
+		return budget
+	case <-time.After(time.Second):
+		t.Fatal("the route never read the session record")
+		return 0
+	}
+}
+
 func (s *timeoutProbeSessionService) List(ctx context.Context, _ sessionsvc.ListFilter) ([]domain.Session, error) {
 	s.genericBudget <- remainingRequestBudget(ctx)
 	return nil, nil
@@ -150,7 +164,7 @@ func TestManagedPreviewAppProxyHasNoRequestTimeout(t *testing.T) {
 		ControlDeps{},
 	)
 	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/sessions/ao-1/preview/app/_next/webpack-hmr", nil))
-	if budget := <-svc.previewBudget; budget != 0 {
+	if budget := svc.recordBudget(t); budget != 0 {
 		t.Fatalf("managed preview budget = %s, want no deadline", budget)
 	}
 }
@@ -166,7 +180,7 @@ func TestAgentBrowserProxyHasNoRequestTimeout(t *testing.T) {
 		ControlDeps{},
 	)
 	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/sessions/ao-1/agent-browser/ws/cdp", nil))
-	if budget := <-svc.previewBudget; budget != 0 {
+	if budget := svc.recordBudget(t); budget != 0 {
 		t.Fatalf("agent browser budget = %s, want no deadline", budget)
 	}
 }

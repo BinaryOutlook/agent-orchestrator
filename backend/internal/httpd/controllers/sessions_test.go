@@ -3096,25 +3096,33 @@ func TestSessionsAPI_ManagedPreviewCompressesUncompressedText(t *testing.T) {
 	module := strings.Repeat("export const value = 'remote preview module';\n", 100)
 	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/streamed.js": // no announced length: chunked, possibly a stream
+			w.Header().Set("Content-Type", "text/javascript")
+			_, _ = io.WriteString(w, module)
+			return
+		case "/ranged.js":
+			w.Header().Set("Content-Type", "text/javascript")
+			http.ServeContent(w, r, "ranged.js", time.Time{}, strings.NewReader(module))
+			return
 		case "/mod.js":
 			w.Header().Set("Content-Type", "text/javascript")
 			w.Header().Set("ETag", `"v1"`)
-			_, _ = io.WriteString(w, module)
 		case "/tiny.js":
 			w.Header().Set("Content-Type", "text/javascript")
 			w.Header().Set("Content-Length", "11")
 			_, _ = io.WriteString(w, "export {};\n")
+			return
 		case "/events":
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(w, "data: "+module+"\n\n")
 		case "/encoded.js":
 			w.Header().Set("Content-Type", "text/javascript")
 			w.Header().Set("Content-Encoding", "br")
-			_, _ = io.WriteString(w, module)
 		case "/image.png":
 			w.Header().Set("Content-Type", "image/png")
-			_, _ = io.WriteString(w, module)
 		}
+		// Announced, as a Vite module's is.
+		w.Header().Set("Content-Length", strconv.Itoa(len(module)))
+		_, _ = io.WriteString(w, module)
 	}))
 	t.Cleanup(app.Close)
 	parsed, _ := url.Parse(app.URL)
@@ -3126,12 +3134,15 @@ func TestSessionsAPI_ManagedPreviewCompressesUncompressedText(t *testing.T) {
 	managed := &fakeManagedPreviewServer{status: previewserver.Status{State: previewserver.StateReady, TargetKind: previewserver.TargetApp, URL: session.Metadata.PreviewURL, Port: port}}
 	srv := newSessionTestServerWithPreview(t, svc, managed)
 	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
-	get := func(path, acceptEncoding string) (*http.Response, []byte) {
+	get := func(path, acceptEncoding, byteRange string) (*http.Response, []byte) {
 		t.Helper()
 		request, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/preview/app"+path, nil)
 		request.Header.Set("Authorization", "Bearer host-password")
 		if acceptEncoding != "" {
 			request.Header.Set("Accept-Encoding", acceptEncoding)
+		}
+		if byteRange != "" {
+			request.Header.Set("Range", byteRange)
 		}
 		response, err := client.Do(request)
 		if err != nil {
@@ -3142,29 +3153,87 @@ func TestSessionsAPI_ManagedPreviewCompressesUncompressedText(t *testing.T) {
 		return response, body
 	}
 
-	response, body := get("/mod.js", "gzip, deflate, br, zstd")
-	if response.Header.Get("Content-Encoding") != "gzip" || response.Header.Get("ETag") != `W/"v1"` {
-		t.Fatalf("module headers = %v, want gzip with a weak ETag", response.Header)
-	}
-	reader, err := gzip.NewReader(bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, _ := io.ReadAll(reader)
-	if string(decoded) != module || len(body) >= len(module)/4 {
-		t.Fatalf("decoded %d of %d bytes from %d compressed", len(decoded), len(module), len(body))
-	}
-	for _, tc := range []struct{ path, acceptEncoding, encoding string }{
-		{"/mod.js", "", ""},
-		{"/mod.js", "gzip;q=0, br", ""},
-		{"/tiny.js", "gzip", ""},
-		{"/events", "gzip", ""},
-		{"/encoded.js", "gzip", "br"},
-		{"/image.png", "gzip", ""},
-	} {
-		if response, _ := get(tc.path, tc.acceptEncoding); response.Header.Get("Content-Encoding") != tc.encoding {
-			t.Errorf("%s with Accept-Encoding %q: Content-Encoding %q, want %q", tc.path, tc.acceptEncoding, response.Header.Get("Content-Encoding"), tc.encoding)
+	for range 2 { // the second reuses the pooled compressor
+		response, body := get("/mod.js", "gzip, deflate, br, zstd", "")
+		if response.Header.Get("Content-Encoding") != "gzip" || response.Header.Get("ETag") != `W/"v1"` {
+			t.Fatalf("module headers = %v, want gzip with a weak ETag", response.Header)
 		}
+		reader, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, _ := io.ReadAll(reader)
+		if string(decoded) != module || len(body) >= len(module)/4 {
+			t.Fatalf("decoded %d of %d bytes from %d compressed", len(decoded), len(module), len(body))
+		}
+	}
+	for _, tc := range []struct{ path, acceptEncoding, byteRange, encoding string }{
+		{"/mod.js", "", "", ""},
+		{"/mod.js", "gzip;q=0, br", "", ""},
+		{"/mod.js", "gzip", "bytes=0-2047", ""}, // range offsets count uncompressed bytes
+		{"/ranged.js", "gzip", "bytes=0-2047", ""},
+		{"/streamed.js", "gzip", "", ""},
+		{"/tiny.js", "gzip", "", ""},
+		{"/events", "gzip", "", ""},
+		{"/encoded.js", "gzip", "", "br"},
+		{"/image.png", "gzip", "", ""},
+	} {
+		if response, _ := get(tc.path, tc.acceptEncoding, tc.byteRange); response.Header.Get("Content-Encoding") != tc.encoding {
+			t.Errorf("%s with Accept-Encoding %q, Range %q: Content-Encoding %q, want %q", tc.path, tc.acceptEncoding, tc.byteRange, response.Header.Get("Content-Encoding"), tc.encoding)
+		}
+	}
+	if response, body := get("/ranged.js", "gzip", "bytes=0-2047"); response.StatusCode != http.StatusPartialContent || string(body) != module[:2048] {
+		t.Errorf("ranged module = %d with %d bytes, want 206 with the first 2048 as sent", response.StatusCode, len(body))
+	}
+}
+
+// A streamed body (SSR, RSC payloads, token streams) announces no length. Each
+// write reaches a client that accepts gzip as the dev server makes it, not
+// once gzip has 64 KiB or the end.
+func TestSessionsAPI_ManagedPreviewStreamsWithoutHoldingBack(t *testing.T) {
+	release := make(chan struct{})
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", r.URL.Query().Get("type"))
+		_, _ = io.WriteString(w, strings.Repeat("first ", 400)+"\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(app.Close)
+	t.Cleanup(func() { close(release) })
+	parsed, _ := url.Parse(app.URL)
+	port, _ := strconv.Atoi(parsed.Port())
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.Metadata.PreviewURL = app.URL + "/"
+	svc.sessions["ao-1"] = session
+	managed := &fakeManagedPreviewServer{status: previewserver.Status{State: previewserver.StateReady, TargetKind: previewserver.TargetApp, URL: session.Metadata.PreviewURL, Port: port}}
+	srv := newSessionTestServerWithPreview(t, svc, managed)
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	for _, contentType := range []string{"text/html; charset=utf-8", "text/x-component", "text/plain; charset=utf-8", "application/x-ndjson", "text/event-stream"} {
+		request, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/preview/app/stream?type="+url.QueryEscape(contentType), nil)
+		request.Header.Set("Authorization", "Bearer host-password")
+		request.Header.Set("Accept-Encoding", "gzip")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := make(chan string, 1)
+		go func() {
+			line, _ := bufio.NewReader(response.Body).ReadString('\n')
+			first <- line
+		}()
+		select {
+		case line := <-first:
+			if !strings.HasPrefix(line, "first ") || response.Header.Get("Content-Encoding") != "" {
+				t.Errorf("%s: first line %.20q with Content-Encoding %q, want it as written", contentType, line, response.Header.Get("Content-Encoding"))
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("%s: first write held back while the stream stays open", contentType)
+		}
+		_ = response.Body.Close()
 	}
 }
 

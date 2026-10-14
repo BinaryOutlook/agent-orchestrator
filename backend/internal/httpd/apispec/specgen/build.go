@@ -2629,7 +2629,7 @@ func sessionOperations() []operation {
 			summary:      "Proxy the host's agent browser stream viewer (page, stream socket, downloads)",
 			pathParams:   []any{controllers.SessionIDParam{}},
 			resps:        []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusBadGateway, ""}},
-			contentTypes: map[int]string{http.StatusOK: "text/html"},
+			contentTypes: map[int]string{http.StatusOK: "text/html", http.StatusBadGateway: "text/plain"},
 		},
 		{
 			method: http.MethodHead, path: "/api/v1/sessions/{sessionId}/agent-browser/*", id: "headSessionAgentBrowser", tag: "sessions",
@@ -2639,9 +2639,10 @@ func sessionOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/agent-browser/*", id: "postSessionAgentBrowser", tag: "sessions",
-			summary:    "Upload a file into the host's agent browser",
-			pathParams: []any{controllers.SessionIDParam{}},
-			resps:      []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusBadGateway, ""}},
+			summary:      "Upload a file into the host's agent browser",
+			pathParams:   []any{controllers.SessionIDParam{}},
+			resps:        []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusBadGateway, ""}},
+			contentTypes: map[int]string{http.StatusBadGateway: "text/plain"},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/attachments", id: "stageSessionAttachments", tag: "sessions",

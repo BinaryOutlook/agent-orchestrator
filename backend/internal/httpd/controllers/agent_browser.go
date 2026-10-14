@@ -3,10 +3,17 @@ package controllers
 import (
 	"net/http"
 	"net/http/httputil"
+	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
+
+// agentBrowserDownloadGUID matches the browser's download GUIDs. Anything else,
+// "." and ".." above all, reaches a path the browser's mux cleans with a
+// redirect that repeats the query, token included.
+var agentBrowserDownloadGUID = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
 // agentBrowserRoute reports whether the desktop may reach this agent browser
 // path: the stream viewer's page, its socket, and its file transfers. The
@@ -18,7 +25,7 @@ func agentBrowserRoute(tail string) bool {
 		return true
 	}
 	guid, ok := strings.CutPrefix(tail, "download/")
-	return ok && guid != "" && !strings.Contains(guid, "/")
+	return ok && agentBrowserDownloadGUID.MatchString(guid)
 }
 
 // agentBrowser streams the host's agent browser (AO_AGENT_BROWSER_URL) to the
@@ -56,6 +63,21 @@ func (c *SessionsController) agentBrowser(w http.ResponseWriter, r *http.Request
 			for _, name := range []string{"Authorization", "Proxy-Authorization", "Cookie", "Origin", browserCapabilityHeader} {
 				req.Out.Header.Del(name)
 			}
+		},
+		// A redirect repeats the request's query, the browser's token with it:
+		// keep the token out of the Location and drop the body, which links it.
+		ModifyResponse: func(res *http.Response) error {
+			if location, parseErr := url.Parse(res.Header.Get("Location")); parseErr == nil && location.Query().Has("token") {
+				query := location.Query()
+				query.Del("token")
+				location.RawQuery = query.Encode()
+				res.Header.Set("Location", location.String())
+				_ = res.Body.Close()
+				res.Body = http.NoBody
+				res.ContentLength = 0
+				res.Header.Del("Content-Length")
+			}
+			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			http.Error(w, "Agent browser unavailable", http.StatusBadGateway)

@@ -4389,7 +4389,7 @@ paths:
           description: Not Found
         "502":
           content:
-            application/json:
+            text/plain:
               schema:
                 type: string
           description: Bad Gateway
@@ -4442,7 +4442,7 @@ paths:
           description: Not Found
         "502":
           content:
-            application/json:
+            text/plain:
               schema:
                 type: string
           description: Bad Gateway

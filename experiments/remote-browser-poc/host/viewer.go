@@ -78,6 +78,7 @@ type viewer struct {
 	bgTabUntil  time.Time
 	lastInput   time.Time // the person's last click or key in this view
 	lastFix     time.Time // last time a wrong-size frame made the page size come back
+	wrongSince  time.Time // first wrong-size frame since the last right one
 	scrollTimer *time.Timer
 	fileNode    int64
 	fullscreen  bool // the page is in fullscreen: frames cover Chrome's whole window (fullscreenCrop)
@@ -85,6 +86,8 @@ type viewer struct {
 	// one agent browser tab. It never switches tabs itself: it tells the host
 	// about new and closed tabs, and the host opens or closes its own tabs.
 	embed       bool
+	waiting     bool        // embedded with no page yet: the first page that appears becomes its page
+	iconSeq     int64       // favicon reports: only the newest one's icon is sent
 	hidden      bool        // a host app tab behind another: no stream, page left where it is
 	fileSession string      // the session whose DOM holds fileNode: the page's or an iframe's
 	shimQ       chan func() // shim reports, in order: a frame's offset may need CDP calls
@@ -168,7 +171,7 @@ func (h *host) handleViewer(w http.ResponseWriter, r *http.Request) {
 	c.SetReadLimit(64 << 20) // file uploads arrive inline
 	ctx, cancel := context.WithCancel(context.Background())
 	v := &viewer{h: h, id: fmt.Sprintf("cdp-%p", c), conn: c, ctx: ctx, cancel: cancel,
-		signal: make(chan struct{}, 1), out: make(chan []byte, 256), inputs: make(chan func(), 256), shimQ: make(chan func(), 256),
+		signal: make(chan struct{}, 1), out: make(chan []byte, 1024), inputs: make(chan func(), 256), shimQ: make(chan func(), 256),
 		children: map[string]string{}, childFrame: map[string]string{}, ctxFrame: map[string]string{}}
 	for _, q := range []chan func(){v.inputs, v.shimQ} {
 		go func() {
@@ -212,6 +215,11 @@ func (h *host) handleViewer(w http.ResponseWriter, r *http.Request) {
 	if v.scrollScale < 0.25 || v.scrollScale > 1 {
 		v.scrollScale = 0.5 // half size while scrolling
 	}
+	// Set before the view is published: the CDP reader reads them (onTabs).
+	v.embed, v.hidden = hello.Embed, hello.Hidden
+	// Embedded with no page of its own (the agent had none): the first page
+	// that appears becomes its page.
+	v.waiting = v.embed && hello.Tab == ""
 	h.viewMu.Lock()
 	h.viewers[v] = struct{}{}
 	h.viewMu.Unlock()
@@ -220,7 +228,6 @@ func (h *host) handleViewer(w http.ResponseWriter, r *http.Request) {
 	v.sendControl(h.ctl.owner())
 	// Attach off the read loop: a CDP call that stalls while the agent navigates
 	// must not stop acks and input (seen: 15 s with no acks, frames stuck at 4 in flight).
-	v.embed, v.hidden = hello.Embed, hello.Hidden
 	first := h.agentTab()
 	if hello.Tab != "" && (v.embed || h.hasTab(hello.Tab)) {
 		first = hello.Tab
@@ -230,6 +237,12 @@ func (h *host) handleViewer(w http.ResponseWriter, r *http.Request) {
 		// view was away closes the view too. A restarted host learns its tabs first.
 		if v.embed && hello.Tab != "" && !h.waitTab(hello.Tab, 3*time.Second) {
 			v.sendJSON(map[string]any{"t": "closed", "next": h.openerOf(hello.Tab)})
+			return
+		}
+		if v.embed && hello.Tab == "" { // no page yet, or onTabs gave it one already
+			if first != "" && v.take() {
+				v.adopt(first)
+			}
 			return
 		}
 		if err := v.attach(first); err != nil {
@@ -283,15 +296,17 @@ func (v *viewer) attach(targetID string) error {
 	v.mu.Unlock()
 	v.runSteps(ctx, sid, append(append([]cdpStep{{"Inspector.enable", nil}}, frameSteps...),
 		cdpStep{"Network.enable", nil})) // a 401 document with a Basic challenge opens the viewer's login prompt
-	// fitView sends a still: a static page paints nothing, so screencast
-	// alone may never send a first frame (seen: 20 s of black).
-	if err := v.fitView(); err != nil {
-		return err
-	}
 	// Headless Chrome stops painting a background tab: the one shown comes to
-	// the front. A hidden view (a host app tab behind another) must not take it.
+	// the front, before its size is set (a size set while the tab is behind
+	// another leaves Chrome capturing its whole window, every frame the wrong
+	// size). A hidden view (a host app tab behind another) must not take it.
 	if !v.isHidden() {
 		_, _ = v.h.cdp.Call(ctx, sid, "Page.bringToFront", nil)
+	}
+	// fitView sends a still: a static page paints nothing, so screencast
+	// alone may never send a first frame (seen: 20 s of black).
+	if err := v.fitView(true); err != nil {
+		return err
 	}
 	v.sendJSON(map[string]any{"t": "active", "id": targetID})
 	for _, t := range v.h.tabList() {
@@ -530,18 +545,30 @@ func (v *viewer) wrongSize(meta json.RawMessage, img []byte) bool {
 		sized = math.Abs(float64(cfg.Width)/float64(cfg.Height)-w/h) <= 0.02*w/h
 	}
 	if sized {
+		v.mu.Lock()
+		v.wrongSince = time.Time{}
+		v.mu.Unlock()
 		return false
 	}
-	if !v.h.ctl.agentRunning() {
-		v.mu.Lock()
-		fix := time.Since(v.lastFix) > time.Second
-		if fix {
-			v.lastFix = time.Now()
-		}
-		v.mu.Unlock()
-		if fix {
-			go s.reassert()
-		}
+	agent := v.h.ctl.agentRunning()
+	v.mu.Lock()
+	now := time.Now()
+	if agent || v.wrongSince.IsZero() {
+		v.wrongSince = now // the agent's own size while it works is not stuck
+	}
+	stuck := now.Sub(v.wrongSince) > time.Second
+	fix := !agent && now.Sub(v.lastFix) > time.Second
+	if fix {
+		v.lastFix = now
+	}
+	v.mu.Unlock()
+	switch {
+	case fix && stuck:
+		// The page is at its size and the frames still are not (a size set
+		// while the tab was behind another): set it again on this session.
+		go func() { _ = v.fitView(true) }()
+	case fix:
+		go s.reassert()
 	}
 	return true
 }
@@ -584,20 +611,23 @@ func (v *viewer) reassert() {
 // fitView sizes the page to this view if the tab has no size yet or this view
 // set it. Otherwise the page keeps the size of the view in use and this one
 // letterboxes it: AO parks hidden tabs offscreen at 1280 px, and that resize
-// took the page from the view on screen.
-func (v *viewer) fitView() error {
+// took the page from the view on screen. force: as in applyViewport.
+func (v *viewer) fitView(force bool) error {
 	target := v.target()
 	v.h.viewMu.Lock()
 	s := v.h.sizer[target]
 	v.h.viewMu.Unlock()
 	if s == nil || s == v {
-		return v.applyViewport(false)
+		return v.applyViewport(force)
 	}
 	s.mu.Lock()
 	w, h, dpr := s.w, s.hgt, s.dpr
 	s.mu.Unlock()
 	// Same size as the page on this session too: Chrome sizes a session's
 	// screencast frames from that session's own emulation.
+	if force {
+		_, _ = v.call("Emulation.clearDeviceMetricsOverride", nil)
+	}
 	_, _ = v.call("Emulation.setDeviceMetricsOverride", pageSize(w, h, dpr))
 	v.sendJSON(map[string]any{"t": "viewport", "w": w, "h": h, "mine": false})
 	q := v.currentBaseQuality()
@@ -619,7 +649,8 @@ func (v *viewer) target() string {
 // same size on its own session: Chrome sizes a session's screencast frames
 // from that session's own emulation (a 2x page streamed 1x frames otherwise).
 // force re-sends a size Chrome would skip as unchanged, after someone else's
-// emulation (the agent's, a detached view's) replaced or wiped it.
+// emulation (the agent's, a detached view's) replaced or wiped it, or after
+// the tab came to the front (a size set behind another tab does not hold).
 func (v *viewer) applyViewport(force bool) error {
 	v.mu.Lock()
 	w, h, dpr, target := v.w, v.hgt, v.dpr, v.targetID
@@ -838,8 +869,21 @@ func (v *viewer) onEvent(sid string, m cdpMsg) {
 		var fs struct {
 			Kind string `json:"kind"`
 			On   bool   `json:"on"`
+			Href string `json:"href"`
 		}
-		if top && json.Unmarshal([]byte(p.Payload), &fs) == nil && fs.Kind == "fullscreen" {
+		err := json.Unmarshal([]byte(p.Payload), &fs)
+		if kind == "ui" && fs.Kind == "favicon" {
+			// Never relayed: the desktop would fetch any URL a page names. Only
+			// the page's own main frame names its icon, which travels as bytes.
+			v.mu.Lock()
+			main := top && v.targetID != "" && v.ctxFrame[ctxKey(sid, p.ContextID)] == v.targetID
+			v.mu.Unlock()
+			if main && err == nil {
+				go v.sendFavicon(fs.Href)
+			}
+			return
+		}
+		if top && err == nil && fs.Kind == "fullscreen" {
 			v.mu.Lock()
 			v.fullscreen = fs.On
 			v.mu.Unlock()
@@ -896,9 +940,26 @@ func (v *viewer) setVisible(on bool) {
 		return
 	}
 	_, _ = v.call("Page.bringToFront", nil)
-	q := v.currentBaseQuality()
-	if v.restartScreencast(q) == nil {
-		v.captureStill(q)
+	// The size set while the tab was behind another leaves Chrome capturing
+	// its whole window now that it is in front: set it again. fitView also
+	// restarts the stream and sends a still.
+	_ = v.fitView(true)
+}
+
+// sendFavicon gives the view its page's icon as a data: URL, or "" when there
+// is none. Only the newest report's icon is sent (a slow icon of the previous
+// page must not replace the new page's).
+func (v *viewer) sendFavicon(href string) {
+	v.mu.Lock()
+	v.iconSeq++
+	seq, sid, target := v.iconSeq, v.session, v.targetID
+	v.mu.Unlock()
+	icon := v.h.favicon(v.ctx, sid, target, href)
+	v.mu.Lock()
+	current := seq == v.iconSeq && target == v.targetID
+	v.mu.Unlock()
+	if current {
+		v.sendJSON(map[string]any{"t": "favicon", "href": icon})
 	}
 }
 
@@ -988,10 +1049,16 @@ func (v *viewer) kick() {
 	}
 }
 
+// sendRaw queues b for the view and never waits: the CDP reader and /agent,
+// which every view and the agent share, call it. A view whose queue is full
+// has stopped reading: it is dropped, and viewer.html reconnects.
 func (v *viewer) sendRaw(b []byte) {
 	select {
 	case v.out <- b:
 	case <-v.ctx.Done():
+	default:
+		log.Printf("viewer %s: not reading, dropped", v.id)
+		v.cancel()
 	}
 }
 
@@ -1019,6 +1086,12 @@ func (v *viewer) onTabs(tabs []tab, newTab string) {
 	}
 	if v.embed {
 		switch {
+		case cur == "" && len(tabs) > 0 && v.take(): // no page yet: this is its first
+			next := newTab
+			if next == "" {
+				next = tabs[len(tabs)-1].ID
+			}
+			go v.adopt(next)
 		case cur != "" && !alive: // its tab closed: the host closes this one, back to the opener
 			v.sendJSON(map[string]any{"t": "closed", "next": v.h.openerOf(cur)})
 		case newTab != "" && newTab != cur:
@@ -1040,11 +1113,37 @@ func (v *viewer) onTabs(tabs []tab, newTab string) {
 		}
 		go func() { _ = v.attach(next) }()
 	case len(tabs) == 0 && cur != "":
-		v.detach()
+		go func() { // off the CDP reader: detach waits on Chrome
+			v.attachMu.Lock()
+			defer v.attachMu.Unlock()
+			if v.target() != cur {
+				return
+			}
+			v.detach()
+			v.mu.Lock()
+			v.targetID = ""
+			v.mu.Unlock()
+			v.sendJSON(map[string]any{"t": "active", "id": ""})
+		}()
+	}
+}
+
+// take claims the first page for a view that has none yet: true once.
+func (v *viewer) take() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	t := v.waiting
+	v.waiting = false
+	return t
+}
+
+// adopt shows target in a view that had no page; it waits again if that fails.
+func (v *viewer) adopt(target string) {
+	if err := v.attach(target); err != nil {
+		log.Printf("viewer attach: %v", err)
 		v.mu.Lock()
-		v.targetID = ""
+		v.waiting = true
 		v.mu.Unlock()
-		v.sendJSON(map[string]any{"t": "active", "id": ""})
 	}
 }
 
@@ -1284,7 +1383,7 @@ func (v *viewer) readLoop() {
 			if picked { // chosen in this view's toolbar, so it is in use
 				go func() { _ = v.applyViewport(false) }()
 			} else {
-				go func() { _ = v.fitView() }()
+				go func() { _ = v.fitView(false) }()
 			}
 		case "quality":
 			v.mu.Lock()
@@ -1298,8 +1397,11 @@ func (v *viewer) readLoop() {
 			}()
 		case "selectResp":
 			v.human()
-			expr := fmt.Sprintf(`(() => { const el = document.querySelector('select[data-rb-sel=%q]'); if (!el) return;
-				el.selectedIndex = %d; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); })()`, m.ID, m.Index)
+			// The id goes in as a JSON string and is compared as data: Go's %q
+			// inside a JS string let a crafted id run script.
+			id, _ := json.Marshal(m.ID)
+			expr := fmt.Sprintf(`(() => { const el = [...document.querySelectorAll('select[data-rb-sel]')].find((e) => e.dataset.rbSel === %s); if (!el) return;
+				el.selectedIndex = %d; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); })()`, id, m.Index)
 			go v.evalIn(m.Ctx, expr, false)
 		case "upload":
 			v.human()

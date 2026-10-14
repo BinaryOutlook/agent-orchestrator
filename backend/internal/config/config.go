@@ -510,7 +510,8 @@ func parseAgentBrowserURL(raw string) (string, error) {
 	}
 	host := u.Hostname()
 	ip := net.ParseIP(host)
-	if u.Scheme != "http" || u.User != nil || u.RawQuery != "" || !(strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback()) {
+	loopback := strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback()
+	if u.Scheme != "http" || u.User != nil || u.RawQuery != "" || !loopback {
 		return "", fmt.Errorf("invalid AO_AGENT_BROWSER_URL %q: must be a loopback http URL without credentials or query", raw)
 	}
 	return strings.TrimRight(raw, "/"), nil

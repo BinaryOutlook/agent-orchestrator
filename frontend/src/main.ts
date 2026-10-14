@@ -2396,6 +2396,8 @@ ipcMain.handle("menu:action", (_event, action: string) => {
 		case "edit.selectAll":
 			return wc.selectAll();
 		case "view.reload":
+			// An agent tab's Reload is the agent's page, not its viewer's.
+			if (browserViewHost?.reloadAgentTab(wc)) return;
 			return wc.reload();
 		case "view.devtools":
 			if (browserViewHost) {

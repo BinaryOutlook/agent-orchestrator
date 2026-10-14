@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"mime"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,7 +25,8 @@ import (
 const uiShim = `(() => {
   const report = (o) => window.__rbUI && window.__rbUI(JSON.stringify(o));
   // The page's icon, for a host app that shows this tab as its own: told on
-  // every install, so a view attaching to a loaded page learns it too.
+  // every install, so a view attaching to a loaded page learns it too. rbhost
+  // loads it in this browser and passes it on as bytes, never as the URL.
   if (window === top && location.origin !== 'null') {
     const icon = () => report({ kind: 'favicon', href: (document.querySelector('link[rel~="icon"]') || {}).href || location.origin + '/favicon.ico' });
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', icon, { once: true }); else icon();
@@ -487,6 +491,161 @@ func (h *host) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Disposition", `attachment; filename*=UTF-8''`+strings.ReplaceAll(strings.ReplaceAll(name, `"`, ""), " ", "%20"))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	http.ServeFile(w, r, filepath.Join(h.dl.dir, guid))
+}
+
+// maxIcon caps a tab icon: as a data: URL it stays under the desktop's
+// 90000-character limit.
+const maxIcon = 64 << 10
+
+// favicon is the icon at href as a data: URL, or "". It is loaded here, in the
+// remote browser and in the page's main frame (frameID, the page target's id):
+// the desktop never fetches an address a page chose, which could point at the
+// person's own network.
+func (h *host) favicon(ctx context.Context, sid, frameID, href string) string {
+	if rest, ok := strings.CutPrefix(href, "data:"); ok {
+		return iconData(dataURL(rest))
+	}
+	u, err := url.Parse(href)
+	if err != nil || u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	// This load skips Chrome's local-network rules, so a page on the internet
+	// may not name a local address as its icon; a local page (a dev server) may.
+	// ponytail: literal hosts only; a public name that resolves to a local
+	// address still passes. Resolve and check the address if that matters.
+	h.tabsMu.Lock()
+	page := ""
+	if t := h.tabs[frameID]; t != nil {
+		page = t.URL
+	}
+	h.tabsMu.Unlock()
+	if p, err := url.Parse(page); localHost(u.Hostname()) && (err != nil || !localHost(p.Hostname())) {
+		return ""
+	}
+	h.iconMu.Lock()
+	icon, ok := h.icons[href]
+	h.iconMu.Unlock()
+	if ok {
+		return icon
+	}
+	if icon = iconData(h.load(ctx, sid, frameID, href)); icon != "" {
+		h.iconMu.Lock()
+		if h.icons == nil || len(h.icons) >= 256 {
+			h.icons = map[string]string{}
+		}
+		h.icons[href] = icon
+		h.iconMu.Unlock()
+	}
+	return icon
+}
+
+// localHost reports whether host is this machine or its private network.
+func localHost(host string) bool {
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
+}
+
+// load reads href in frame frameID of session sid's page, and returns the body
+// and its Content-Type; nil if that failed or it is bigger than an icon.
+func (h *host) load(ctx context.Context, sid, frameID, href string) ([]byte, string) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	res, err := h.cdp.Call(ctx, sid, "Network.loadNetworkResource", map[string]any{"frameId": frameID, "url": href,
+		"options": map[string]any{"disableCache": false, "includeCredentials": false}})
+	var r struct {
+		Resource struct {
+			Success    bool              `json:"success"`
+			HTTPStatus float64           `json:"httpStatusCode"`
+			Stream     string            `json:"stream"`
+			Headers    map[string]string `json:"headers"`
+		} `json:"resource"`
+	}
+	if err != nil || json.Unmarshal(res, &r) != nil || r.Resource.Stream == "" {
+		return nil, ""
+	}
+	defer h.cdp.Notify(sid, "IO.close", map[string]any{"handle": r.Resource.Stream})
+	if !r.Resource.Success || r.Resource.HTTPStatus < 200 || r.Resource.HTTPStatus > 299 {
+		return nil, ""
+	}
+	var body []byte
+	for len(body) <= maxIcon {
+		res, err := h.cdp.Call(ctx, sid, "IO.read", map[string]any{"handle": r.Resource.Stream, "size": maxIcon + 1 - len(body)})
+		var c struct {
+			Data          string `json:"data"`
+			Base64Encoded bool   `json:"base64Encoded"`
+			EOF           bool   `json:"eof"`
+		}
+		if err != nil || json.Unmarshal(res, &c) != nil {
+			return nil, ""
+		}
+		chunk := []byte(c.Data)
+		if c.Base64Encoded {
+			if chunk, err = base64.StdEncoding.DecodeString(c.Data); err != nil {
+				return nil, ""
+			}
+		}
+		body = append(body, chunk...)
+		if c.EOF {
+			ctype := ""
+			for k, val := range r.Resource.Headers {
+				if strings.EqualFold(k, "content-type") {
+					ctype = val
+				}
+			}
+			return body, ctype
+		}
+	}
+	return nil, "" // bigger than an icon
+}
+
+// iconData is b as a data: URL if it is an image a tab can show (png, ico,
+// gif, jpeg or webp by its magic bytes; svg by its type or content) of at most
+// maxIcon bytes, else "".
+func iconData(b []byte, ctype string) string {
+	if len(b) == 0 || len(b) > maxIcon {
+		return ""
+	}
+	mt := http.DetectContentType(b)
+	switch mt {
+	case "image/png", "image/x-icon", "image/gif", "image/jpeg", "image/webp":
+	default:
+		if !isSVG(b, ctype) {
+			return ""
+		}
+		mt = "image/svg+xml"
+	}
+	return "data:" + mt + ";base64," + base64.StdEncoding.EncodeToString(b)
+}
+
+func isSVG(b []byte, ctype string) bool {
+	if mt, _, _ := mime.ParseMediaType(ctype); mt == "image/svg+xml" {
+		return true
+	}
+	s := strings.TrimSpace(strings.TrimPrefix(string(b[:min(len(b), 256)]), "\ufeff"))
+	return strings.HasPrefix(s, "<svg") || strings.HasPrefix(s, "<?xml") && strings.Contains(string(b), "<svg")
+}
+
+// dataURL decodes the part of a data: URL after "data:": its bytes and type.
+func dataURL(s string) ([]byte, string) {
+	meta, data, ok := strings.Cut(s, ",")
+	if !ok || len(data) > 4*maxIcon {
+		return nil, ""
+	}
+	if mt, ok := strings.CutSuffix(meta, ";base64"); ok {
+		b, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			return nil, ""
+		}
+		return b, mt
+	}
+	text, err := url.PathUnescape(data)
+	if err != nil {
+		return nil, ""
+	}
+	return []byte(text), meta
 }

@@ -341,6 +341,7 @@ type BrowserWebContents = Pick<
   ) => void;
   closeDevTools?: () => void;
   close?: () => void;
+  isFocused?: () => boolean;
   session?: Pick<
     Session,
     | "on"
@@ -473,6 +474,10 @@ export type BrowserViewHost = {
   ) => Promise<unknown>;
   // webContents of the most recently focused browser panel (or null); the titlebar menu targets it for Edit/Reload/Zoom/DevTools.
   getLastFocusedPanelContents: () => WebContents | null;
+  // The app menu's Reload for an agent tab's viewer: reloads the agent's page,
+  // as the tab's toolbar Reload does. False for any other contents, which the
+  // caller reloads itself.
+  reloadAgentTab: (contents: Pick<WebContents, "id">) => boolean;
   /** Toggle Chromium DevTools for the last focused AO browser panel. */
   toggleDevToolsForLastFocused: () => Promise<BrowserDevToolsState | null>;
   // Drop the remembered panel; call when the shell gains focus for a real reason so a stale panel stops absorbing menu actions.
@@ -509,6 +514,9 @@ type BrowserEntry = {
   agentTab?: string;
   // The agent browser page this tab shows, as its viewer last reported it.
   remote?: RemoteTabReport;
+  // A person is closing this agent tab (closeAgentTab): their close finishes
+  // it, not its page's own report of closing meanwhile.
+  closing?: boolean;
   // The newest renderer navigation that is still loading. A profile switch stops
   // in-flight loads and reloads each tab in the new profile. Until the server's
   // first response arrives, getURL() still returns the previous page, so the
@@ -1158,24 +1166,12 @@ export function createBrowserViewHost(
       entry.remote = report;
       entry.agentTab ||= report.tabId;
       showRemoteViewer(entry, session.activeTabId === entry.tabId);
-      const syncTabs = () => {
-        if (!isCurrentEntry()) return;
-        pushTabsState(options, session);
-        if (session.activeTabId === entry.tabId) pushNavState(options, entry);
-      };
-      if (report.favicon && report.favicon !== entry.faviconSourceUrl && report.favicon !== entry.faviconPendingUrl) {
-        const url = report.favicon;
-        entry.faviconPendingUrl = url;
-        void fetchFavicon(entry, url).then((dataUrl) => {
-          if (entry.faviconPendingUrl === url) entry.faviconPendingUrl = undefined;
-          if (dataUrl && entry.faviconSourceUrl !== url) {
-            entry.faviconSourceUrl = url;
-            entry.favicon = dataUrl;
-            syncTabs();
-          }
-        });
-      }
-      syncTabs();
+      // The page's icon comes inline, as an image data URL (remote-tab.ts),
+      // and is shown as is: never fetched from here, where an address the
+      // remote page names would be fetched from the person's network.
+      if (report.favicon) entry.favicon = report.favicon;
+      pushTabsState(options, session);
+      if (session.activeTabId === entry.tabId) pushNavState(options, entry);
       // Off this tab's own event: the sync may close it.
       setTimeout(() => {
         try {
@@ -1631,11 +1627,44 @@ export function createBrowserViewHost(
     // is how the agent's next page reaches the panel.
     const closed = report.closed;
     const others = [...session.tabs.values()].some((tab) => tab !== from && tab.agentTab !== undefined);
-    if (!closed || !others) return;
+    if (!closed || !others || from.closing) return;
+    // In front, it hands over to the tab that opened it. Pages opened just
+    // above map to `from` itself: no opener to go back to.
     const opener = closed.next ? shown.get(closed.next) : undefined;
-    closeTab(session, from.tabId);
-    if (session.nativeActiveTabId === from.tabId) session.nativeActiveTabId = undefined;
-    if (inUse && opener && session.tabs.get(opener.tabId) === opener) activateTab(session, opener.tabId);
+    void closeAgentTab(session, from.tabId, false, opener && opener !== from ? opener.tabId : undefined).catch(
+      (error) => console.warn("Unable to close the agent browser's tab", error),
+    );
+  };
+
+  // The one way an agent tab closes, whoever closes it. agent-browser never
+  // sees agent tabs (agentBrowserTargets), so this never goes through its
+  // tab-select or tab-close. closePage: a tab closed here closes its page in
+  // the agent browser, as closing any tab would; a page that closed on its
+  // own just takes its tab along. show: the tab to bring forward when this
+  // one is in front (else the last tab, as for any tab).
+  const closeAgentTab = async (
+    session: BrowserSessionEntry,
+    tabId: string,
+    closePage: boolean,
+    show?: string,
+  ): Promise<BrowserTabsState> => {
+    const entry = session.tabs.get(tabId);
+    if (!entry) return listTabs(session);
+    // Its page is going: a report from another viewer that has not heard yet
+    // must not bring it back meanwhile.
+    if (entry.agentTab) (session.agentTabsClosed ??= new Map()).set(entry.agentTab, Date.now());
+    if (closePage && entry.remote && !entry.remote.closed) {
+      entry.closing = true;
+      // Before the view goes: its socket carries the close.
+      await Promise.race([runInRemoteViewer(entry, "close()"), new Promise((resolve) => setTimeout(resolve, 800))]);
+      // Another close (a second click, a profile switch) may have taken the
+      // tab meanwhile: nothing left to do.
+      if (session.tabs.get(tabId) !== entry) return listTabs(session);
+    }
+    if (session.nativeActiveTabId === tabId) session.nativeActiveTabId = undefined;
+    // The keyboard moves with a close the person made, or off a tab that had
+    // it; a page closing on its own leaves it where the person is typing.
+    return closeTab(session, tabId, show, closePage || entry.view.webContents.isFocused?.() === true);
   };
 
   function activateTab(
@@ -1683,6 +1712,10 @@ export function createBrowserViewHost(
   function closeTab(
     session: BrowserSessionEntry,
     tabId = session.activeTabId,
+    // The tab to bring forward when the closed one is in front (default: the
+    // last tab), and whether the keyboard moves to it.
+    show?: string,
+    focus = true,
   ): BrowserTabsState {
     assertTabsNotReplacing(session);
     if (session.tabs.size === 1) {
@@ -1697,14 +1730,18 @@ export function createBrowserViewHost(
         "TAB_NOT_FOUND",
         `Browser tab ${tabId} does not exist`,
       );
-    const closedTab = tabResult(tab, false);
+    // An agent tab is the agent's page, not the person's to reopen: Recently
+    // Closed only takes the person's own tabs.
+    const closedTab = tab.agentTab === undefined ? tabResult(tab, false) : undefined;
     const wasActive = tabId === session.activeTabId;
     // Activate the replacement BEFORE destroying the closed view. Destroying
     // the focused view first leaves OS focus in limbo until the async close
     // resolves — a second ⌘W in that window bypasses every before-input-event
     // handler and hits the menu's Close item, killing the app window.
     const nextTabId = wasActive
-      ? [...session.tabs.keys()].filter((id) => id !== tabId).at(-1)!
+      ? show && show !== tabId && session.tabs.has(show)
+        ? show
+        : [...session.tabs.keys()].filter((id) => id !== tabId).at(-1)!
       : undefined;
     if (nextTabId) activateTab(session, nextTabId, false);
     disposeNetworkCapture(tab, "tab-closed");
@@ -1712,7 +1749,7 @@ export function createBrowserViewHost(
     session.tabs.delete(tabId);
     tabsByWebContentsId.delete(tab.view.webContents.id);
     destroyTabView(tab);
-    if (wasActive && nextTabId) {
+    if (wasActive && nextTabId && focus) {
       const replacement = session.tabs.get(nextTabId);
       if (replacement) {
         lastUsedViewId = session.viewId;
@@ -1725,7 +1762,7 @@ export function createBrowserViewHost(
         }
       }
     }
-    const state = listTabs(session, { kind: "closed", tabId, tab: closedTab });
+    const state = listTabs(session, { kind: "closed", tabId, ...(closedTab ? { tab: closedTab } : {}) });
     shellContents(options).send("browser:tabsState", state);
     return state;
   }
@@ -1755,8 +1792,11 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
     tabId: string,
     signal?: AbortSignal,
-  ): Promise<BrowserTabsState> =>
-    queueNativeOperation(
+  ): Promise<BrowserTabsState> => {
+    // agent-browser never sees agent tabs: they close without it.
+    if (session.tabs.get(tabId)?.agentTab !== undefined)
+      return closeAgentTab(session, tabId, true);
+    return queueNativeOperation(
       session,
       async () => {
         try {
@@ -1805,6 +1845,7 @@ export function createBrowserViewHost(
       },
       signal,
     );
+  };
 
   const closeUserTab = async (
     session: BrowserSessionEntry,
@@ -1812,6 +1853,7 @@ export function createBrowserViewHost(
   ): Promise<BrowserTabsState> => {
     if (session.tabs.size === 1) return listTabs(session);
     if (!session.tabs.has(tabId)) return listTabs(session);
+    if (session.tabs.get(tabId)?.agentTab !== undefined) return closeAgentTab(session, tabId, true);
     if (!options.agentBrowserRuntime) return closeTab(session, tabId);
     return closeNativeTab(session, tabId);
   };
@@ -1848,7 +1890,21 @@ export function createBrowserViewHost(
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown" || options.isKeybindingRecording?.()) return;
       const action = browserShortcutAction(input, Boolean(options.isMac));
-      if (!action) return;
+      if (!action) {
+        // Cmd+Shift+R (Ctrl+Shift+R) in an agent tab reloads its viewer
+        // itself, not the agent's page: the way back for a viewer that is
+        // stuck (an error page after the agent browser restarted). Anywhere
+        // else the key stays the app menu's.
+        const session =
+          isNativePage && isHardReloadShortcut(input, Boolean(options.isMac))
+            ? getSession()
+            : undefined;
+        const entry = session?.tabs.get(session.activeTabId);
+        if (entry?.agentTab === undefined) return;
+        event.preventDefault();
+        if (!input.isAutoRepeat) entry.view.webContents.reload();
+        return;
+      }
       const session = getSession();
       if (!session) return;
       event.preventDefault();
@@ -1865,7 +1921,10 @@ export function createBrowserViewHost(
         return;
       }
       if (action === "reload") {
-        activeEntry(session).view.webContents.reload();
+        const entry = activeEntry(session);
+        // An agent tab reloads the agent's page, as its toolbar Reload does.
+        if (entry.agentTab !== undefined) agentNav(entry, "reload");
+        else entry.view.webContents.reload();
         return;
       }
       if (action === "back" || action === "forward") {
@@ -1876,6 +1935,8 @@ export function createBrowserViewHost(
             if (action === "forward" && contents.canGoForward()) contents.goForward();
           },
           true,
+          false,
+          action,
         );
         return;
       }
@@ -2811,8 +2872,8 @@ export function createBrowserViewHost(
     if (!session) return emptyNavState(viewId);
     assertProfileStable(session);
     const entry = activeEntry(session);
-    if (entry.remote && remoteCommand) {
-      void runInRemoteViewer(entry, `${remoteCommand}()`);
+    if (entry.agentTab !== undefined && remoteCommand) {
+      agentNav(entry, remoteCommand);
       return pushNavState(options, entry);
     }
     if (cancelForNavigation) {
@@ -3276,7 +3337,7 @@ export function createBrowserViewHost(
       return listTabs(session);
     });
   });
-  handle("browser:closeTab", async (event, input: BrowserTabInput) => {
+  handle("browser:closeTab", (event, input: BrowserTabInput) => {
     const session = entries.get(input.viewId);
     if (!session || !isRendererOwned(event, input.viewId))
       return emptyTabsState(input.viewId);
@@ -3293,16 +3354,9 @@ export function createBrowserViewHost(
         `Browser tab ${input.tabId} does not exist`,
       );
     }
-    // A person closing an agent tab closes that page in the agent browser,
-    // as closing any tab would; one whose page already closed just goes.
-    const closing = session.tabs.get(input.tabId);
-    if (closing?.agentTab) (session.agentTabsClosed ??= new Map()).set(closing.agentTab, Date.now());
-    if (closing?.remote && !closing.remote.closed) {
-      // Before the view goes: its socket carries the close.
-      await Promise.race([runInRemoteViewer(closing, "close()"), new Promise((resolve) => setTimeout(resolve, 800))]);
-    }
-    if (!options.agentBrowserRuntime || closing?.agentTab !== undefined)
-      return closeTab(session, input.tabId);
+    if (session.tabs.get(input.tabId)?.agentTab !== undefined)
+      return closeAgentTab(session, input.tabId, true);
+    if (!options.agentBrowserRuntime) return closeTab(session, input.tabId);
     return closeNativeTab(session, input.tabId);
   });
   on("browser:panelUsed", (event, viewId: string) => {
@@ -4068,6 +4122,12 @@ export function createBrowserViewHost(
       // Stored narrowed as BrowserWebContents but is a full WebContents at runtime.
       const contents = entry.view.webContents as unknown as WebContents;
       return contents.isDestroyed() ? null : contents;
+    },
+    reloadAgentTab: (contents) => {
+      const entry = tabsByWebContentsId.get(contents.id);
+      if (entry?.agentTab === undefined) return false;
+      agentNav(entry, "reload");
+      return true;
     },
     toggleDevToolsForLastFocused: async () => {
       if (lastFocusedViewId === null) return null;
@@ -4892,6 +4952,9 @@ function wireNavEvents(
 // wireNavEvents' own did-navigate handler rather than registering a second
 // listener for the same event.
 function clearStaleFavicon(entry: BrowserEntry, url: string): void {
+  // An agent tab's icon is its agent page's, which the viewer's own loads
+  // (a reload, a move to a new origin) do not change.
+  if (entry.agentTab !== undefined) return;
   const origin = originOf(url);
   if (origin && origin === entry.faviconOrigin) return;
   entry.favicon = undefined;
@@ -4906,6 +4969,9 @@ function wireFaviconEvents(
   syncTabs: () => void,
 ): void {
   contents.on("page-favicon-updated", (_event, favicons) => {
+    // An agent tab shows its agent page's icon, from its viewer's reports;
+    // the viewer page's own icon is never fetched.
+    if (entry.agentTab !== undefined) return;
     const url = favicons[0];
     // Not yet applied (faviconSourceUrl) and not already in flight
     // (faviconPendingUrl) — a page re-announcing the same favicon while a
@@ -5136,6 +5202,24 @@ function runInRemoteViewer(entry: BrowserEntry, call: string): Promise<unknown> 
     .catch(() => undefined);
 }
 
+// Back/Forward/Reload/Stop in an agent tab, from its toolbar, a shortcut or
+// the app menu alike, drive the agent's page through its viewer and never the
+// viewer's own history (Back there left the viewer for about:blank). Before
+// the viewer first reports there is no page to drive: Reload reloads the
+// viewer, and the rest do nothing (Stop would abort the viewer's load).
+function agentNav(
+  entry: BrowserEntry,
+  command: "back" | "forward" | "reload" | "stop",
+): void {
+  if (entry.remote) void runInRemoteViewer(entry, `${command}()`);
+  else if (command === "reload") entry.view.webContents.reload();
+}
+
+function isHardReloadShortcut(input: BrowserShortcutInput, isMac: boolean): boolean {
+  const primary = isMac ? input.meta && !input.control : input.control && !input.meta;
+  return primary && input.shift && !input.alt && input.key.toLowerCase() === "r";
+}
+
 // Offscreen tabs stay "visible" to their pages, and the agent's Chrome paints
 // only its front page: an agent tab's viewer streams, and brings its page to
 // the front, only while its tab is the one shown.
@@ -5157,6 +5241,9 @@ function readNavState(entry: BrowserEntry): BrowserNavState {
   }
   const { webContents } = entry.view;
   const currentURL = webContents.getURL();
+  // An agent tab whose viewer has not reported has no page history yet: its
+  // viewer's own history is not the person's to walk (agentNav).
+  const agentTab = entry.agentTab !== undefined;
   return {
     viewId: entry.state.viewId,
     // about:blank is the cleared/blank state — surface it as an empty url so
@@ -5164,8 +5251,8 @@ function readNavState(entry: BrowserEntry): BrowserNavState {
     // blank rather than showing "about:blank".
     url: currentURL === "about:blank" ? "" : currentURL,
     title: webContents.getTitle(),
-    canGoBack: webContents.canGoBack(),
-    canGoForward: webContents.canGoForward(),
+    canGoBack: !agentTab && webContents.canGoBack(),
+    canGoForward: !agentTab && webContents.canGoForward(),
     isLoading: webContents.isLoading(),
   };
 }

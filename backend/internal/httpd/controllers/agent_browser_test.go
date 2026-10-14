@@ -106,3 +106,61 @@ func TestSessionsAPI_AgentBrowserAbsent(t *testing.T) {
 		t.Fatalf("status = %d, want 404 on a host with no agent browser", res.StatusCode)
 	}
 }
+
+// The browser's mux cleans "." and ".." with a redirect that repeats the query,
+// the browser's token with it. Such a download never reaches the browser, and
+// a redirect the browser does send comes back without the token.
+func TestSessionsAPI_AgentBrowserKeepsItsTokenOnTheHost(t *testing.T) {
+	var mu sync.Mutex
+	var reached []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /download/{guid}", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("guid") == "moved" {
+			http.Redirect(w, r, "/download/elsewhere?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+			return
+		}
+		_, _ = io.WriteString(w, "file")
+	})
+	browser := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reached = append(reached, r.URL.RequestURI())
+		mu.Unlock()
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(browser.Close)
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{AgentBrowserURL: browser.URL, AgentBrowserToken: "rb-secret"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Sessions: newFakeSessionService()}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	get := func(tail string) (*http.Response, string) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/agent-browser/"+tail, nil)
+		req.Header.Set("Authorization", "Bearer host-password")
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		body, _ := io.ReadAll(res.Body)
+		return res, string(body)
+	}
+
+	for _, guid := range []string{"..", ".", "%2e%2e", "%2E%2E", "a.b", "a_b", strings.Repeat("a", 65)} {
+		if res, _ := get("download/" + guid); res.StatusCode != http.StatusNotFound {
+			t.Errorf("download/%s status = %d, want 404", guid, res.StatusCode)
+		}
+	}
+	mu.Lock()
+	leaked := append([]string(nil), reached...)
+	mu.Unlock()
+	if len(leaked) != 0 {
+		t.Fatalf("the browser was asked for %q", leaked)
+	}
+	if res, body := get("download/8c4b1e2a-37f3-4f43-9d55-0123456789ab"); res.StatusCode != http.StatusOK || body != "file" {
+		t.Fatalf("download = %d %q, want the file", res.StatusCode, body)
+	}
+	res, body := get("download/moved?keep=1")
+	if res.StatusCode != http.StatusTemporaryRedirect || res.Header.Get("Location") != "/download/elsewhere?keep=1" || strings.Contains(body, "rb-secret") {
+		t.Fatalf("redirect = %d, Location %q, body %q; want the token in neither", res.StatusCode, res.Header.Get("Location"), body)
+	}
+}

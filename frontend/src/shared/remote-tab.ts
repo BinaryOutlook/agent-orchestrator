@@ -18,6 +18,7 @@ export type RemoteTabReport = {
 	shown: boolean;
 	url: string;
 	title: string;
+	/** The page's icon as an image data URL, "" when none (see iconDataURL). */
 	favicon: string;
 	loading: boolean;
 	back: boolean;
@@ -26,11 +27,21 @@ export type RemoteTabReport = {
 
 const text = (value: unknown, max: number): string => (typeof value === "string" ? value.slice(0, max) : "");
 
-// Only web addresses reach the address bar and tab icon from a report.
+// Only web addresses reach the address bar from a report.
 const webURL = (value: unknown): string => {
 	const url = text(value, 8192);
 	return /^https?:\/\//i.test(url) ? url : "";
 };
+
+// The tab icon comes inline, as a base64 image data URL, and is shown as is.
+// AO never fetches an icon address a remote page names: the fetch would leave
+// from the person's machine, on their network, with their cookies. Anything
+// else is dropped.
+const MAX_ICON_LENGTH = 90_000;
+const ICON_DATA_URL =
+	/^data:image\/(?:png|x-icon|vnd\.microsoft\.icon|gif|jpeg|webp|svg\+xml);base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/;
+const iconDataURL = (value: unknown): string =>
+	typeof value === "string" && value.length <= MAX_ICON_LENGTH && ICON_DATA_URL.test(value) ? value : "";
 
 export function parseRemoteTabReport(message: string): RemoteTabReport | null {
 	if (!message.startsWith(REMOTE_TAB_REPORT) || message.length > 512_000) return null;
@@ -55,7 +66,7 @@ export function parseRemoteTabReport(message: string): RemoteTabReport | null {
 		tabs,
 		url: webURL(r.url),
 		title: text(r.title, 1024),
-		favicon: webURL(r.favicon),
+		favicon: iconDataURL(r.favicon),
 		loading: r.loading === true,
 		back: r.back === true,
 		fwd: r.fwd === true,

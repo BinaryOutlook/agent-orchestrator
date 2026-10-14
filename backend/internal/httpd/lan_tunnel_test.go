@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,4 +102,67 @@ func TestLANTunnelClosesWhenThePasswordRotates(t *testing.T) {
 	if _, err := conn.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("tunnel still open after the password rotated (read: %v)", err)
 	}
+}
+
+// One WebSocket message may carry more than 1 MiB of HTTP/2 frames: the tunnel
+// sets no message size limit.
+func TestLANTunnelCarriesMessagesOverOneMiB(t *testing.T) {
+	st := &authState{}
+	st.setHash(mobilebridge.HashPassword("secret12"))
+	m := NewLANManager(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	}), st, 0, slog.Default(), nil)
+	port, err := m.Start(0)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.Stop(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // fail, never hang
+	defer cancel()
+	ws, _, err := websocket.Dial(ctx, fmt.Sprintf("ws://127.0.0.1:%d%s", port, lanTunnelPath), &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer secret12"}},
+	})
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	conn := &paddedOpening{Conn: websocket.NetConn(ctx, ws, websocket.MessageBinary)}
+	defer conn.Close()
+	protocols := new(http.Protocols)
+	protocols.SetUnencryptedHTTP2(true)
+	client := &http.Client{Transport: &http.Transport{
+		Protocols:   protocols,
+		DialContext: func(context.Context, string, string) (net.Conn, error) { return conn, nil },
+	}}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://tunnel/anything", nil)
+	req.Header.Set("Authorization", "Bearer secret12")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request after a %d-byte message: %v", conn.sent.Load(), err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "ok" || conn.sent.Load() <= 1<<20 {
+		t.Fatalf("got %d %q after a %d-byte message", resp.StatusCode, body, conn.sent.Load())
+	}
+}
+
+// paddedOpening sends the HTTP/2 client's opening flush (preface, SETTINGS,
+// WINDOW_UPDATE) as one message over 1 MiB, padded with connection
+// WINDOW_UPDATEs of 1.
+type paddedOpening struct {
+	net.Conn
+	sent atomic.Int64 // size of that message, once sent
+}
+
+func (c *paddedOpening) Write(p []byte) (int, error) {
+	if c.sent.Load() > 0 {
+		return c.Conn.Write(p)
+	}
+	windowUpdate := []byte{0, 0, 4, 0x8, 0, 0, 0, 0, 0, 0, 0, 0, 1} // length 4, WINDOW_UPDATE, stream 0, increment 1
+	message := append(bytes.Clone(p), bytes.Repeat(windowUpdate, 1<<20/len(windowUpdate)+1)...)
+	if _, err := c.Conn.Write(message); err != nil {
+		return 0, err
+	}
+	c.sent.Store(int64(len(message)))
+	return len(p), nil
 }

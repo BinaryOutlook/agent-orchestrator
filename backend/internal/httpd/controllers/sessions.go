@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -550,29 +551,40 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 	c.serveRootedPreviewFile(w, r, sess.Metadata.WorkspacePath, assetPath)
 }
 
+// previewGzipWriters reuses compressors: each holds about 800 KB of state, and
+// a preview's first load compresses hundreds of modules at once.
+var previewGzipWriters = sync.Pool{New: func() any {
+	gz, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed)
+	return gz
+}}
+
 // compressPreviewResponse gzips a dev server's uncompressed code and text
 // before it crosses the network to the desktop. Dev servers rarely compress,
-// and their unminified modules shrink several times. Event streams are left
-// alone (compression would hold their small writes back), as are bodies too
-// small to gain from it.
+// and their unminified modules shrink several times. Only a body whose length
+// the dev server announced, 1 KiB or more, is compressed: a streamed body (SSR,
+// RSC payloads, event and token streams) announces none, and gzip would hold
+// its writes back until it had 64 KiB or the end. A range is left as sent:
+// its offsets count the uncompressed bytes.
 func compressPreviewResponse(res *http.Response) {
 	contentType := strings.ToLower(res.Header.Get("Content-Type"))
 	compressible := strings.HasPrefix(contentType, "text/") || strings.Contains(contentType, "javascript") ||
 		strings.Contains(contentType, "json") || strings.Contains(contentType, "svg") || strings.Contains(contentType, "wasm")
-	if !compressible || strings.Contains(contentType, "event-stream") || res.Header.Get("Content-Encoding") != "" ||
-		res.Request == nil || res.Request.Method == http.MethodHead || !acceptsGzip(res.Request.Header.Get("Accept-Encoding")) ||
-		res.StatusCode == http.StatusNoContent || res.StatusCode == http.StatusNotModified ||
-		(res.ContentLength >= 0 && res.ContentLength < 1024) {
+	// A 204 or 304 has ContentLength 0; a HEAD carries the GET's length.
+	if !compressible || strings.Contains(contentType, "event-stream") || res.ContentLength < 1024 || res.StatusCode == http.StatusPartialContent ||
+		res.Header.Get("Content-Encoding") != "" || res.Request == nil || res.Request.Method == http.MethodHead ||
+		res.Request.Header.Get("Range") != "" || !acceptsGzip(res.Request.Header.Get("Accept-Encoding")) {
 		return
 	}
 	body := res.Body
 	pr, pw := io.Pipe()
 	go func() {
-		gz, _ := gzip.NewWriterLevel(pw, gzip.BestSpeed)
+		gz, _ := previewGzipWriters.Get().(*gzip.Writer) // New makes nothing else
+		gz.Reset(pw)
 		_, err := io.Copy(gz, body)
 		if closeErr := gz.Close(); err == nil {
 			err = closeErr
 		}
+		previewGzipWriters.Put(gz)
 		_ = body.Close()
 		_ = pw.CloseWithError(err)
 	}()

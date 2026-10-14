@@ -1594,6 +1594,40 @@ describe("useBrowserView", () => {
 			expect(browser.navigate).not.toHaveBeenCalled();
 			expect(browser.openTab).not.toHaveBeenCalled();
 		});
+
+		it("opens a link in the person's own tab, never in an agent tab", async () => {
+			const browser = setupBridge();
+			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+			// An agent tab on about:blank reports no URL, and another is already on the link.
+			const blankAgent = { id: "a1", url: "", title: "", active: true, remote: { tabId: "R1" } };
+			const sameAgent = { id: "a2", url: "https://example.com/", title: "Example", active: false, remote: { tabId: "R2" } };
+			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "a1", tabs: [blankAgent, sameAgent] });
+			const { result } = renderHook(() => useBrowserView(remote));
+			await waitFor(() => expect(browser.getTabs).toHaveBeenCalled());
+			await act(() => result.current.openLink("https://example.com/"));
+			expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: "https://example.com/" });
+			expect(browser.navigate).not.toHaveBeenCalled();
+			expect(browser.selectTab).not.toHaveBeenCalled();
+		});
+
+		it("keeps a closed agent tab out of Recently Closed", async () => {
+			const browser = setupBridge();
+			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+			const { result } = renderHook(() => useBrowserView(remote));
+			await waitFor(() => expect(result.current.tabs.length).toBeGreaterThan(0));
+			act(() => browser.emitTabs({
+				viewId,
+				activeTabId: "a1",
+				tabs: [
+					{ id: "t1", url: "https://example.org/", title: "Mine", active: false },
+					{ id: "a1", url: "http://localhost:5173/", title: "Agent's app", active: true, remote: { tabId: "R1" } },
+				],
+				change: { kind: "popup", tabId: "a1" },
+			}));
+			browser.closeTab.mockResolvedValue({ viewId, activeTabId: "t1", tabs: [{ id: "t1", url: "https://example.org/", title: "Mine", active: true }] });
+			await act(() => result.current.closeTab("a1"));
+			expect(result.current.closedTabs).toEqual([]);
+		});
 	});
 
 	it("keeps the user's manual navigation on session switch-back and only re-navigates on a new preview", async () => {

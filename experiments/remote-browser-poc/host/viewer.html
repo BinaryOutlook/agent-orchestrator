@@ -155,6 +155,8 @@ function onText(m) {
     case 'ui': showUI(framed(m)); break;
     case 'auth': showAuth(m); break;
     case 'download': showDownload(m); break;
+    // The page's icon as rbhost loaded it: a data: URL, or "" (never a URL to fetch).
+    case 'favicon': page.favicon = typeof m.href === 'string' ? m.href : ''; hostReport(); break;
     case 'found': $('fn').textContent = m.found || !m.text ? '' : 'No matches'; break;
     case 'crashed': showCard('<b>The remote page crashed</b><div class="row"><button id="rl">Reload</button></div>', () => { $('rl').onclick = () => { send({ t: 'reload' }); hideCard(); }; }); break;
   }
@@ -407,7 +409,6 @@ function showUI(d) {
   if (d.kind === 'clipboard') return writeClipboard(d.text, d.html);
   if (d.kind === 'notification') return hint(`🔔 ${d.origin.replace(/^https?:\/\//, '')}: ${d.title}${d.body ? ' — ' + d.body : ''}`);
   if (d.kind === 'fullscreen') return d.on && hint('Press Esc to exit full screen');
-  if (d.kind === 'favicon') { page.favicon = d.href; return hostReport(); }
   if (d.kind === 'webauthn') return hint('This page asked for a passkey or security key. The remote browser cannot use the ones on this computer.');
   // A custom url() cursor names a keyword to fall back on, last.
   if (d.kind === 'cursor') { const kw = String(d.cursor).split(',').pop().trim(); canvas.style.cursor = /^[a-z-]+$/.test(kw) ? kw : 'default'; return; }

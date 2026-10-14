@@ -852,8 +852,9 @@ export function useBrowserView({
 				// while it's still sitting right there in the live tab list. Only real,
 				// distinguishable tabs are worth keeping — a blank tab has nothing to
 				// reopen.
+				// An agent tab's page lives on the remote host, so it is not the person's to reopen.
 				const stillOpen = state.tabs.some((tab) => tab.id === tabId);
-				if (closing && !stillOpen && !isBlankTabUrl(closing.url)) {
+				if (closing && !stillOpen && !closing.remote && !isBlankTabUrl(closing.url)) {
 					const { id, title, url, favicon } = closing;
 					updateClosedTabs((current) => [{ id, title, url, favicon }, ...current.filter((t) => t.id !== id)].slice(0, MAX_CLOSED_TABS));
 				}
@@ -915,13 +916,14 @@ export function useBrowserView({
 				// Keep the last known tabs as a fallback if the native host is briefly
 				// unavailable; opening the link remains better than dropping the click.
 			}
-			const existingTab = tabs.find((tab) => !isBlankTabUrl(tab.url) && sameBrowserURL(tab.url, url));
+			// A link is the person's: it never selects or loads into an agent tab.
+			const existingTab = tabs.find((tab) => !tab.remote && !isBlankTabUrl(tab.url) && sameBrowserURL(tab.url, url));
 			if (existingTab) {
 				await selectTab(existingTab.id);
 				return;
 			}
 			const activeTab = tabs.find((tab) => tab.active);
-			if (activeTab && isBlankTabUrl(activeTab.url)) {
+			if (activeTab && !activeTab.remote && isBlankTabUrl(activeTab.url)) {
 				const state = await window.ao!.browser.navigate({ viewId: id, url });
 				if (viewIdRef.current === state.viewId) setNavState(state);
 				return;

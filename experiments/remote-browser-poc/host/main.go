@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -54,6 +55,8 @@ type host struct {
 	frames   atomic.Int64
 	agentMu  sync.Mutex
 	dl       *downloads // the remote browser's downloads, served to viewers
+	iconMu   sync.Mutex
+	icons    map[string]string // favicon href -> its data: URL
 }
 
 // control reports who is acting. People and the agent share the page: human
@@ -105,13 +108,44 @@ func (h *host) setDialog(target, d string) {
 	}
 }
 
-func (h *host) openDialog() string {
+// openDialog is a JavaScript dialog still open in some tab, if any. Views
+// clear an entry when its dialog closes; one closed with no view attached (the
+// agent answered it while the person's window was closed) refused the agent
+// for good, so each entry is checked: a page showing a dialog runs no script.
+func (h *host) openDialog(ctx context.Context) string {
 	h.dialogMu.Lock()
-	defer h.dialogMu.Unlock()
-	for _, d := range h.dialogs {
-		return d
+	open := maps.Clone(h.dialogs)
+	h.dialogMu.Unlock()
+	for target, d := range open {
+		if h.scriptBlocked(ctx, target) {
+			return d
+		}
+		h.dialogMu.Lock()
+		if h.dialogs[target] == d {
+			delete(h.dialogs, target)
+		}
+		h.dialogMu.Unlock()
 	}
 	return ""
+}
+
+// scriptBlocked reports whether target's page runs no script, as while it
+// shows a dialog. A tab that is gone blocks nothing.
+func (h *host) scriptBlocked(ctx context.Context, target string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	res, err := h.cdp.Call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": target, "flatten": true})
+	var a struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err != nil || json.Unmarshal(res, &a) != nil {
+		return false
+	}
+	defer h.cdp.Notify("", "Target.detachFromTarget", map[string]any{"sessionId": a.SessionID})
+	ectx, ecancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer ecancel()
+	_, err = h.cdp.Call(ectx, a.SessionID, "Runtime.evaluate", map[string]any{"expression": "0"})
+	return err != nil
 }
 
 // editSince reports a person's input after t that may have changed the page.
@@ -713,9 +747,11 @@ func (h *host) handleAgent(w http.ResponseWriter, r *http.Request) {
 	// Refuse at once what would only block or misfire: an open dialog stops
 	// every other command for up to a minute, and refs from before the person
 	// used the page may now point at something else (a different page's button).
-	if d := h.openDialog(); d != "" && req.Args[0] != "dialog" {
-		agentRefused(w, "A dialog is open in the page ("+d+"). Answer it with `dialog accept` or `dialog dismiss`, or wait for the person to answer it.")
-		return
+	if req.Args[0] != "dialog" {
+		if d := h.openDialog(r.Context()); d != "" {
+			agentRefused(w, "A dialog is open in the page ("+d+"). Answer it with `dialog accept` or `dialog dismiss`, or wait for the person to answer it.")
+			return
+		}
 	}
 	if usesRef(req.Args) && h.ctl.editSince(h.ctl.snapshotAt()) {
 		agentRefused(w, "The person used the page after your last snapshot, so its element refs may point at something else now. Run `snapshot` again and use the new refs.")
