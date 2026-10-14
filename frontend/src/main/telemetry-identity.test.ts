@@ -32,13 +32,13 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		await ctl.setCloudUser("user_01HABC");
 		const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
 		expect(url).toBe(`${ORIGIN}/internal/telemetry/identity`);
-		expect(JSON.parse(init.body as string)).toEqual({ cloudUserId: "user_01HABC" });
+		expect(JSON.parse(init.body as string)).toEqual({ cloudUserId: "user_01HABC", sequence: expect.any(Number) });
 	});
 
 	it("clears on sign-out and rejects email-shaped ids", async () => {
 		const { ctl, fetcher } = await controller();
 		await ctl.setCloudUser(null);
-		expect(JSON.parse((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)).toEqual({ cloudUserId: "" });
+		expect(JSON.parse((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)).toEqual({ cloudUserId: "", sequence: expect.any(Number) });
 		await expect(ctl.setCloudUser("a@b.com")).rejects.toThrow();
 	});
 
@@ -64,7 +64,7 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		ctl.invalidate(); // daemon left ready (restart)
 		await ctl.flush(); // same origin comes back
 		expect(fetcher).toHaveBeenCalledTimes(2);
-		expect(JSON.parse((fetcher.mock.calls[1] as unknown as [string, RequestInit])[1].body as string)).toEqual({ cloudUserId: "user_1" });
+		expect(JSON.parse((fetcher.mock.calls[1] as unknown as [string, RequestInit])[1].body as string)).toEqual({ cloudUserId: "user_1", sequence: expect.any(Number) });
 	});
 
 	it("a response from the invalidated daemon cannot mark the new daemon as synced", async () => {
@@ -112,6 +112,50 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		await ctl.flush(); // already synced to user_2: nothing more to send
 		expect(committed.at(-1)).toBe("user_2");
 		expect(fetcher.mock.calls.length).toBeLessThanOrEqual(2);
+	});
+
+	it("a request delayed past the timeout cannot overwrite a newer identity on the daemon", async () => {
+		// A fake daemon that enforces the same rule as the real route: refuse a
+		// sequence older than the newest one applied.
+		let daemonUser = "";
+		let lastSeq = 0;
+		const deliver = (init: RequestInit): Response => {
+			const body = JSON.parse(init.body as string) as { cloudUserId: string; sequence: number };
+			if (body.sequence < lastSeq) return new Response(null, { status: 409 });
+			lastSeq = body.sequence;
+			daemonUser = body.cloudUserId;
+			return new Response(null, { status: 204 });
+		};
+		let deliverLate!: () => void;
+		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+			if (fetcher.mock.calls.length === 1) {
+				// The client gives up (timeout) but the request is still on its way.
+				deliverLate = () => void deliver(init);
+				throw new Error("aborted");
+			}
+			return deliver(init);
+		});
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
+
+		await ctl.setCloudUser("user_A"); // times out client side
+		await ctl.setCloudUser("user_B"); // commits on the daemon
+		expect(daemonUser).toBe("user_B");
+		deliverLate(); // A finally reaches the daemon
+		expect(daemonUser).toBe("user_B"); // the daemon refused it
+		await ctl.flush(); // B was acknowledged: nothing to correct
+		expect(fetcher).toHaveBeenCalledTimes(2);
+	});
+
+	it("stamps strictly increasing sequence numbers", async () => {
+		const { ctl, fetcher } = await controller();
+		await ctl.setCloudUser("user_A");
+		await ctl.setCloudUser("user_B");
+		await ctl.setCloudUser(null);
+		const seqs = fetcher.mock.calls.map((c) => JSON.parse((c as unknown as [string, RequestInit])[1].body as string).sequence as number);
+		expect(seqs).toHaveLength(3);
+		expect(seqs[1]).toBeGreaterThan(seqs[0]);
+		expect(seqs[2]).toBeGreaterThan(seqs[1]);
 	});
 
 	it("a queued hand-off sends the newest state, so a stale one is never replayed", async () => {

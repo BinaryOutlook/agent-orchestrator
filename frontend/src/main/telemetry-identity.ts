@@ -25,6 +25,9 @@ export class TelemetryIdentityController {
 	// in flight could commit in the opposite order and leave the daemon on the
 	// older user; queued runs always send the latest state when their turn comes.
 	private queue: Promise<void> = Promise.resolve();
+	// Stamped on every POST so the daemon can refuse one that was delayed in
+	// transit (a client timeout cannot recall it) until after a newer one landed.
+	private sequence = 0;
 
 	constructor(
 		private readonly dataDir: string,
@@ -75,6 +78,12 @@ export class TelemetryIdentityController {
 		return run;
 	}
 
+	/** Strictly increasing and still increasing across an app restart (wall-clock based). */
+	private nextSequence(): number {
+		this.sequence = Math.max(this.sequence + 1, Date.now());
+		return this.sequence;
+	}
+
 	private async flushOnce(): Promise<void> {
 		if (this.pushed) return;
 		const base = this.origin();
@@ -82,7 +91,7 @@ export class TelemetryIdentityController {
 		const sent = this.cloudUserId ?? "";
 		const generation = this.generation;
 		try {
-			const response = await this.request(base, "/internal/telemetry/identity", { method: "POST", body: { cloudUserId: sent } });
+			const response = await this.request(base, "/internal/telemetry/identity", { method: "POST", body: { cloudUserId: sent, sequence: this.nextSequence() } });
 			// An older daemon without the route answers 404/405; nothing to retry.
 			if (generation !== this.generation) return;
 			this.pushed = response.ok || response.status === 404 || response.status === 405;

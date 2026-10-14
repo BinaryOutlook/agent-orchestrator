@@ -147,3 +147,44 @@ func TestTelemetryIdentityRouteSuppressesPhoneAfterFailedRotation(t *testing.T) 
 		t.Fatalf("suppression not lifted after recovery: %#v", got)
 	}
 }
+
+// A request delayed past the client's timeout can reach the daemon after a newer
+// one. The daemon must keep the newer identity.
+func TestTelemetryIdentityRouteRejectsAnOlderSequence(t *testing.T) {
+	dir := t.TempDir()
+	ident, err := telemetryadapter.NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRouterWithControl(config.Config{DataDir: dir}, discardLogger(), nil, APIDeps{TelemetryIdentity: ident}, ControlDeps{})
+	post := func(body string) int {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:3001/internal/telemetry/identity", strings.NewReader(body))
+		req.Host = "127.0.0.1:3001"
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if c := post(`{"cloudUserId":"user_B","sequence":20}`); c != http.StatusNoContent {
+		t.Fatalf("newer request = %d", c)
+	}
+	if c := post(`{"cloudUserId":"user_A","sequence":10}`); c != http.StatusConflict {
+		t.Fatalf("late older request = %d, want 409", c)
+	}
+	if got := ident.Snapshot().CloudUserID; got != "user_B" {
+		t.Fatalf("daemon ended on %q, want user_B", got)
+	}
+	// Sign-out that was sent after B wins; the same sequence is an idempotent retry.
+	if c := post(`{"cloudUserId":"","sequence":30}`); c != http.StatusNoContent {
+		t.Fatalf("sign-out = %d", c)
+	}
+	if c := post(`{"cloudUserId":"","sequence":30}`); c != http.StatusNoContent {
+		t.Fatalf("retry of the same sequence = %d", c)
+	}
+	if c := post(`{"cloudUserId":"user_B","sequence":25}`); c != http.StatusConflict {
+		t.Fatalf("late request after sign-out = %d, want 409", c)
+	}
+	if got := ident.Snapshot().CloudUserID; got != "" {
+		t.Fatalf("daemon ended on %q, want signed out", got)
+	}
+}
