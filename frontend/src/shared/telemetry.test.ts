@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import {
+	bootstrapDistinctId,
 	buildTelemetryBootstrap,
 	defaultDataDir,
 	loadOrCreateTelemetryInstallId,
@@ -120,4 +121,43 @@ test("buildTelemetryBootstrap withholds the install id when the bound-user marke
 	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.2.3", "linux", "/home/test", true, enabledPolicy);
 	expect(bootstrap?.distinctId).toMatch(/^anon_/);
 	expect(bootstrap?.distinctId).not.toBe(installId);
+});
+
+// The daemon retires an ID by writing the replacement, then removing the marker.
+async function rotate(dir: string, next: string): Promise<void> {
+	await writeFile(path.join(dir, "telemetry_install_id"), `${next}\n`);
+	await rm(path.join(dir, "telemetry_bound_user"), { force: true });
+}
+
+test("bootstrapDistinctId never returns an ID retired between the marker check and the ID read", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(dir);
+	const retired = await loadOrCreateTelemetryInstallId(dir);
+	await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
+
+	// Rotation completes before the marker check: a missing marker means the ID
+	// read afterwards is already the replacement.
+	const afterRotation = await bootstrapDistinctId(dir, {
+		markerMissing: async (file) => {
+			await rotate(dir, "ins_replacement");
+			return access(file).then(() => false, () => true);
+		},
+		loadId: loadOrCreateTelemetryInstallId,
+	});
+	expect(afterRotation).toBe("ins_replacement");
+	expect(afterRotation).not.toBe(retired);
+
+	// Rotation after the marker check: the marker was present, so the linked ID is withheld.
+	await writeFile(path.join(dir, "telemetry_install_id"), `${retired}\n`);
+	await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
+	const beforeRotation = await bootstrapDistinctId(dir, {
+		markerMissing: (file) => access(file).then(() => false, () => true),
+		loadId: async (d) => {
+			const id = await loadOrCreateTelemetryInstallId(d);
+			await rotate(d, "ins_replacement"); // lands between the two reads
+			return id;
+		},
+	});
+	expect(beforeRotation).toMatch(/^anon_/);
+	expect(beforeRotation).not.toBe(retired);
 });
