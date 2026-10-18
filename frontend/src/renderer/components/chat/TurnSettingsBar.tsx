@@ -1,4 +1,4 @@
-import { SpeedMenu } from "./SpeedMenu";
+import { SpeedMenu, supportsSpeed } from "./SpeedMenu";
 /**
  * What the next turn will be sent with: model, reasoning effort, approval mode.
  *
@@ -34,7 +34,7 @@ import {
 import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { cn } from "../../lib/utils";
 import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
-import { agentModelDisplayLabel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
+import { agentModelDisplayLabel, claudeChoiceModel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import type {
@@ -60,6 +60,12 @@ const APPROVAL_ORDER: ApprovalMode[] = [
 	"auto",
 	"bypass-permissions",
 ];
+
+const AGY_APPROVAL_COPY: Record<ApprovalMode, { label: string }> = {
+	...APPROVAL_COPY,
+	default: { label: "Ask for approval" },
+	"bypass-permissions": { label: "Auto-approve" },
+};
 
 // Codex has three distinct permission profiles. Its default is already full
 // access in AO's isolated worktree posture, so expose it as that rather than a
@@ -91,6 +97,8 @@ export function TurnSettingsBar({
 	approvalModes,
 	reroute,
 	onChange,
+	onRefreshModels,
+	modelCatalogError,
 	onRememberPermissions,
 	rememberPermissionsPending,
 	rememberPermissionsError,
@@ -120,6 +128,8 @@ export function TurnSettingsBar({
 	 */
 	reroute?: ModelReroute;
 	onChange?: (next: TurnSettings) => void;
+	onRefreshModels?: () => void;
+	modelCatalogError?: string;
 	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
 	rememberPermissionsPending?: boolean;
 	rememberPermissionsError?: string;
@@ -154,7 +164,7 @@ export function TurnSettingsBar({
 	);
 	const claudeLabels = useMemo(() => (harness === "claude-code" ? claudeChoiceLabels(displayModels) : undefined), [harness, displayModels]);
 	const displayConfigOptions = useMemo(
-		() => (configOptions ?? []).map((option) => isModelOption(option) ? {
+		() => (harness === "agy" ? agyComposerOptions(configOptions ?? []) : configOptions ?? []).map((option) => isModelOption(option) ? {
 			...option,
 			choices: option.choices.map((choice) => ({
 				...choice,
@@ -183,19 +193,22 @@ export function TurnSettingsBar({
 			? settings.reasoningEffort
 			: (selected ?? fallback)?.defaultEffort;
 	const effortLabel = selectedEffort === "default" ? undefined : selectedEffort;
-	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : APPROVAL_COPY;
-	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : APPROVAL_ORDER;
+	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : harness === "agy" ? AGY_APPROVAL_COPY : APPROVAL_COPY;
+	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : harness === "agy" ? APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions") : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
 	const modelGroupLabel = effortLabel
 		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
-	const grouped = partitionConfigOptions(displayConfigOptions);
+	const grouped = partitionConfigOptions(displayConfigOptions, harness !== "agy");
 	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
 	const applyOption = (optionId: string, value: ChatConfigOptionValue) => {
 		if (!onChangeConfigOption) return;
-		void Promise.resolve(onChangeConfigOption(optionId, value)).catch(() => {});
+		const providerId = harness === "agy" && optionId === AGY_MODEL_EFFORT
+			? configOptions?.find(isModelOption)?.id ?? "model"
+			: optionId;
+		void Promise.resolve(onChangeConfigOption(providerId, value)).catch(() => {});
 	};
-	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
+	const nativeModelMenu = Boolean(onChange && (displayModels.length > 0 || showSpeed && harness === "codex") && grouped.model.length === 0);
 	// A model with effort levels but no provider default would otherwise show no
 	// selected effort. AO picks a level and sets it, so what the picker shows is
 	// what the next turn uses.
@@ -259,6 +272,8 @@ export function TurnSettingsBar({
 							models={harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels}
 							settings={settings}
 							onChange={onChange}
+							onRefreshModels={onRefreshModels}
+							modelCatalogError={modelCatalogError}
 							disabled={optionDisabled}
 							modelLabel={modelLabel}
 							groupLabel={modelGroupLabel}
@@ -306,6 +321,7 @@ export function TurnSettingsBar({
 						{!planning && modeOption && onChangeConfigOption ? (
 							<ConfigOptionPicker
 								option={modeOption}
+								title={harness === "agy" ? "Approval policy for the next turn" : undefined}
 								disabled={optionDisabled}
 								onChange={(value) => applyOption(modeOption.id, value)}
 								footer={rememberAction}
@@ -359,21 +375,68 @@ export function TurnSettingsBar({
 	);
 }
 
+const AGY_MODEL_EFFORT = "ao-agy-model-effort";
+
+// Antigravity encodes reasoning levels in model IDs. Present the same model /
+// effort menu as Codex while sending only the original, advertised model IDs.
+function agyComposerOptions(options: ChatConfigOption[]): ChatConfigOption[] {
+	const model = options.find(isModelOption);
+	const filtered = options.filter((option) =>
+		!isAgentOption(option) && (option.id === "mode" || (
+			!isModeOption(option) &&
+			!/^session[\s_-]*mode$/i.test(option.id) &&
+			!/^session mode$/i.test(option.name) &&
+			!/^agent(?:[\s_-]*mode)?$/i.test(option.name)
+		)),
+	).map((option) => option.id === "mode" ? {
+		...option,
+		choices: option.choices.filter((choice) => !executionChoiceValues(option.choices).has(choice.value)).map((choice) => ({
+			...choice,
+			name: choice.permissionMode ? AGY_APPROVAL_COPY[choice.permissionMode].label
+				: choice.value === "default" ? "Ask for approval" : choice.name,
+		})),
+	} : option);
+	if (!model || options.some(isEffortOption)) return filtered;
+	const variants = model.choices.map((choice) => {
+		const match = /^(.*)-(minimal|low|medium|high|xhigh)$/i.exec(choice.value);
+		return { choice, base: match?.[1] ?? choice.value, effort: match?.[2]?.toLowerCase() };
+	});
+	const selected = variants.find(({ choice }) => choice.value === model.currentValue);
+	if (!selected?.effort) return filtered;
+	const families = [...new Set(variants.map(({ base }) => base))];
+	const models = families.map((base) => {
+		const family = variants.filter((variant) => variant.base === base);
+		const representative = family.find((variant) => variant.effort === selected.effort) ?? family[0];
+		return {
+			...representative.choice,
+			name: representative.effort
+				? representative.choice.name.replace(/\s*\((?:minimal|low|medium|high|xhigh)\)\s*$/i, "")
+				: representative.choice.name,
+		};
+	});
+	return [
+		...filtered.map((option) => option === model ? { ...option, choices: models } : option),
+		{
+			id: AGY_MODEL_EFFORT,
+			name: "Reasoning effort",
+			category: "thought_level",
+			type: "select",
+			currentValue: model.currentValue,
+			choices: variants.filter(({ base }) => base === selected.base).map(({ choice, effort }) => ({
+				value: choice.value,
+				name: effort ? effort[0].toUpperCase() + effort.slice(1) : choice.name,
+			})),
+		},
+	];
+}
+
 /**
  * The provider's model option offers family aliases ("opus") and bare ids. The new-task
- * picker names them by version, so the chat does too: an alias is the newest model of
- * its family in the catalog, and an id is its catalog entry.
+ * picker names them by version, so the chat does too.
  */
 function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
-	if (catalog.length === 0) return undefined;
-	const entries = catalog.map((model) => ({ id: model.id, label: model.displayName }));
-	const newest = splitClaudeModels(entries).current;
-	return (value: string): string | undefined => {
-		const id = value.replace(/\[.*?\]$/, "").toLowerCase();
-		const exact = entries.find((model) => model.id.toLowerCase() === id);
-		if (exact) return exact.label;
-		return newest.find((model) => model.id.toLowerCase().includes(`-${id}-`) || model.label.toLowerCase().startsWith(id))?.label;
-	};
+	const choiceModel = claudeChoiceModel(catalog.map((model) => ({ id: model.id, label: model.displayName })));
+	return choiceModel && ((value: string) => choiceModel(value)?.label);
 }
 
 function ModelEffortPicker({
@@ -381,6 +444,8 @@ function ModelEffortPicker({
 	models,
 	settings,
 	onChange,
+	onRefreshModels,
+	modelCatalogError,
 	disabled,
 	modelLabel,
 	groupLabel,
@@ -400,6 +465,8 @@ function ModelEffortPicker({
 	showSpeed?: boolean;
 	settings: TurnSettings;
 	onChange: (next: TurnSettings) => void;
+	onRefreshModels?: () => void;
+	modelCatalogError?: string;
 	disabled?: boolean;
 	modelLabel: string;
 	groupLabel: string;
@@ -437,6 +504,7 @@ function ModelEffortPicker({
 					className={TRIGGER_CLASS}
 				>
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
+					{showSpeed && settings.speedMode && settings.speedMode !== "normal" ? <span className="shrink-0"> · {t(settings.speedMode === "fast" ? "settings.models.speedFast" : "settings.models.speedUltrafast")}</span> : null}
 					{reroute ? (
 						// A mark, not a second name. Two truncated model names side by side is
 						// less legible than one readable name plus a flag that says it is not
@@ -449,7 +517,7 @@ function ModelEffortPicker({
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
 				<OptionMenuSub>
-					<OptionMenuSubTrigger label="Model" value={modelLabel} />
+					<OptionMenuSubTrigger label="Model" value={modelLabel} disabled={models.length === 0} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
@@ -461,10 +529,11 @@ function ModelEffortPicker({
 									active={model.id === settings.model}
 									searchActive={model.id === searchActiveID}
 									radio
-									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
+									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined, ...(showSpeed && settings.speedMode && !supportsSpeed(model.serviceTiers, settings.speedMode) ? { speedMode: "normal" as const } : {}) })}
 									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
 								>
-									{model.displayName}
+									<span className="flex min-w-0 flex-col"><span>{model.displayName}</span>
+									{showSpeed && settings.speedMode && !supportsSpeed(model.serviceTiers, settings.speedMode) ? <span className="text-xs text-muted-foreground">{t("settings.models.speedSwitchNormal")}</span> : null}</span>
 								</OptionMenuItem>
 							))}
 						</ModelMenuChoices>
@@ -472,7 +541,7 @@ function ModelEffortPicker({
 				</OptionMenuSub>
 
 				{showSpeed ? <SpeedMenu value={settings.speedMode} tiers={models.find((model) => model.id === settings.model || !settings.model && model.default)?.serviceTiers}
-					disabled={disabled} onChange={(speedMode) => onChange({ ...settings, speedMode })} /> : null}
+					disabled={disabled} unavailableReason={modelCatalogError} onRefresh={onRefreshModels} onChange={(speedMode) => onChange({ ...settings, speedMode })} /> : null}
 
 				{efforts.length > 0 || savedEffort ? (
 					<OptionMenuSub>
@@ -1088,7 +1157,7 @@ export function hasProviderPermissionMode(options: ChatConfigOption[]): boolean 
 	return Boolean(partitionConfigOptions(options).mode);
 }
 
-function partitionConfigOptions(options: ChatConfigOption[]): {
+function partitionConfigOptions(options: ChatConfigOption[], includeExecutionModes = true): {
 	model: ChatConfigOption[];
 	effort: ChatConfigOption[];
 	/** Provider plan/agent modes, placed with model selection rather than permissions. */
@@ -1131,10 +1200,10 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 			// Classify before synthesizing Claude's Agent choice so it cannot promote approval choices.
 			const executionValues = executionChoiceValues(option.choices);
 			const permissionChoices = option.choices.filter((choice) => !executionValues.has(choice.value));
-			const executionChoices = addAgentModeChoice(
+			const executionChoices = includeExecutionModes ? addAgentModeChoice(
 				option.choices.filter((choice) => executionValues.has(choice.value)),
 				permissionChoices,
-			);
+			) : [];
 			if (executionChoices.length > 0) {
 				executionMode = withChoices(option, executionChoices);
 				if (permissionChoices.length > 0) mode = withChoices(option, permissionChoices);

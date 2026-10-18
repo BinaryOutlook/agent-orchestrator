@@ -24,6 +24,7 @@ import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwi
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
 import { useQuery } from "@tanstack/react-query";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
+import { useOfferedModels } from "../../hooks/useOfferedModels";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
 	useConversation,
@@ -38,6 +39,7 @@ import { useAgentSwitchProviderCatalogs } from "../../hooks/useAgentSwitchProvid
 import { useConversationPromptSuggestion } from "../../hooks/useConversationPromptSuggestion";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
+import { claudeChoiceModel } from "../../lib/agent-model-choices";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
@@ -55,7 +57,7 @@ import type { TerminalTarget } from "../../types/terminal";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
 import { useUiStore } from "../../stores/ui-store";
-import { ChatWorkspace } from "./ChatWorkspace";
+import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
@@ -134,6 +136,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	accountMoving,
 	agentResuming,
 	controllerResumeError,
 	newWorkDisabled,
@@ -186,6 +189,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** The target controller is being installed by an interface handoff. */
 	controllerTransitioning?: boolean;
+	/** The handoff is an account move; see ChatWorkspace. */
+	accountMoving?: boolean;
 	/** A stopped agent is being resumed in the background after the chat opened. */
 	agentResuming?: boolean;
 	controllerResumeError?: string;
@@ -365,7 +370,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	// Only asked for once the conversation is actually readable: the catalog comes
 	// from the live controller, so there is nothing to fetch before then.
-	const { models: controllerModels } = useConversationModels(
+	const { models: controllerModels, refreshModels, modelCatalogError } = useConversationModels(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot) && !hasProviderModel,
 		hostId,
@@ -373,7 +378,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Claude's live list is family aliases; the new-task picker's catalog carries the versions.
 	const isClaude = snapshot?.harness === "claude-code";
 	const claudeCatalog = useQuery({ ...agentModelsQueryOptions("claude-code", "", hostId), enabled: isClaude }).data;
-	const models = useMemo(() => {
+	const catalogModels = useMemo(() => {
 		if (!isClaude || !claudeCatalog?.models.length) return controllerModels;
 		return claudeCatalog.models
 			.filter((model) => model.id.toLowerCase() !== "default")
@@ -383,6 +388,39 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				default: Boolean(model.isDefault),
 			}));
 	}, [isClaude, claudeCatalog, controllerModels]);
+	// A provider's own model option (ACP config) replaces the native list above,
+	// so the same setting narrows its choices; other options pass through as is.
+	const providerModelOption = configOptions.options?.find(
+		(option) => option.type === "select" && (option.category === "model" || option.id === "model"),
+	);
+	const providerModelChoices = useMemo(
+		() => providerModelOption?.choices.map((choice) => ({ id: choice.value })),
+		[providerModelOption],
+	);
+	// Resolve current Claude aliases before filtering so their labels cannot move
+	// to an older enabled model when the current concrete entry is switched off.
+	const resolveClaudeChoice = useMemo(
+		() => isClaude && claudeCatalog ? claudeChoiceModel(claudeCatalog.models) : undefined,
+		[isClaude, claudeCatalog],
+	);
+	const currentModels = [snapshot?.settings?.model, providerModelOption?.currentValue];
+	const { models } = useOfferedModels(snapshot?.harness, catalogModels, {
+		hostId,
+		keep: [...currentModels, ...currentModels.map((id) => id ? resolveClaudeChoice?.(id)?.id : undefined)],
+	});
+	// Claude's choices are family aliases ("sonnet"); Settings names catalog ids.
+	const claudeChoiceID = useMemo(
+		() => resolveClaudeChoice && ((choice: { id: string }) => resolveClaudeChoice(choice.id)?.id ?? choice.id),
+		[resolveClaudeChoice],
+	);
+	const { models: offeredProviderModels } = useOfferedModels(snapshot?.harness, providerModelChoices, { hostId, keep: [providerModelOption?.currentValue], modelID: claudeChoiceID });
+	const offeredConfigOptions = useMemo(() => {
+		if (!providerModelOption) return configOptions.options;
+		const offered = new Set(offeredProviderModels.map((choice) => choice.id));
+		return configOptions.options?.map((option) => option === providerModelOption
+			? { ...option, choices: option.choices.filter((choice) => offered.has(choice.value)) }
+			: option);
+	}, [configOptions.options, offeredProviderModels, providerModelOption]);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
@@ -516,6 +554,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// in instead of flashing, hiding, and reappearing as the controller restarts.
 	const optimisticArrival = Boolean(arriving) && !renderShellFallback;
 	const optimisticChat = (session.kind === "orchestrator" && isLoading && !renderShellFallback) || optimisticArrival;
+	const continueIntent = useRef<{ turnId: string; clientMessageId: string; sequence: number } | null>(null);
 	const renderSnapshot =
 		(optimisticArrival
 			? { ...startingConversationSnapshot(session.id, session.provider), controller: { state: "stopped" as const } }
@@ -524,6 +563,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
+	const stoppedTurnId = renderSnapshot ? continuableTurnId(renderSnapshot) : "";
+	useEffect(() => {
+		// Keep an ambiguous request's identity until durable progress confirms
+		// that intent ended. An undo can later make the same stop eligible again.
+		if (!stoppedTurnId && renderSnapshot && continueIntent.current &&
+			renderSnapshot.latestSequence > continueIntent.current.sequence) {
+			continueIntent.current = null;
+		}
+	}, [stoppedTurnId, renderSnapshot?.latestSequence]);
 	// Keep the project marked as starting until its controller is ready, so
 	// sidebar actions cannot launch a duplicate orchestrator.
 	useEffect(() => {
@@ -631,6 +679,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				auxiliaryTabOrder={auxiliaryTabOrder}
 				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 				controllerTransitioning={controllerTransitioning}
+				accountMoving={accountMoving}
 				loadingQuietly={optimisticChat && !optimisticArrival && session.provisionState !== "provisioning"}
 				agentResuming={agentResuming}
 				hasOlder={hasOlder}
@@ -668,9 +717,23 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}
 				onInterrupt={commands.interrupt}
+				onContinueTurn={() => {
+					const turnId = `${renderSnapshot.conversationId}:${renderSnapshot.activeBranchId ?? ""}:${stoppedTurnId}`;
+					if (continueIntent.current?.turnId !== turnId) {
+						continueIntent.current = { turnId, clientMessageId: crypto.randomUUID(), sequence: renderSnapshot.latestSequence };
+					}
+					return commands.send({
+						text: CONTINUE_STOPPED_TURN_PROMPT,
+						continuation: true,
+						clientMessageId: continueIntent.current.clientMessageId,
+					});
+				}}
 				onResumeAgent={() => {
 					void commands.resumeAgent().catch(() => {});
 				}}
+				onResumeWithNormal={session.provider === "codex" && snapshot?.settings.speedMode !== "normal" ? () => {
+					void commands.resumeAgent(true).catch(() => {});
+				} : undefined}
 				resumingAgent={commands.resumingAgent || (renderSnapshot.controller.state === "hibernated" && controllerBusy)}
 				resumeError={commands.resumeError ?? controllerResumeError}
 				onOpenShell={onOpenShell}
@@ -678,13 +741,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				shellError={shellError}
 				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming) && (!can(renderSnapshot, "config_options") || configOptions.loaded)}
 				models={models}
+				onRefreshModels={refreshModels}
+				modelCatalogError={modelCatalogError}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
 					? undefined : projectPermissions.remember}
 				rememberPermissionsPending={projectPermissions.pending}
 				rememberPermissionsError={projectPermissions.error}
 				rememberedPermissionMode={projectPermissions.savedMode}
-				configOptions={configOptions.options}
+				configOptions={offeredConfigOptions}
 				onChooseConfigOption={configOptions.setOption}
 				configOptionPending={configOptions.pending || commands.choosingSettings}
 				configOptionError={controllerCatalogsEnabled ? configOptions.error : undefined}

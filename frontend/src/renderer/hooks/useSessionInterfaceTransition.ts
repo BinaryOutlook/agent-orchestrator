@@ -10,7 +10,7 @@ import type { components } from "../../api/schema";
 import { apiErrorMessage, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import type { CloudCpInterfaceTransition } from "../lib/cloud-cp";
-import { conversationQueryKey } from "./useConversation";
+import { conversationModelsQueryKey, conversationQueryKey } from "./useConversation";
 import { useCloudCp } from "./useCloudCp";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
@@ -231,11 +231,13 @@ function useSessionInterfaceTransitionStatusQuery(
 			if (interfaceTransitionNeedsRestart(status?.transition)) return false;
 			if (interfaceTransitionIsActive(status?.transition)) return 250;
 			// A missing or not-yet-current native identity is transient while the
-			// terminal's session-start hook is arriving. Recheck only those readiness
+			// terminal's session-start hook is arriving, and a missing workspace
+			// clears once Retry start sets it up. Recheck only those readiness
 			// states so supported switches enable without polling permanently
 			// unsupported harnesses or ordinary idle sessions.
 			return status?.reasonCode === "NATIVE_SESSION_MISSING" ||
-				status?.reasonCode === "NATIVE_SESSION_UNVERIFIED"
+				status?.reasonCode === "NATIVE_SESSION_UNVERIFIED" ||
+				status?.reasonCode === "WORKSPACE_UNAVAILABLE"
 				? nativeSessionReadinessPoll
 				: false;
 		},
@@ -467,6 +469,9 @@ export function useSessionInterfaceTransition(
 			queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
 			queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) }),
 		];
+		if (transition?.phase === "completed" && transition.targetAccountId) {
+			refreshes.push(queryClient.invalidateQueries({ queryKey: conversationModelsQueryKey(sessionId, hostId) }));
+		}
 		if (isCloud) {
 			refreshes.push(
 				queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey }),
@@ -480,7 +485,7 @@ export function useSessionInterfaceTransition(
 					: refreshing,
 			);
 		});
-	}, [isCloud, queryClient, sessionId, hostId, transitionActive, transitionKey]);
+	}, [isCloud, queryClient, sessionId, hostId, transitionActive, transitionKey, transition?.phase, transition?.targetAccountId]);
 	// A local start refusal records a durable-free error. If any client then opens
 	// a real transition, that newer durable row supersedes the stale refusal: the
 	// switch is running or done, so the "could not switch" notice must not linger.

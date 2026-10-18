@@ -36,11 +36,6 @@ func filterSpeedTiers(ctx context.Context, connection *conn, models []ports.Chat
 	}
 	allowed := connection.request(ctx, "config/read", params, &config) == nil &&
 		config.Config != nil && (config.Config.Provider == "" || config.Config.Provider == "openai")
-	if config.Config != nil && config.Config.Model != "" {
-		for i := range models {
-			models[i].Default = models[i].ID == config.Config.Model
-		}
-	}
 	if allowed {
 		allowed = connection.request(ctx, "configRequirements/read", map[string]any{}, &policy) == nil && len(policy.Requirements) > 0
 	}
@@ -56,6 +51,17 @@ func filterSpeedTiers(ctx context.Context, connection *conn, models []ports.Chat
 	if !allowed {
 		for i := range models {
 			models[i].ServiceTiers = nil
+		}
+		return
+	}
+	// Follow an effective configured model only when it is selectable in the
+	// catalog. Speed policy failures must not change the model picker's default.
+	for _, model := range models {
+		if model.ID == config.Config.Model {
+			for i := range models {
+				models[i].Default = models[i].ID == config.Config.Model
+			}
+			break
 		}
 	}
 }

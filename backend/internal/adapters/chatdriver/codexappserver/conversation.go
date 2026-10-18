@@ -431,6 +431,7 @@ func listModels(ctx context.Context, connection *conn, workdir string) ([]ports.
 			Hidden       bool                     `json:"hidden"`
 			DefaultEff   string                   `json:"defaultReasoningEffort"`
 			ServiceTiers []ports.ModelServiceTier `json:"serviceTiers"`
+			Inputs       []string                 `json:"inputModalities"`
 			Efforts      []struct {
 				ReasoningEffort string `json:"reasoningEffort"`
 			} `json:"supportedReasoningEfforts"`
@@ -483,6 +484,7 @@ func listModels(ctx context.Context, connection *conn, workdir string) ([]ports.
 				ID: id, DisplayName: display, Description: entry.Description,
 				Default: entry.IsDefault, Efforts: efforts, DefaultEffort: entry.DefaultEff,
 				ServiceTiers: entry.ServiceTiers,
+				Inputs:       entry.Inputs,
 			})
 		}
 		if resp.NextCursor == nil || *resp.NextCursor == "" {

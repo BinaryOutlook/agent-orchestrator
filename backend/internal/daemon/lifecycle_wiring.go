@@ -201,6 +201,7 @@ func (l *lifecycleStack) Stop() {
 type sessionLifecycle interface {
 	Reconcile(ctx context.Context) error
 	ReconcileStartupSafety(ctx context.Context) error
+	ReconnectAwakeAgent(ctx context.Context, target domain.AwakeAgentTarget) error
 	ReconcileBackground(ctx context.Context) error
 	HibernateIdleChats(ctx context.Context) error
 	RestoreAll(ctx context.Context) error
@@ -351,10 +352,12 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	}
 	reviewerChat, _ := chat.(reviewcore.ReviewerChatController)
 	reviewEngine := reviewcore.New(reviewcore.Deps{
-		Store:    store,
-		Sessions: store,
-		PRs:      store,
-		Projects: store,
+		// The manager's installer gate is bound after the installer is built.
+		HarnessUse: mgr,
+		Store:      store,
+		Sessions:   store,
+		PRs:        store,
+		Projects:   store,
 		Launcher: reviewcore.NewLauncher(reviewers, runtime, cfg.DataDir,
 			reviewcore.WithRunFilePath(cfg.RunFilePath),
 			reviewcore.WithAgentAuth(reviewerAgentAuth{readiness: agentReadiness}),
@@ -722,6 +725,12 @@ func (c chatLauncher) ArmChatHandoff(
 	policy domain.SessionInterfaceTransitionPolicy,
 ) error {
 	return c.svc.ArmChatHandoff(ctx, id, policy)
+}
+
+// MarkAccountSwitch marks the turn an account move stopped, so the chat shows
+// the switch instead of a failure.
+func (c chatLauncher) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string) error {
+	return c.svc.MarkAccountSwitch(ctx, id, accountID)
 }
 
 func (c chatLauncher) PrepareChatHandoff(

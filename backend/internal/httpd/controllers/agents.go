@@ -22,6 +22,7 @@ type AgentCatalog interface {
 	Refresh(ctx context.Context) (agentsvc.Inventory, error)
 	Probe(ctx context.Context, agentID string) (agentsvc.ProbeResult, error)
 	Models(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error)
+	ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error)
 	RevalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error)
 }
 
@@ -97,7 +98,15 @@ func (c *AgentsController) writeModels(w http.ResponseWriter, r *http.Request, r
 	projectID := strings.TrimSpace(r.URL.Query().Get("projectId"))
 	var catalog ports.AgentModelCatalog
 	var err error
-	if revalidate {
+	sessionID := domain.SessionID(strings.TrimSpace(r.URL.Query().Get("sessionId")))
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	if scoped, ok := c.Catalog.(interface {
+		ModelsForSession(context.Context, string, string, domain.SessionID, string, bool) (ports.AgentModelCatalog, error)
+	}); ok && (sessionID != "" || accountID != "") {
+		catalog, err = scoped.ModelsForSession(r.Context(), agentID, projectID, sessionID, accountID, refresh)
+	} else if r.URL.Query().Get("catalogOnly") == "true" {
+		catalog, err = c.Catalog.ModelCatalog(r.Context(), agentID, projectID, refresh)
+	} else if revalidate {
 		catalog, err = c.Catalog.RevalidateModels(r.Context(), agentID, projectID)
 	} else {
 		catalog, err = c.Catalog.Models(r.Context(), agentID, projectID, refresh)

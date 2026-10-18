@@ -75,6 +75,47 @@ func TestAcceleratedSpeedRejectsRepeatedCatalogCursor(t *testing.T) {
 	}
 }
 
+func TestSpeedCatalogDefaultFollowsOnlyAllowedSelectableConfig(t *testing.T) {
+	for _, scenario := range []struct {
+		name, config, policy, wantDefault string
+	}{
+		{"configured", `{"config":{"model_provider":"openai","model":"normal-only"}}`, `{"requirements":null}`, "normal-only"},
+		{"custom-provider", `{"config":{"model_provider":"custom","model":"normal-only"}}`, `{"requirements":null}`, "gpt-test"},
+		{"managed-policy", `{"config":{"model_provider":"openai","model":"normal-only"}}`, `{"requirements":{"featureRequirements":{"fast_mode":false}}}`, "gpt-test"},
+		{"missing-policy", `{"config":{"model_provider":"openai","model":"normal-only"}}`, `{}`, "gpt-test"},
+		{"unlisted-model", `{"config":{"model_provider":"openai","model":"not-listed"}}`, `{"requirements":null}`, "gpt-test"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			advertiseSpeed(srv)
+			srv.reply("config/read", scenario.config)
+			srv.reply("configRequirements/read", scenario.policy)
+			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = conv.Close() }()
+			live := conv.(*conversation)
+			models, err := listModels(context.Background(), live.conn, live.workspacePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defaults := 0
+			for _, model := range models {
+				if model.Default {
+					defaults++
+					if model.ID != scenario.wantDefault {
+						t.Errorf("default = %s, want %s", model.ID, scenario.wantDefault)
+					}
+				}
+			}
+			if defaults != 1 {
+				t.Fatalf("default models = %d, want 1", defaults)
+			}
+		})
+	}
+}
+
 func TestUnsupportedSpeedNeverStartsInference(t *testing.T) {
 	for _, scenario := range []string{"missing-tier", "managed-policy", "custom-provider", "unknown-policy", "invalid-value"} {
 		t.Run(scenario, func(t *testing.T) {

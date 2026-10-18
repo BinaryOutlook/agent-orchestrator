@@ -77,3 +77,44 @@ func TestProjectSpeedFollowsReplacementSession(t *testing.T) {
 		t.Fatalf("replacement lost selected speed: %q, %v", stored.Metadata.SpeedMode, err)
 	}
 }
+
+func TestNormalRecoverySynchronizesSpeedWithoutReplacingConversation(t *testing.T) {
+	st, sessionID, conversationID := conversationFixture(t)
+	ctx := context.Background()
+	settings := domain.ConversationSettings{Model: "selected-model", ReasoningEffort: "high", SpeedMode: domain.SpeedModeUltrafast}
+	if err := st.SetConversationSettings(ctx, conversationID, settings, histClock); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := st.GetSession(ctx, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := st.ResumeWithNormalSettings(ctx, sessionID, before.Revision+1); err != nil || changed {
+		t.Fatalf("stale recovery = %v, %v", changed, err)
+	}
+	unchanged, err := st.ConversationForSession(ctx, sessionID)
+	if err != nil || unchanged.Settings.SpeedMode != domain.SpeedModeUltrafast {
+		t.Fatalf("rejected recovery changed speed: %+v, %v", unchanged, err)
+	}
+	changed, err := st.ResumeWithNormalSettings(ctx, sessionID, before.Revision)
+	if err != nil || !changed {
+		t.Fatalf("recovery = %v, %v", changed, err)
+	}
+	conversation, err := st.ConversationForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _, err := st.GetSession(ctx, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision <= before.Revision {
+		t.Fatal("recovery did not advance session revision")
+	}
+	if conversation.ID != conversationID || conversation.Settings.SpeedMode != domain.SpeedModeNormal || after.Metadata.SpeedMode != domain.SpeedModeNormal {
+		t.Fatalf("recovery lost conversation or speed: %+v, %+v", conversation, after)
+	}
+	if conversation.Settings.Model != settings.Model || conversation.Settings.ReasoningEffort != settings.ReasoningEffort || before.Metadata.WorkspacePath != after.Metadata.WorkspacePath || before.Metadata.AgentSessionID != after.Metadata.AgentSessionID {
+		t.Fatalf("recovery changed unrelated settings or native identity")
+	}
+}
